@@ -6,7 +6,7 @@ from pathlib import Path
 
 from open_shift.models import ActionProposal, ActionType, DAY_MINUTES
 from open_shift.providers import MockProvider
-from open_shift.rules import RuleEngine
+from open_shift.rules import BAR_VISIT_COST, WORK_WAGE, RuleEngine
 from open_shift.scenario import create_demo_world
 from open_shift.store import WorldStore
 
@@ -97,6 +97,8 @@ class SimulationTests(unittest.TestCase):
                 create_demo_world(store, MockProvider(), seed=7)
                 dorothy = store.get_agent("dorothy")
                 assert dorothy is not None
+                dorothy.money = BAR_VISIT_COST - 1
+                store.update_agent(dorothy)
                 rules = RuleEngine(store, ("home", "work", "va11_hall_a"))
                 result = rules.execute(
                     1,
@@ -104,7 +106,7 @@ class SimulationTests(unittest.TestCase):
                     ActionProposal(
                         ActionType.VISIT_BAR,
                         target_id="alma",
-                        amount=dorothy.money + 1,
+                        amount=1,
                     ),
                 )
                 self.assertFalse(result.accepted)
@@ -112,6 +114,43 @@ class SimulationTests(unittest.TestCase):
                 unchanged = store.get_agent("dorothy")
                 assert unchanged is not None
                 self.assertEqual(unchanged.money, dorothy.money)
+
+    def test_provider_cannot_choose_wage_or_bar_price(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with WorldStore(Path(temp_dir) / "world.sqlite3") as store:
+                create_demo_world(store, MockProvider(), seed=7)
+                rules = RuleEngine(store, ("home", "work", "va11_hall_a"))
+                before = store.get_agent("dorothy")
+                assert before is not None
+                worked = rules.execute(
+                    1,
+                    "dorothy",
+                    ActionProposal(
+                        ActionType.WORK,
+                        metadata={"wage": 1_000_000_000},
+                    ),
+                )
+                self.assertTrue(worked.accepted)
+                after_work = store.get_agent("dorothy")
+                assert after_work is not None
+                self.assertEqual(after_work.money, before.money + WORK_WAGE)
+
+                visited = rules.execute(
+                    2,
+                    "dorothy",
+                    ActionProposal(
+                        ActionType.VISIT_BAR,
+                        target_id="alma",
+                        amount=1,
+                    ),
+                )
+                self.assertTrue(visited.accepted)
+                after_visit = store.get_agent("dorothy")
+                assert after_visit is not None
+                self.assertEqual(
+                    after_visit.money,
+                    before.money + WORK_WAGE - BAR_VISIT_COST,
+                )
 
 
 if __name__ == "__main__":
