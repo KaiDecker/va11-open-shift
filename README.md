@@ -65,5 +65,8 @@ python -m open_shift probe-provider `
 python -m open_shift probe-provider `
   --base-url "https://你的服务/v1" `
   --model "模型名" `
-  --protocol chat_completions
+  --protocol chat_completions `
+  --response-format json_object
 ```
+
+`json_object` 只要求远端返回 JSON 对象，本地仍会执行完整字段、目标、地点和行动语义校验。对于支持严格 JSON Schema 的端点，保留默认的 `json_schema` 可获得更早的远端约束。

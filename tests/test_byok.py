@@ -15,6 +15,7 @@ from open_shift.byok import (
     BYOKProvider,
     BYOKResponseError,
     BYOKValidationError,
+    ResponseFormat,
     validate_action_output,
 )
 from open_shift.models import AgentState, DecisionContext, Goal, Relationship
@@ -125,6 +126,28 @@ class BYOKProviderTests(unittest.TestCase):
         )
         self.assertIn("response_format", call["payload"])
         self.assertNotIn("text", call["payload"])
+
+    def test_chat_json_object_mode_uses_compatible_response_format(self) -> None:
+        transport = FakeTransport(
+            {"choices": [{"message": {"content": action_json()}}]}
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.CHAT_COMPLETIONS,
+                response_format=ResponseFormat.JSON_OBJECT,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+        action = provider.decide(context())
+        self.assertEqual(action.action_type.value, "message")
+        self.assertEqual(
+            transport.calls[0]["payload"]["response_format"],
+            {"type": "json_object"},
+        )
+        self.assertNotIn("json_schema", transport.calls[0]["payload"])
 
     def test_budget_stops_before_a_second_transport_call(self) -> None:
         transport = FakeTransport({"output_text": action_json()})

@@ -37,6 +37,11 @@ class APIProtocol(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
 
 
+class ResponseFormat(str, Enum):
+    JSON_SCHEMA = "json_schema"
+    JSON_OBJECT = "json_object"
+
+
 class BYOKError(RuntimeError):
     """Base exception safe to report without exposing credentials."""
 
@@ -66,6 +71,7 @@ class BYOKConfig:
     base_url: str
     model: str
     protocol: APIProtocol = APIProtocol.RESPONSES
+    response_format: ResponseFormat = ResponseFormat.JSON_SCHEMA
     timeout_seconds: float = 30.0
     api_key_env: str = "OPEN_SHIFT_API_KEY"
     max_calls: int = 1
@@ -249,6 +255,16 @@ def decision_observation(context: DecisionContext) -> dict[str, Any]:
 
 
 def _responses_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any]:
+    output_format: dict[str, Any]
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        output_format = {"type": "json_object"}
+    else:
+        output_format = {
+            "type": "json_schema",
+            "name": "action_proposal",
+            "strict": True,
+            "schema": ACTION_OUTPUT_SCHEMA,
+        }
     return {
         "model": config.model,
         "instructions": _SYSTEM_INSTRUCTION,
@@ -258,19 +274,12 @@ def _responses_payload(config: BYOKConfig, context: DecisionContext) -> dict[str
             sort_keys=True,
             separators=(",", ":"),
         ),
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "action_proposal",
-                "strict": True,
-                "schema": ACTION_OUTPUT_SCHEMA,
-            }
-        },
+        "text": {"format": output_format},
     }
 
 
 def _chat_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "model": config.model,
         "messages": [
             {"role": "system", "content": _SYSTEM_INSTRUCTION},
@@ -284,15 +293,19 @@ def _chat_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any
                 ),
             },
         ],
-        "response_format": {
+    }
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        payload["response_format"] = {"type": "json_object"}
+    else:
+        payload["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": "action_proposal",
                 "strict": True,
                 "schema": ACTION_OUTPUT_SCHEMA,
             },
-        },
-    }
+        }
+    return payload
 
 
 def _extract_responses_output(response: Mapping[str, Any]) -> str | dict[str, Any]:

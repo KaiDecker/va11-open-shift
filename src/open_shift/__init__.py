@@ -1,6 +1,6 @@
 """Open Shift persistent world simulator."""
 
-from .byok import APIProtocol, BYOKConfig, BYOKProvider
+from .byok import APIProtocol, BYOKConfig, BYOKProvider, ResponseFormat
 from .engine import SimulationEngine, SimulationReport
 from .providers import MockProvider, ModelProvider
 from .scenario import create_demo_world
@@ -12,6 +12,7 @@ __all__ = [
     "APIProtocol",
     "BYOKConfig",
     "BYOKProvider",
+    "ResponseFormat",
     "SimulationEngine",
     "SimulationReport",
     "WorldStore",

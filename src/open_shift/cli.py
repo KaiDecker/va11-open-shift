@@ -5,7 +5,13 @@ import json
 import sys
 from pathlib import Path
 
-from .byok import APIProtocol, BYOKConfig, BYOKError, BYOKProvider
+from .byok import (
+    APIProtocol,
+    BYOKConfig,
+    BYOKError,
+    BYOKProvider,
+    ResponseFormat,
+)
 from .models import AgentState, DecisionContext, Goal, Relationship
 from .providers import MockProvider
 from .scenario import create_demo_world
@@ -35,6 +41,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--api-key-env", default="OPEN_SHIFT_API_KEY")
     probe.add_argument("--timeout", type=float, default=30.0)
+    probe.add_argument(
+        "--response-format",
+        choices=[response_format.value for response_format in ResponseFormat],
+        default=ResponseFormat.JSON_SCHEMA.value,
+        help="use json_object for providers without strict JSON Schema support",
+    )
     return parser
 
 
@@ -93,6 +105,7 @@ def _probe_provider(args: argparse.Namespace) -> int:
             base_url=args.base_url,
             model=args.model,
             protocol=APIProtocol(args.protocol),
+            response_format=ResponseFormat(args.response_format),
             timeout_seconds=args.timeout,
             api_key_env=args.api_key_env,
             max_calls=1,
