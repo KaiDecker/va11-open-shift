@@ -53,7 +53,6 @@ class MockProvider:
                 action_type=ActionType.WORK,
                 duration_minutes=240,
                 reason_code="money_floor",
-                metadata={"wage": 28},
             )
 
         savings_goal = next(
@@ -65,7 +64,6 @@ class MockProvider:
                 action_type=ActionType.WORK,
                 duration_minutes=240,
                 reason_code="savings_goal",
-                metadata={"wage": 28},
             )
 
         target = self._target(context)
@@ -74,7 +72,6 @@ class MockProvider:
                 action_type=ActionType.WORK,
                 duration_minutes=240,
                 reason_code="routine_work",
-                metadata={"wage": 24},
             )
         if choice == 1:
             if actor.fatigue >= 0.42:
@@ -103,7 +100,6 @@ class MockProvider:
                 action_type=ActionType.VISIT_BAR,
                 target_id=target,
                 location="va11_hall_a",
-                amount=12,
                 duration_minutes=120,
                 reason_code="social_visit",
             )
