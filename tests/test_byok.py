@@ -89,7 +89,12 @@ class BYOKProviderTests(unittest.TestCase):
             }
         )
         provider = BYOKProvider(
-            BYOKConfig("https://api.example.test/v1", "test-model"),
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.RESPONSES,
+                response_format=ResponseFormat.JSON_SCHEMA,
+            ),
             _api_key="super-secret",
             transport=transport,
         )
@@ -210,7 +215,13 @@ class BYOKProviderTests(unittest.TestCase):
     def test_budget_stops_before_a_second_transport_call(self) -> None:
         transport = FakeTransport({"output_text": action_json()})
         provider = BYOKProvider(
-            BYOKConfig("https://api.example.test/v1", "test-model", max_calls=1),
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.RESPONSES,
+                response_format=ResponseFormat.JSON_SCHEMA,
+                max_calls=1,
+            ),
             _api_key="secret",
             transport=transport,
         )
@@ -245,7 +256,12 @@ class BYOKProviderTests(unittest.TestCase):
 
     def test_non_json_output_is_rejected(self) -> None:
         provider = BYOKProvider(
-            BYOKConfig("https://api.example.test/v1", "test-model"),
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.RESPONSES,
+                response_format=ResponseFormat.JSON_SCHEMA,
+            ),
             _api_key="secret",
             transport=FakeTransport({"output_text": "```json\n{}\n```"}),
         )
@@ -256,7 +272,9 @@ class BYOKProviderTests(unittest.TestCase):
         with self.assertRaises(BYOKConfigurationError):
             BYOKConfig("http://api.example.test/v1", "test-model")
         local = BYOKConfig("http://127.0.0.1:8000/v1", "test-model")
-        self.assertEqual(local.endpoint, "http://127.0.0.1:8000/v1/responses")
+        self.assertEqual(
+            local.endpoint, "http://127.0.0.1:8000/v1/chat/completions"
+        )
 
     def test_from_env_does_not_put_key_in_config(self) -> None:
         config = BYOKConfig(

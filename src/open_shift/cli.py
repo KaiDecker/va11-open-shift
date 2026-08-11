@@ -32,19 +32,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "probe-provider",
         help="make exactly one BYOK decision call without writing a world database",
     )
-    probe.add_argument("--base-url", default="https://api.openai.com/v1")
+    probe.add_argument("--base-url", required=True)
     probe.add_argument("--model", required=True)
     probe.add_argument(
         "--protocol",
         choices=[protocol.value for protocol in APIProtocol],
-        default=APIProtocol.RESPONSES.value,
+        default=APIProtocol.CHAT_COMPLETIONS.value,
     )
     probe.add_argument("--api-key-env", default="OPEN_SHIFT_API_KEY")
     probe.add_argument("--timeout", type=float, default=30.0)
     probe.add_argument(
         "--response-format",
         choices=[response_format.value for response_format in ResponseFormat],
-        default=ResponseFormat.JSON_SCHEMA.value,
+        default=ResponseFormat.JSON_OBJECT.value,
         help="use json_object for providers without strict JSON Schema support",
     )
     return parser

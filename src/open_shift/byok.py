@@ -1,9 +1,8 @@
 """BYOK model provider with strict, provider-independent safety boundaries.
 
-The HTTP request shapes are isolated here because live OpenAI documentation was
-not reachable from the development environment. Contract tests use an injected
-transport; users can select either the Responses or compatible Chat Completions
-protocol when performing an explicit one-call probe.
+Contract tests use an injected transport. The verified Stage 1 baseline is a
+Chat Completions compatible endpoint with JSON Object output; a Responses-style
+adapter remains optional and isolated behind an explicit protocol selection.
 """
 
 from __future__ import annotations
@@ -70,8 +69,8 @@ class BYOKBudgetExceeded(BYOKError):
 class BYOKConfig:
     base_url: str
     model: str
-    protocol: APIProtocol = APIProtocol.RESPONSES
-    response_format: ResponseFormat = ResponseFormat.JSON_SCHEMA
+    protocol: APIProtocol = APIProtocol.CHAT_COMPLETIONS
+    response_format: ResponseFormat = ResponseFormat.JSON_OBJECT
     timeout_seconds: float = 30.0
     api_key_env: str = "OPEN_SHIFT_API_KEY"
     max_calls: int = 1
