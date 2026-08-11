@@ -13,6 +13,10 @@ from .models import (
 from .store import WorldStore
 
 
+WORK_WAGE = 24
+BAR_VISIT_COST = 12
+
+
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -82,9 +86,8 @@ class RuleEngine:
     def _execute_work(
         self, tick: int, actor: AgentState, action: ActionProposal
     ) -> ActionResult:
-        wage = int(action.metadata.get("wage", 24))
-        if wage < 0:
-            return ActionResult(False, "negative_wage")
+        # Economic outcomes belong to the world rules, never to model output.
+        wage = WORK_WAGE
         updated = replace(
             actor,
             location="work",
@@ -199,7 +202,8 @@ class RuleEngine:
     def _execute_visit_bar(
         self, tick: int, actor: AgentState, action: ActionProposal
     ) -> ActionResult:
-        cost = action.amount if action.amount > 0 else 12
+        # A provider may choose to visit, but it cannot choose the price.
+        cost = BAR_VISIT_COST
         if actor.money < cost:
             return ActionResult(False, "insufficient_funds")
         target = self._validate_target(actor, action.target_id)
