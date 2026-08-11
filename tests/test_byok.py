@@ -16,6 +16,7 @@ from open_shift.byok import (
     BYOKResponseError,
     BYOKValidationError,
     ResponseFormat,
+    normalize_json_object_output,
     validate_action_output,
 )
 from open_shift.models import AgentState, DecisionContext, Goal, Relationship
@@ -148,6 +149,63 @@ class BYOKProviderTests(unittest.TestCase):
             {"type": "json_object"},
         )
         self.assertNotIn("json_schema", transport.calls[0]["payload"])
+        self.assertIn(
+            '"reason_code":"earn_money"',
+            transport.calls[0]["payload"]["messages"][0]["content"],
+        )
+
+    def test_json_object_mode_normalizes_optional_omissions(self) -> None:
+        transport = FakeTransport(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action_type": "work",
+                                    "reason_code": "earn_money",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.CHAT_COMPLETIONS,
+                response_format=ResponseFormat.JSON_OBJECT,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+        action = provider.decide(context())
+        self.assertEqual(action.action_type.value, "work")
+        self.assertIsNone(action.target_id)
+        self.assertIsNone(action.location)
+        self.assertEqual(action.duration_minutes, 0)
+
+    def test_json_object_mode_accepts_known_envelope_but_not_unknown_fields(self) -> None:
+        normalized = normalize_json_object_output(
+            {
+                "action_proposal": {
+                    "action_type": "rest",
+                    "reason_code": "need_rest",
+                }
+            }
+        )
+        self.assertEqual(normalized["action_type"], "rest")
+        self.assertIsNone(normalized["target_id"])
+        with self.assertRaisesRegex(BYOKValidationError, "unknown fields: amount"):
+            normalize_json_object_output(
+                {
+                    "action_type": "work",
+                    "reason_code": "earn_money",
+                    "amount": 999,
+                }
+            )
 
     def test_budget_stops_before_a_second_transport_call(self) -> None:
         transport = FakeTransport({"output_text": action_json()})

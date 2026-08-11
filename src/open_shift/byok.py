@@ -200,7 +200,11 @@ ACTION_OUTPUT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_INSTRUCTION = """You propose one action for one fictional character in a persistent simulation.
 You never execute actions and never modify world state. Use only facts in the observation.
-Return exactly the requested JSON object with no prose. Keep reason_code short and categorical.
+Return one JSON object with no prose and no additional fields. Use this exact shape:
+{"action_type":"work","target_id":null,"location":null,"duration_minutes":240,"reason_code":"earn_money"}
+action_type must be one allowed action. target_id and location must be a string or null.
+duration_minutes must be an integer from 0 to 720. Keep reason_code lowercase,
+short, categorical, and limited to letters, numbers, and underscores.
 Action constraints:
 - travel requires a listed location and no target.
 - message and talk require another listed agent as target and no location.
@@ -358,6 +362,47 @@ def _as_action_object(raw: str | dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def normalize_json_object_output(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize omissions common to JSON-only compatibility providers.
+
+    The normalizer does not rename arbitrary fields or discard unknown data.
+    It only unwraps a known single-key envelope and supplies neutral defaults
+    for optional fields before the same strict semantic validator runs.
+    """
+
+    normalized: Mapping[str, Any] = value
+    if len(value) == 1:
+        wrapper = next(iter(value))
+        wrapped = value[wrapper]
+        if wrapper in {"action", "action_proposal"} and isinstance(wrapped, dict):
+            normalized = wrapped
+
+    allowed = {
+        "action_type",
+        "target_id",
+        "location",
+        "duration_minutes",
+        "reason_code",
+    }
+    extra = sorted(set(normalized) - allowed)
+    if extra:
+        raise BYOKValidationError(
+            f"action output contained unknown fields: {', '.join(extra)}"
+        )
+    missing_core = sorted({"action_type", "reason_code"} - set(normalized))
+    if missing_core:
+        raise BYOKValidationError(
+            f"action output omitted required fields: {', '.join(missing_core)}"
+        )
+    return {
+        "action_type": normalized["action_type"],
+        "target_id": normalized.get("target_id"),
+        "location": normalized.get("location"),
+        "duration_minutes": normalized.get("duration_minutes", 0),
+        "reason_code": normalized["reason_code"],
+    }
+
+
 def validate_action_output(
     value: Mapping[str, Any], context: DecisionContext
 ) -> ActionProposal:
@@ -369,7 +414,17 @@ def validate_action_output(
         "reason_code",
     }
     if set(value) != required:
-        raise BYOKValidationError("action output fields did not match the schema")
+        missing = sorted(required - set(value))
+        extra = sorted(set(value) - required)
+        details: list[str] = []
+        if missing:
+            details.append(f"missing={','.join(missing)}")
+        if extra:
+            details.append(f"extra={','.join(extra)}")
+        suffix = f": {'; '.join(details)}" if details else ""
+        raise BYOKValidationError(
+            f"action output fields did not match the schema{suffix}"
+        )
 
     action_raw = value["action_type"]
     if not isinstance(action_raw, str):
@@ -478,4 +533,7 @@ class BYOKProvider:
             if self.config.protocol is APIProtocol.RESPONSES
             else _extract_chat_output(response)
         )
-        return validate_action_output(_as_action_object(raw), context)
+        value = _as_action_object(raw)
+        if self.config.response_format is ResponseFormat.JSON_OBJECT:
+            value = normalize_json_object_output(value)
+        return validate_action_output(value, context)
