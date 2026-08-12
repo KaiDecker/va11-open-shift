@@ -15,6 +15,8 @@ class ActionType(str, Enum):
     MESSAGE = "message"
     VISIT_BAR = "visit_bar"
     TALK = "talk"
+    INVITE = "invite"
+    PROMISE = "promise"
 
 
 class GoalStatus(str, Enum):
@@ -67,6 +69,51 @@ class ActionProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class Memory:
+    memory_id: int
+    event_id: int
+    tick: int
+    importance: float
+    summary: str
+    tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Invitation:
+    invitation_id: int
+    inviter_id: str
+    invitee_id: str
+    location: str
+    proposed_tick: int
+    status: str
+    created_event_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class Commitment:
+    commitment_id: int
+    actor_id: str
+    target_id: str
+    due_tick: int
+    status: str
+    created_event_id: int
+    resolved_event_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoryArc:
+    arc_id: int
+    owner_id: str
+    target_id: str | None
+    kind: str
+    status: str
+    progress: int
+    required_progress: int
+    created_tick: int
+    resolved_tick: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionContext:
     tick: int
     seed: int
@@ -75,6 +122,10 @@ class DecisionContext:
     relationships: tuple[Relationship, ...]
     goals: tuple[Goal, ...]
     locations: tuple[str, ...]
+    memories: tuple[Memory, ...] = ()
+    invitations: tuple[Invitation, ...] = ()
+    commitments: tuple[Commitment, ...] = ()
+    story_arcs: tuple[StoryArc, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

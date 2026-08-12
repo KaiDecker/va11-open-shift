@@ -208,6 +208,8 @@ Action constraints:
 - travel requires a listed location and no target.
 - message and talk require another listed agent as target and no location.
 - visit_bar may target another listed agent or null; location must be null.
+- invite requires another listed agent and a listed location; duration is the delay.
+- promise requires another listed agent, null location; duration is the due delay.
 - work and rest require null target and null location.
 The world rules will independently validate and may reject your proposal."""
 
@@ -251,6 +253,41 @@ def decision_observation(context: DecisionContext) -> dict[str, Any]:
             }
             for goal in context.goals
             if goal.status is GoalStatus.ACTIVE
+        ],
+        "relevant_memories": [
+            {
+                "tick": memory.tick,
+                "importance": memory.importance,
+                "summary": memory.summary,
+                "tags": list(memory.tags),
+            }
+            for memory in context.memories
+        ],
+        "pending_invitations": [
+            {
+                "inviter_id": invitation.inviter_id,
+                "invitee_id": invitation.invitee_id,
+                "location": invitation.location,
+                "proposed_tick": invitation.proposed_tick,
+            }
+            for invitation in context.invitations
+        ],
+        "pending_commitments": [
+            {
+                "actor_id": commitment.actor_id,
+                "target_id": commitment.target_id,
+                "due_tick": commitment.due_tick,
+            }
+            for commitment in context.commitments
+        ],
+        "active_story_arcs": [
+            {
+                "target_id": arc.target_id,
+                "kind": arc.kind,
+                "progress": arc.progress,
+                "required_progress": arc.required_progress,
+            }
+            for arc in context.story_arcs
         ],
         "allowed_locations": list(context.locations),
         "allowed_actions": [action.value for action in ActionType],
@@ -459,11 +496,14 @@ def validate_action_output(
     if action_type is ActionType.TRAVEL:
         if location is None or target_id is not None:
             raise BYOKValidationError("travel requires location and null target")
-    elif action_type in {ActionType.MESSAGE, ActionType.TALK}:
+    elif action_type in {ActionType.MESSAGE, ActionType.TALK, ActionType.PROMISE}:
         if target_id is None or location is not None:
             raise BYOKValidationError(
-                "message and talk require target and null location"
+                "message, talk and promise require target and null location"
             )
+    elif action_type is ActionType.INVITE:
+        if target_id is None or location is None:
+            raise BYOKValidationError("invite requires target and location")
     elif action_type is ActionType.VISIT_BAR:
         if location is not None:
             raise BYOKValidationError("visit_bar requires null location")
