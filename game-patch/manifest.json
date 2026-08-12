@@ -21,8 +21,7 @@
   "new_resources": [
     "ag_open_shift_button",
     "ag_bridge_controller",
-    "ag_safe_text",
-    "ag_bridge_scene"
+    "ag_safe_text"
   ],
   "allowed_portraits": {
     "none": null,

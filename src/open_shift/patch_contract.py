@@ -124,3 +124,39 @@ def validate_gml_safety(source: str) -> None:
         raise PatchContractError(
             f"GML contained banned capabilities: {', '.join(present)}"
         )
+
+
+def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
+    """Validate every committed GML source and the expected event set."""
+
+    directory = Path(path)
+    expected = {
+        "ag_open_shift_button_create.gml",
+        "ag_open_shift_button_step.gml",
+        "ag_open_shift_button_draw.gml",
+        "ag_bridge_controller_create.gml",
+        "ag_bridge_controller_step.gml",
+        "ag_bridge_controller_http.gml",
+        "ag_safe_text_create.gml",
+        "ag_safe_text_draw.gml",
+    }
+    sources = tuple(sorted(directory.glob("*.gml")))
+    if {source.name for source in sources} != expected:
+        raise PatchContractError("GML patch source files did not match the contract")
+    for source in sources:
+        validate_gml_safety(source.read_text(encoding="utf-8"))
+    combined = "\n".join(source.read_text(encoding="utf-8") for source in sources)
+    required_boundaries = (
+        "http://127.0.0.1:",
+        "X-Open-Shift-Token",
+        "open-shift-runtime.ini",
+        "json_decode",
+        "draw_text_ext",
+        "out_to_title",
+    )
+    missing = [item for item in required_boundaries if item not in combined]
+    if missing:
+        raise PatchContractError(
+            f"GML patch safety boundary was incomplete: {', '.join(missing)}"
+        )
+    return sources

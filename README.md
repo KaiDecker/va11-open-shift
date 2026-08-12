@@ -1,6 +1,6 @@
 # Open Shift Simulator
 
-这是 VA-11 HALL-A 多 Agent 永续世界 Mod 的无界面世界模拟核心。当前已完成 BYOK 决策闭环与阶段 2 多 Agent 社会模拟；尚未修改游戏文件或接入 GameMaker。
+这是 VA-11 HALL-A 多 Agent 永续世界 Mod。当前已完成 BYOK 决策闭环、多 Agent 社会模拟，以及阶段 3 的 GameMaker 本地桥接和可复现补丁源码。仓库不会包含或分发游戏资源。
 
 当前能力：
 
@@ -17,6 +17,7 @@
 - 30/100 天无人值守模拟、断点续跑和确定性回放测试
 - 仅监听本机回环地址、带令牌和幂等语义的 GameMaker HTTP 桥接协议
 - 原版 `data.win` 只读盘点、哈希基线和按资源名验证的补丁合同
+- UndertaleModTool 0.9.1.2 补丁脚本、Extra Chapters 入口和安全三句连接场景
 
 ## 运行
 
@@ -87,7 +88,9 @@ $env:OPEN_SHIFT_BRIDGE_TOKEN = "至少16位的临时随机令牌"
 python -m open_shift serve-bridge --host 127.0.0.1 --port 8711
 ```
 
-当前固定连接场景和 HTTP 合同已完成自动测试。真正的 `data.win` 写入仍需要固定并验证 UndertaleModTool 版本；在此之前不会直接修改游戏目录。
+固定连接场景、HTTP 合同与 GameMaker GML 已通过 UndertaleModTool 0.9.1.2 真实编译，并对补丁后的 `data.win` 副本完成二次读取和写回。补丁增加纯文字 `OPEN SHIFT` 菜单按钮；点击后从本地运行时 INI 读取临时令牌，通过 Async HTTP 获取固定三句场景，严格检查协议和资源白名单，再使用独立的 `draw_text_ext` 渲染器显示，最后复用原版 `out_to_title` 返回标题。
+
+`game-patch/apply_mod.csx` 只接受 `manifest.json` 中记录的 Steam Windows 原版哈希，资源缺失或名称冲突会立即终止。构建时只对副本使用；不要直接把输出写到 Steam 安装目录。启动器及人工游戏内验收将在下一阶段完成。
 
 只读检查原版补丁基线：
 

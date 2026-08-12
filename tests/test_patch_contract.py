@@ -10,6 +10,7 @@ from open_shift.patch_contract import (
     PatchContractError,
     load_patch_manifest,
     validate_gml_safety,
+    validate_patch_source_tree,
     validate_patch_target,
 )
 
@@ -91,6 +92,19 @@ class PatchContractTests(unittest.TestCase):
             validate_gml_safety("execute_string(generated_text);")
         with self.assertRaisesRegex(PatchContractError, "file_delete"):
             validate_gml_safety("file_delete(path);")
+
+    def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        sources = validate_patch_source_tree(root / "game-patch" / "gml")
+        self.assertEqual(len(sources), 8)
+
+    def test_incomplete_gml_source_tree_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, "ag_safe_text_draw.gml").write_text(
+                "draw_text_ext(0, 0, text, 20, 100);", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(PatchContractError, "did not match"):
+                validate_patch_source_tree(temp_dir)
 
 
 if __name__ == "__main__":
