@@ -7,6 +7,7 @@ from .models import (
     ActionResult,
     ActionType,
     AgentState,
+    Goal,
     GoalStatus,
     Relationship,
 )
@@ -15,6 +16,7 @@ from .store import WorldStore
 
 WORK_WAGE = 24
 BAR_VISIT_COST = 12
+DEFAULT_SOCIAL_DELAY = 6 * 60
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -180,6 +182,40 @@ class RuleEngine:
             ["social", actor.agent_id],
         )
 
+    def _advance_social_arcs(
+        self, tick: int, actor: AgentState, target: AgentState
+    ) -> None:
+        for owner, other in ((actor, target), (target, actor)):
+            for arc in self.store.advance_story_arcs(owner.agent_id, other.agent_id, tick):
+                event_id = self.store.append_event(
+                    tick,
+                    "story_arc_resolved",
+                    owner.agent_id,
+                    other.agent_id,
+                    {"arc_id": arc.arc_id, "kind": arc.kind},
+                )
+                self.store.append_memory(
+                    owner.agent_id,
+                    event_id,
+                    0.85,
+                    f"Resolved {arc.kind} with {other.display_name}.",
+                    ["story_arc", "milestone", other.agent_id],
+                )
+                next_arc_id = self.store.add_story_arc(
+                    owner.agent_id,
+                    other.agent_id,
+                    "keep_in_touch",
+                    tick,
+                    required_progress=4,
+                )
+                self.store.append_event(
+                    tick,
+                    "story_arc_started",
+                    owner.agent_id,
+                    other.agent_id,
+                    {"arc_id": next_arc_id, "kind": "keep_in_touch"},
+                )
+
     def _execute_message(
         self, tick: int, actor: AgentState, action: ActionProposal
     ) -> ActionResult:
@@ -197,6 +233,7 @@ class RuleEngine:
             {"trust": relationship.trust, "warmth": relationship.warmth},
         )
         self._remember_social_event(actor, target, event_id, "Messaged", 0.28)
+        self._advance_social_arcs(tick, actor, target)
         return ActionResult(True, "accepted", event_id)
 
     def _execute_visit_bar(
@@ -243,6 +280,7 @@ class RuleEngine:
                 f"{actor.display_name} visited the bar with me in mind.",
                 ["bar", "social", actor.agent_id],
             )
+            self._advance_social_arcs(tick, actor, target)
         return ActionResult(True, "accepted", event_id)
 
     def _execute_talk(
@@ -268,7 +306,148 @@ class RuleEngine:
             },
         )
         self._remember_social_event(actor, target, event_id, "Talked with", 0.32)
+        self._advance_social_arcs(tick, actor, target)
         return ActionResult(True, "accepted", event_id)
+
+    def _execute_invite(
+        self, tick: int, actor: AgentState, action: ActionProposal
+    ) -> ActionResult:
+        target = self._validate_target(actor, action.target_id)
+        if target is None:
+            return ActionResult(False, "invalid_target")
+        if action.location not in self.locations:
+            return ActionResult(False, "unknown_location")
+        delay = action.duration_minutes or DEFAULT_SOCIAL_DELAY
+        proposed_tick = tick + max(60, min(delay, 720))
+        event_id = self._event(
+            tick,
+            "invitation_created",
+            actor.agent_id,
+            action,
+            {"location": action.location, "proposed_tick": proposed_tick},
+        )
+        invitation_id = self.store.add_invitation(
+            actor.agent_id,
+            target.agent_id,
+            action.location,
+            proposed_tick,
+            event_id,
+        )
+        self.store.schedule_event(
+            proposed_tick,
+            "invitation_due",
+            target.agent_id,
+            {"invitation_id": invitation_id},
+        )
+        self._remember_social_event(actor, target, event_id, "Invited", 0.45)
+        self._advance_social_arcs(tick, actor, target)
+        return ActionResult(True, "accepted", event_id)
+
+    def _execute_promise(
+        self, tick: int, actor: AgentState, action: ActionProposal
+    ) -> ActionResult:
+        target = self._validate_target(actor, action.target_id)
+        if target is None:
+            return ActionResult(False, "invalid_target")
+        delay = action.duration_minutes or DEFAULT_SOCIAL_DELAY
+        due_tick = tick + max(60, min(delay, 720))
+        event_id = self._event(
+            tick,
+            "promise_made",
+            actor.agent_id,
+            action,
+            {"due_tick": due_tick},
+        )
+        commitment_id = self.store.add_commitment(
+            actor.agent_id, target.agent_id, due_tick, event_id
+        )
+        self.store.schedule_event(
+            due_tick,
+            "commitment_due",
+            actor.agent_id,
+            {"commitment_id": commitment_id},
+        )
+        self._remember_social_event(actor, target, event_id, "Promised to help", 0.7)
+        self._advance_social_arcs(tick, actor, target)
+        return ActionResult(True, "accepted", event_id)
+
+    def resolve_invitation(self, tick: int, invitation_id: int) -> None:
+        with self.store.transaction():
+            self._resolve_invitation(tick, invitation_id)
+
+    def _resolve_invitation(self, tick: int, invitation_id: int) -> None:
+        invitation = self.store.get_invitation(invitation_id)
+        if invitation is None or invitation.status != "pending":
+            return
+        inviter = self.store.get_agent(invitation.inviter_id)
+        invitee = self.store.get_agent(invitation.invitee_id)
+        if inviter is None or invitee is None:
+            self.store.set_invitation_status(invitation_id, "declined")
+            return
+        relationship = self.store.get_relationship(invitee.agent_id, inviter.agent_id)
+        accepted = relationship.trust >= -0.25 and invitee.fatigue < 0.9
+        status = "accepted" if accepted else "declined"
+        self.store.set_invitation_status(invitation_id, status)
+        if accepted:
+            self.store.update_agent(replace(inviter, location=invitation.location))
+            self.store.update_agent(replace(invitee, location=invitation.location))
+        event_type = "invitation_kept" if accepted else "invitation_declined"
+        event_id = self.store.append_event(
+            tick,
+            event_type,
+            invitee.agent_id,
+            inviter.agent_id,
+            {"invitation_id": invitation_id, "location": invitation.location},
+        )
+        self._remember_social_event(invitee, inviter, event_id, "Met with" if accepted else "Declined", 0.6)
+        delta = 0.05 if accepted else -0.03
+        self._change_relationship(inviter.agent_id, invitee.agent_id, delta, delta)
+        self._change_relationship(invitee.agent_id, inviter.agent_id, delta, delta)
+        if accepted:
+            self._advance_social_arcs(tick, inviter, invitee)
+
+    def resolve_commitment(self, tick: int, commitment_id: int) -> None:
+        with self.store.transaction():
+            self._resolve_commitment(tick, commitment_id)
+
+    def _resolve_commitment(self, tick: int, commitment_id: int) -> None:
+        commitment = next(
+            (
+                item
+                for item in self.store.list_commitments(status="pending")
+                if item.commitment_id == commitment_id
+            ),
+            None,
+        )
+        if commitment is None:
+            return
+        actor = self.store.get_agent(commitment.actor_id)
+        target = self.store.get_agent(commitment.target_id)
+        if actor is None or target is None:
+            return
+        relationship = self.store.get_relationship(actor.agent_id, target.agent_id)
+        fulfilled = relationship.trust >= -0.5 and actor.fatigue < 0.95
+        status = "fulfilled" if fulfilled else "broken"
+        event_id = self.store.append_event(
+            tick,
+            "promise_fulfilled" if fulfilled else "promise_broken",
+            actor.agent_id,
+            target.agent_id,
+            {"commitment_id": commitment_id},
+        )
+        self.store.resolve_commitment(commitment_id, status, event_id)
+        delta = 0.08 if fulfilled else -0.12
+        self._change_relationship(actor.agent_id, target.agent_id, delta, delta)
+        self._change_relationship(target.agent_id, actor.agent_id, delta, delta)
+        self._remember_social_event(
+            actor,
+            target,
+            event_id,
+            "Kept a promise to" if fulfilled else "Broke a promise to",
+            0.9,
+        )
+        if fulfilled:
+            self._advance_social_arcs(tick, actor, target)
 
     def _evaluate_goals(self, tick: int, actor_id: str) -> None:
         actor = self.store.get_agent(actor_id)
@@ -307,3 +486,46 @@ class RuleEngine:
                     f"Completed goal {goal.goal_id}.",
                     ["goal", "milestone"],
                 )
+                self._create_followup_goal(tick, actor, goal, event_id)
+
+    def _create_followup_goal(
+        self, tick: int, actor: AgentState, completed: Goal, source_event_id: int
+    ) -> None:
+        if completed.kind == "savings":
+            target_value = completed.target_value + 120
+        elif completed.kind == "relationship" and completed.target_id is not None:
+            target_value = min(0.9, completed.target_value + 0.2)
+            if target_value <= completed.target_value:
+                return
+        else:
+            return
+        goal_id = f"{actor.agent_id}_{completed.kind}_{source_event_id}"
+        self.store.add_goal(
+            Goal(
+                goal_id,
+                actor.agent_id,
+                completed.kind,
+                completed.target_id,
+                target_value,
+                completed.priority,
+                metadata={"previous_goal_id": completed.goal_id},
+            )
+        )
+        new_event_id = self.store.append_event(
+            tick,
+            "goal_created",
+            actor.agent_id,
+            completed.target_id,
+            {
+                "goal_id": goal_id,
+                "kind": completed.kind,
+                "target_value": target_value,
+            },
+        )
+        self.store.append_memory(
+            actor.agent_id,
+            new_event_id,
+            0.65,
+            f"Set a new {completed.kind} goal.",
+            ["goal", "plan"],
+        )

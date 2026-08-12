@@ -29,6 +29,8 @@ class SimulationReport:
     agents: list[dict[str, Any]]
     completed_goals: list[str]
     memory_count: int
+    resolved_story_arcs: int
+    autonomous_event_ratio: float
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -71,14 +73,28 @@ class SimulationEngine:
         actor = self.store.get_agent(actor_id)
         if actor is None:
             raise KeyError(f"unknown actor: {actor_id}")
+        relationships = tuple(self.store.list_relationships(actor_id))
+        goals = tuple(self.store.list_goals(actor_id))
+        memory_tags = {
+            actor.location,
+            *(relationship.target_id for relationship in relationships),
+            *(goal.kind for goal in goals),
+            *(goal.target_id for goal in goals if goal.target_id is not None),
+        }
         return DecisionContext(
             tick=tick,
             seed=self.seed,
             actor=actor,
             agents=tuple(self.store.list_agents()),
-            relationships=tuple(self.store.list_relationships(actor_id)),
-            goals=tuple(self.store.list_goals(actor_id)),
+            relationships=relationships,
+            goals=goals,
             locations=self.locations,
+            memories=tuple(
+                self.store.retrieve_memories(actor_id, tick, tags=memory_tags)
+            ),
+            invitations=tuple(self.store.list_invitations(actor_id, "pending")),
+            commitments=tuple(self.store.list_commitments(actor_id, "pending")),
+            story_arcs=tuple(self.store.list_story_arcs(actor_id, "active")),
         )
 
     @staticmethod
@@ -109,6 +125,16 @@ class SimulationEngine:
             if scheduled is None:
                 break
             self.store.set_current_tick(scheduled.tick)
+            if scheduled.event_type == "invitation_due":
+                invitation_id = scheduled.payload.get("invitation_id")
+                if isinstance(invitation_id, int):
+                    self.rules.resolve_invitation(scheduled.tick, invitation_id)
+                continue
+            if scheduled.event_type == "commitment_due":
+                commitment_id = scheduled.payload.get("commitment_id")
+                if isinstance(commitment_id, int):
+                    self.rules.resolve_commitment(scheduled.tick, commitment_id)
+                continue
             if scheduled.event_type != "agent_turn" or scheduled.actor_id is None:
                 self.store.append_event(
                     scheduled.tick,
@@ -183,6 +209,22 @@ class SimulationEngine:
             for goal in state["goals"]
             if goal["status"] == "completed"
         ]
+        resolved_arcs = len(
+            [arc for arc in state["story_arcs"] if arc["status"] == "resolved"]
+        )
+        autonomous_types = {
+            "goal_created",
+            "invitation_created",
+            "invitation_kept",
+            "invitation_declined",
+            "promise_made",
+            "promise_fulfilled",
+            "promise_broken",
+            "story_arc_started",
+            "story_arc_resolved",
+        }
+        autonomous_count = sum(counts[event_type] for event_type in autonomous_types)
+        autonomous_ratio = autonomous_count / len(events) if events else 0.0
         return SimulationReport(
             current_tick=self.store.current_tick,
             elapsed_days=self.store.current_tick / DAY_MINUTES,
@@ -193,4 +235,6 @@ class SimulationEngine:
             agents=state["agents"],
             completed_goals=completed,
             memory_count=len(self.store.list_memories()),
+            resolved_story_arcs=resolved_arcs,
+            autonomous_event_ratio=autonomous_ratio,
         )

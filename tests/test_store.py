@@ -38,6 +38,20 @@ class WorldStoreTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     store.set_current_tick(49)
 
+    def test_schema_version_one_database_upgrades_without_losing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            with WorldStore(path) as store:
+                store.add_agent(AgentState("a", "A", "home", 10, 0.2, "ok", 60))
+                store.set_meta("schema_version", 1)
+
+            with WorldStore(path) as upgraded:
+                self.assertEqual(upgraded.get_meta("schema_version"), "2")
+                self.assertEqual(upgraded.get_agent("a").display_name, "A")
+                self.assertEqual(upgraded.list_invitations(), [])
+                self.assertEqual(upgraded.list_commitments(), [])
+                self.assertEqual(upgraded.list_story_arcs(), [])
+
     def test_nested_transaction_rolls_back_all_world_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with WorldStore(Path(temp_dir) / "world.sqlite3") as store:

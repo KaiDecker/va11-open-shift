@@ -33,7 +33,28 @@ class MockProvider:
         )
         if not others:
             return None
-        return others[self._choice(context, len(others), salt="target")]
+        arc_targets = sorted(
+            {
+                arc.target_id
+                for arc in context.story_arcs
+                if arc.target_id in others and arc.status == "active"
+            }
+        )
+        candidates = arc_targets or others
+        last_seen = {candidate: -1 for candidate in candidates}
+        for memory in context.memories:
+            for candidate in candidates:
+                if candidate in memory.tags:
+                    last_seen[candidate] = max(last_seen[candidate], memory.tick)
+        oldest_tick = min(last_seen.values())
+        least_recent = sorted(
+            candidate
+            for candidate, remembered_tick in last_seen.items()
+            if remembered_tick == oldest_tick
+        )
+        return least_recent[
+            self._choice(context, len(least_recent), salt="memory_aware_target")
+        ]
 
     def decide(self, context: DecisionContext) -> ActionProposal:
         actor = context.actor
@@ -58,7 +79,7 @@ class MockProvider:
         savings_goal = next(
             (goal for goal in active_goals if goal.kind == "savings"), None
         )
-        choice = self._choice(context, 6, salt="action")
+        choice = self._choice(context, 8, salt="action")
         if savings_goal is not None and actor.money < savings_goal.target_value and choice < 2:
             return ActionProposal(
                 action_type=ActionType.WORK,
@@ -112,6 +133,21 @@ class MockProvider:
                 location=location,
                 duration_minutes=30,
                 reason_code="scheduled_travel",
+            )
+        if choice == 5 and target is not None:
+            return ActionProposal(
+                action_type=ActionType.INVITE,
+                target_id=target,
+                location="va11_hall_a",
+                duration_minutes=360,
+                reason_code="social_invitation",
+            )
+        if choice == 6 and target is not None:
+            return ActionProposal(
+                action_type=ActionType.PROMISE,
+                target_id=target,
+                duration_minutes=360,
+                reason_code="support_friend",
             )
         if target is not None:
             target_agent = next(a for a in context.agents if a.agent_id == target)
