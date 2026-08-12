@@ -1,0 +1,12 @@
+using System;
+using System.IO;
+using System.Linq;
+using UndertaleModLib.Models;
+using UndertaleModLib.Util;
+EnsureDataLoaded();
+string[] names = new[] { "ag_open_shift_button", "ag_bridge_controller", "ag_safe_text" };
+foreach (string name in names) if (Data.GameObjects.ByName(name) is null) throw new Exception("Missing object: " + name);
+string[] code = new[] { "gml_Object_ag_open_shift_button_Create_0", "gml_Object_ag_open_shift_button_Step_0", "gml_Object_ag_open_shift_button_Draw_0", "gml_Object_ag_bridge_controller_Create_0", "gml_Object_ag_bridge_controller_Step_0", "gml_Object_ag_bridge_controller_Other_62", "gml_Object_ag_safe_text_Create_0", "gml_Object_ag_safe_text_Draw_0" };
+foreach (string name in code) if (Data.Code.ByName(name) is null) throw new Exception("Missing code: " + name);
+if (Data.Code.ByName("gml_Object_extrachapters_Create_0") is null) throw new Exception("Missing menu entrypoint");
+ScriptMessage("Open Shift patched data verified.");

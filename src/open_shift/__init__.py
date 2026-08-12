@@ -1,6 +1,7 @@
 """Open Shift persistent world simulator."""
 
 from .byok import APIProtocol, BYOKConfig, BYOKProvider, ResponseFormat
+from .bridge import BridgeApplication, BridgeConfig, SceneLine, ScenePackage
 from .engine import SimulationEngine, SimulationReport
 from .models import Commitment, Invitation, Memory, StoryArc
 from .providers import MockProvider, ModelProvider
@@ -13,7 +14,11 @@ __all__ = [
     "APIProtocol",
     "BYOKConfig",
     "BYOKProvider",
+    "BridgeApplication",
+    "BridgeConfig",
     "ResponseFormat",
+    "SceneLine",
+    "ScenePackage",
     "SimulationEngine",
     "SimulationReport",
     "WorldStore",
@@ -24,4 +29,4 @@ __all__ = [
     "StoryArc",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

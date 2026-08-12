@@ -12,7 +12,19 @@ from .byok import (
     BYOKProvider,
     ResponseFormat,
 )
+from .bridge import BridgeConfig, serve_bridge
+from .game_data import (
+    GameDataError,
+    compare_inventories,
+    inspect_game_data,
+    inventory_json,
+)
 from .models import AgentState, DecisionContext, Goal, Relationship
+from .patch_contract import (
+    PatchContractError,
+    load_patch_manifest,
+    validate_patch_target,
+)
 from .providers import MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
@@ -47,6 +59,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default=ResponseFormat.JSON_OBJECT.value,
         help="use json_object for providers without strict JSON Schema support",
     )
+    bridge = subparsers.add_parser(
+        "serve-bridge",
+        help="serve the loopback-only GameMaker bridge",
+    )
+    bridge.add_argument("--host", default="127.0.0.1")
+    bridge.add_argument("--port", type=int, default=8711)
+    bridge.add_argument("--token-env", default="OPEN_SHIFT_BRIDGE_TOKEN")
+    inventory = subparsers.add_parser(
+        "inspect-game-data",
+        help="read a data.win and print a names-only inventory",
+    )
+    inventory.add_argument("--data-win", type=Path, required=True)
+    inventory.add_argument("--compare", type=Path)
+    patch_target = subparsers.add_parser(
+        "validate-patch-target",
+        help="validate a data.win against the patch manifest without modifying it",
+    )
+    patch_target.add_argument("--data-win", type=Path, required=True)
+    patch_target.add_argument("--manifest", type=Path, required=True)
     return parser
 
 
@@ -130,6 +161,72 @@ def _probe_provider(args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve_bridge(args: argparse.Namespace) -> int:
+    import os
+
+    token = os.environ.get(args.token_env)
+    if token is None:
+        print(
+            f"Bridge token environment variable was not set: {args.token_env}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        config = BridgeConfig(token=token, host=args.host, port=args.port)
+    except ValueError as exc:
+        print(f"Bridge configuration failed: {exc}", file=sys.stderr)
+        return 2
+    del token
+    try:
+        print(f"Open Shift bridge listening on http://{config.host}:{config.port}")
+        serve_bridge(config)
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _inspect_game_data(args: argparse.Namespace) -> int:
+    try:
+        baseline = inspect_game_data(args.data_win)
+        if args.compare is None:
+            print(inventory_json(baseline))
+        else:
+            print(
+                json.dumps(
+                    compare_inventories(
+                        baseline, inspect_game_data(args.compare)
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+    except (OSError, GameDataError) as exc:
+        print(f"Game data inspection failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _validate_patch_target(args: argparse.Namespace) -> int:
+    try:
+        inventory = inspect_game_data(args.data_win)
+        validate_patch_target(load_patch_manifest(args.manifest), inventory)
+    except (OSError, json.JSONDecodeError, GameDataError, PatchContractError) as exc:
+        print(f"Patch target validation failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {
+                "status": "supported",
+                "data_win_sha256": inventory.sha256,
+                "file_size": inventory.file_size,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -137,5 +234,11 @@ def main(argv: list[str] | None = None) -> int:
         return _simulate(args)
     if args.command == "probe-provider":
         return _probe_provider(args)
+    if args.command == "serve-bridge":
+        return _serve_bridge(args)
+    if args.command == "inspect-game-data":
+        return _inspect_game_data(args)
+    if args.command == "validate-patch-target":
+        return _validate_patch_target(args)
     parser.error(f"unknown command: {args.command}")
     return 2
