@@ -3,6 +3,7 @@ if ((ag_state == 1 || ag_state == 3) && current_time > ag_timeout_at)
     ag_message.ag_speaker = "OPEN SHIFT";
     if (ag_state == 3)
     {
+        global.block_click = 0;
         instance_create(0, 0, out_to_title);
         with (ag_message) instance_destroy();
         instance_destroy();
@@ -51,6 +52,7 @@ if (ag_state == 2 && mouse_check_button_pressed(mb_left))
 
 if (ag_state == 4 && mouse_check_button_pressed(mb_left))
 {
+    global.block_click = 0;
     instance_create(0, 0, out_to_title);
     with (ag_message) instance_destroy();
     instance_destroy();

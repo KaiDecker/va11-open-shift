@@ -96,7 +96,31 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 8)
+        self.assertEqual(len(sources), 11)
+
+    def test_menu_entry_matches_reference_chapter_layout(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        patch = (root / "game-patch" / "apply_mod.csx").read_text(encoding="utf-8")
+        chapter = (root / "game-patch" / "gml" / "ag_open_shift_chapter_step.gml").read_text(
+            encoding="utf-8"
+        )
+        start = (root / "game-patch" / "gml" / "ag_open_shift_start_step.gml").read_text(
+            encoding="utf-8"
+        )
+        dialogue = (root / "game-patch" / "gml" / "ag_safe_text_draw.gml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('Data.Sprites.ByName("blue_chapter")', patch)
+        self.assertIn('Data.Sprites.ByName("yellow_chapter")', patch)
+        self.assertIn('Data.Code.ByName("gml_Object_prologuechapter_Step_0")', patch)
+        self.assertNotIn("instance_create(254, 318", patch)
+        self.assertIn("annachapter.y + 14", chapter)
+        self.assertIn("ag_open_shift_chapter.y + 14", start)
+        self.assertIn("cursor_hitbox", chapter)
+        self.assertIn("cursor_hitbox", start)
+        self.assertIn("draw_rectangle(16, 205, 624, 350", dialogue)
+        self.assertNotIn("draw_rectangle(16, 320, 624, 464", dialogue)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

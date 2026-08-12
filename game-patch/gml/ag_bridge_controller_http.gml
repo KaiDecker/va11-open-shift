@@ -11,6 +11,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     {
         if (ag_state == 3)
         {
+            global.block_click = 0;
             instance_create(0, 0, out_to_title);
             with (ag_message) instance_destroy();
             instance_destroy();
@@ -24,6 +25,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     }
     else if (ag_state == 3)
     {
+        global.block_click = 0;
         instance_create(0, 0, out_to_title);
         with (ag_message) instance_destroy();
         instance_destroy();

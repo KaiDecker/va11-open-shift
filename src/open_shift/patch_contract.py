@@ -131,9 +131,12 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
 
     directory = Path(path)
     expected = {
-        "ag_open_shift_button_create.gml",
-        "ag_open_shift_button_step.gml",
-        "ag_open_shift_button_draw.gml",
+        "ag_open_shift_chapter_create.gml",
+        "ag_open_shift_chapter_step.gml",
+        "ag_open_shift_chapter_draw.gml",
+        "ag_open_shift_start_create.gml",
+        "ag_open_shift_start_step.gml",
+        "ag_open_shift_start_draw.gml",
         "ag_bridge_controller_create.gml",
         "ag_bridge_controller_step.gml",
         "ag_bridge_controller_http.gml",
@@ -152,6 +155,7 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "open-shift-runtime.ini",
         "json_decode",
         "draw_text_ext",
+        "cursor_hitbox",
         "out_to_title",
     )
     missing = [item for item in required_boundaries if item not in combined]

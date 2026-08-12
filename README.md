@@ -138,6 +138,8 @@ python -m open_shift launch `
   --advance-minutes 1440
 ```
 
+进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`OPEN SHIFT` 使用与《后日谈》一致的蓝色章节项；点击后会向下展开黄色 `START` 项，再点击 `START` 连接本地世界服务。
+
 使用 DeepSeek BYOK 世界时，先只在当前 PowerShell 会话设置 `OPEN_SHIFT_API_KEY`，然后在上述命令后增加：
 
 ```powershell

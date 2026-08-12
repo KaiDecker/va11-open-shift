@@ -16,12 +16,18 @@
     "gml_Object_extrachapters_Step_0",
     "main_menu_controller",
     "gml_Object_main_menu_controller_Create_0",
+    "prologuechapter",
+    "gml_Object_prologuechapter_Step_0",
+    "blue_chapter",
+    "yellow_chapter",
+    "cursor_hitbox",
     "out_to_title",
     "sprite_dana",
     "sprite_doro"
   ],
   "new_resources": [
-    "ag_open_shift_button",
+    "ag_open_shift_chapter",
+    "ag_open_shift_start",
     "ag_bridge_controller",
     "ag_safe_text"
   ],
