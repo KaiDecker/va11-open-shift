@@ -20,10 +20,17 @@ MAX_TEXT_CHARACTERS = 240
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
-ALLOWED_SPEAKERS = frozenset({"jill", "dana", "dorothy", "alma", "stella", "sei"})
-ALLOWED_PORTRAITS = frozenset({"none", "sprite_dana", "sprite_doro"})
+ALLOWED_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
+SPEAKER_PORTRAITS = {
+    "dana": "sprite_dana",
+    "dorothy": "sprite_doro",
+    "alma": "sprite_alma",
+    "stella": "sprite_stella",
+    "sei": "sprite_sei",
+}
+ALLOWED_PORTRAITS = frozenset(SPEAKER_PORTRAITS.values())
 ALLOWED_EXPRESSIONS = frozenset({"neutral", "happy", "worry", "playful"})
-ALLOWED_RETURN_TARGETS = frozenset({"title"})
+ALLOWED_RETURN_TARGETS = frozenset({"bar"})
 
 
 class BridgeError(ValueError):
@@ -49,6 +56,8 @@ class SceneLine:
             raise ValueError("speaker_id was not allowed")
         if self.portrait_id not in ALLOWED_PORTRAITS:
             raise ValueError("portrait_id was not allowed")
+        if self.portrait_id != SPEAKER_PORTRAITS[self.speaker_id]:
+            raise ValueError("portrait_id did not match speaker_id")
         if self.expression_id not in ALLOWED_EXPRESSIONS:
             raise ValueError("expression_id was not allowed")
         if not self.text or len(self.text) > MAX_TEXT_CHARACTERS:
@@ -70,7 +79,7 @@ class SceneLine:
 class ScenePackage:
     scene_id: str
     lines: tuple[SceneLine, ...]
-    return_to: str = "title"
+    return_to: str = "bar"
 
     def __post_init__(self) -> None:
         if not _RESOURCE_ID.fullmatch(self.scene_id):
@@ -105,8 +114,8 @@ def stage_three_scene() -> ScenePackage:
             ),
             SceneLine(
                 "connection_2",
-                "jill",
-                "none",
+                "alma",
+                "sprite_alma",
                 "neutral",
                 "场景文本正在作为普通字符安全显示。",
             ),
@@ -115,7 +124,7 @@ def stage_three_scene() -> ScenePackage:
                 "dana",
                 "sprite_dana",
                 "neutral",
-                "测试结束后将安全返回标题画面。",
+                "测试结束后会留在酒吧继续运行。",
             ),
         ),
     )
@@ -327,7 +336,7 @@ class BridgeApplication:
             )
         if self._ack_handler is None and request["scene_id"] != self.scene.scene_id:
             raise BridgeError(404, "unknown_scene", "scene_id was not known")
-        if request["outcome"] != "returned_to_title":
+        if request["outcome"] != "continued_in_bar":
             raise BridgeError(400, "invalid_outcome", "scene outcome was not allowed")
         response = {
             "protocol_version": PROTOCOL_VERSION,

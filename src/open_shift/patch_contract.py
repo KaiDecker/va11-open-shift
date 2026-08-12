@@ -72,7 +72,7 @@ def load_patch_manifest(path: str | Path) -> PatchManifest:
         )
     ):
         raise PatchContractError("allowed_portraits was invalid")
-    if value["return_target"] != "title":
+    if value["return_target"] != "bar":
         raise PatchContractError("return_target was invalid")
     return PatchManifest(
         mod_id=value["mod_id"],
@@ -133,15 +133,11 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
     expected = {
         "ag_open_shift_chapter_create.gml",
         "ag_open_shift_chapter_step.gml",
-        "ag_open_shift_chapter_draw.gml",
         "ag_open_shift_start_create.gml",
         "ag_open_shift_start_step.gml",
-        "ag_open_shift_start_draw.gml",
         "ag_bridge_controller_create.gml",
         "ag_bridge_controller_step.gml",
         "ag_bridge_controller_http.gml",
-        "ag_safe_text_create.gml",
-        "ag_safe_text_draw.gml",
     }
     sources = tuple(sorted(directory.glob("*.gml")))
     if {source.name for source in sources} != expected:
@@ -154,9 +150,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "X-Open-Shift-Token",
         "open-shift-runtime.ini",
         "json_decode",
-        "draw_text_ext",
         "cursor_hitbox",
-        "out_to_title",
+        "out_of_apartment",
+        "obj_textbox",
+        "sprite_stella",
     )
     missing = [item for item in required_boundaries if item not in combined]
     if missing:

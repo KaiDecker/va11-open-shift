@@ -27,11 +27,12 @@ else
 
 if (place_meeting(x, y, cursor_hitbox) && mouse_check_button_pressed(mb_left) && ready)
 {
-    if (!instance_exists(ag_bridge_controller))
+    if (!instance_exists(out_of_apartment))
     {
-        prologuechapter.appear = 0;
-        global.block_click = 1;
-        instance_create(0, 0, ag_bridge_controller);
+        global.cur_day = 1001;
+        global.cur_client = 1;
+        global.cur_stage = 1;
+        global.block_click = 0;
+        instance_create(x, y, out_of_apartment);
     }
 }
-

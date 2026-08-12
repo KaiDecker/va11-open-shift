@@ -21,20 +21,32 @@
     "blue_chapter",
     "yellow_chapter",
     "cursor_hitbox",
-    "out_to_title",
+    "out_of_apartment",
+    "towork_load",
+    "bar",
+    "extrachapter_text",
+    "gml_Object_extrachapter_text_Draw_0",
+    "dialog_control",
+    "gml_Object_dialog_control_Create_0",
+    "obj_textbox",
+    "gml_Script_reset_lips",
     "sprite_dana",
-    "sprite_doro"
+    "sprite_doro",
+    "sprite_alma",
+    "sprite_stella",
+    "sprite_sei"
   ],
   "new_resources": [
     "ag_open_shift_chapter",
     "ag_open_shift_start",
-    "ag_bridge_controller",
-    "ag_safe_text"
+    "ag_bridge_controller"
   ],
   "allowed_portraits": {
-    "none": null,
     "sprite_dana": "sprite_dana",
-    "sprite_doro": "sprite_doro"
+    "sprite_doro": "sprite_doro",
+    "sprite_alma": "sprite_alma",
+    "sprite_stella": "sprite_stella",
+    "sprite_sei": "sprite_sei"
   },
-  "return_target": "title"
+  "return_target": "bar"
 }

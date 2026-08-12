@@ -53,7 +53,7 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 "request_id": "world-ack-1",
                 "client_session_id": "session-1",
                 "scene_id": first.body["scene"]["scene_id"],
-                "outcome": "returned_to_title",
+                "outcome": "continued_in_bar",
             }
             ack_body = json.dumps(ack).encode()
             self.assertEqual(app.handle("POST", "/v1/scenes/ack", headers, ack_body).status, 200)
@@ -114,8 +114,18 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 )
                 with urlopen(request, timeout=2) as response:
                     payload = json.loads(response.read().decode())
-                self.assertEqual(payload["scene"]["return_to"], "title")
+                self.assertEqual(payload["scene"]["return_to"], "bar")
                 self.assertEqual(len(payload["scene"]["lines"]), 3)
+                self.assertNotIn(
+                    "jill",
+                    {line["speaker_id"] for line in payload["scene"]["lines"]},
+                )
+                self.assertTrue(
+                    all(
+                        any("\u4e00" <= char <= "\u9fff" for char in line["text"])
+                        for line in payload["scene"]["lines"]
+                    )
+                )
             finally:
                 server.shutdown()
                 server.server_close()
@@ -139,6 +149,8 @@ class Stage4LauncherTests(unittest.TestCase):
             self.assertIn("[bridge]", contents)
             self.assertIn(str(session.port), contents)
             self.assertIn(session.token, contents)
+            self.assertIn(session.session_id, contents)
+            self.assertGreaterEqual(len(session.session_id), 16)
             with self.assertRaisesRegex(Exception, "already exists"):
                 session.write_runtime_file()
             session.cleanup()
@@ -250,7 +262,7 @@ opened = {"protocol_version": 1, "request_id": "launcher-open-1", "client_sessio
 request = urllib.request.Request(base + "/v1/scenes/open", data=json.dumps(opened).encode(), headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=5) as response:
     scene = json.loads(response.read().decode())["scene"]
-ack = {"protocol_version": 1, "request_id": "launcher-ack-1", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": "returned_to_title"}
+ack = {"protocol_version": 1, "request_id": "launcher-ack-1", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": "continued_in_bar"}
 request = urllib.request.Request(base + "/v1/scenes/ack", data=json.dumps(ack).encode(), headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=5) as response:
     accepted = json.loads(response.read().decode())["status"]

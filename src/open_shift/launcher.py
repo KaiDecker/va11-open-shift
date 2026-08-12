@@ -61,6 +61,7 @@ class LaunchConfig:
 class RuntimeSession:
     config: LaunchConfig
     token: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
+    session_id: str = field(default_factory=lambda: secrets.token_hex(16))
     port: int = field(init=False)
     _bridge_process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
@@ -76,7 +77,11 @@ class RuntimeSession:
                 "runtime file already exists; another session may be active"
             )
         parser = configparser.ConfigParser()
-        parser["bridge"] = {"port": str(self.port), "token": self.token}
+        parser["bridge"] = {
+            "port": str(self.port),
+            "token": self.token,
+            "session_id": self.session_id,
+        }
         fd, temp_name = tempfile.mkstemp(
             prefix="open-shift-", suffix=".ini", dir=self.config.runtime_file.parent
         )

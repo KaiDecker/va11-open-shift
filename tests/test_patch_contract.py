@@ -45,8 +45,8 @@ class PatchContractTests(unittest.TestCase):
                     ],
                     "required_resources": ["extrachapters", "sprite_dana"],
                     "new_resources": ["ag_bridge_controller"],
-                    "allowed_portraits": {"none": None, "sprite_dana": "sprite_dana"},
-                    "return_target": "title",
+                    "allowed_portraits": {"sprite_dana": "sprite_dana"},
+                    "return_target": "bar",
                 }
             ),
             encoding="utf-8",
@@ -96,7 +96,7 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 11)
+        self.assertEqual(len(sources), 7)
 
     def test_menu_entry_matches_reference_chapter_layout(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -107,7 +107,7 @@ class PatchContractTests(unittest.TestCase):
         start = (root / "game-patch" / "gml" / "ag_open_shift_start_step.gml").read_text(
             encoding="utf-8"
         )
-        dialogue = (root / "game-patch" / "gml" / "ag_safe_text_draw.gml").read_text(
+        controller = (root / "game-patch" / "gml" / "ag_bridge_controller_step.gml").read_text(
             encoding="utf-8"
         )
 
@@ -119,13 +119,24 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("ag_open_shift_chapter.y + 14", start)
         self.assertIn("cursor_hitbox", chapter)
         self.assertIn("cursor_hitbox", start)
-        self.assertIn("draw_rectangle(16, 205, 624, 350", dialogue)
-        self.assertNotIn("draw_rectangle(16, 320, 624, 464", dialogue)
+        self.assertIn("out_of_apartment", start)
+        self.assertIn('Data.Code.ByName("gml_Object_extrachapter_text_Draw_0")', patch)
+        self.assertIn("dialogfont2", patch)
+        self.assertIn("ch_small", patch)
+        self.assertIn('Data.Code.ByName("gml_Object_dialog_control_Create_0")', patch)
+        self.assertIn("obj_textbox", controller)
+        self.assertIn("sprite_stella", controller)
+        self.assertIn("ag_name_color", controller)
+        self.assertIn("ds_queue_enqueue", controller)
+        self.assertNotIn("ag_safe_text", patch)
+        self.assertNotIn("draw_rectangle", controller)
+        self.assertNotIn("out_to_title", controller)
+        self.assertIn('"continued_in_bar"', controller)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            Path(temp_dir, "ag_safe_text_draw.gml").write_text(
-                "draw_text_ext(0, 0, text, 20, 100);", encoding="utf-8"
+            Path(temp_dir, "ag_bridge_controller_step.gml").write_text(
+                "instance_create(0, 0, obj_textbox);", encoding="utf-8"
             )
             with self.assertRaisesRegex(PatchContractError, "did not match"):
                 validate_patch_source_tree(temp_dir)

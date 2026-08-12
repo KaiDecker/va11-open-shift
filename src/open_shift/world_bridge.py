@@ -51,27 +51,44 @@ class WorldSceneService:
         event: Mapping[str, Any], display_names: Mapping[str, str], current_tick: int
     ) -> ScenePackage:
         event_id = int(event["event_id"])
-        actor_id = event.get("actor_id") or "jill"
+        actor_id = event.get("actor_id") or "dana"
         target_id = event.get("target_id")
-        actor = display_names.get(actor_id, "Jill")
-        target = display_names.get(target_id or "", "")
-        event_type = str(event["event_type"])
         scene_id = f"world_event_{event_id}"
-        first = f"{actor}'s world state changed."
-        second = f"Event type: {event_type}."
-        if target:
-            second = f"{actor} and {target} had a new interaction."
-        third = f"World day: {current_tick // DAY_MINUTES + 1}."
-        portrait = "sprite_dana" if actor_id == "dana" else "none"
-        speaker = (
-            actor_id
-            if actor_id in {"jill", "dana", "dorothy", "alma", "stella", "sei"}
-            else "jill"
+        agent_ids = {"dana", "dorothy", "alma", "stella", "sei"}
+        speaker = actor_id if actor_id in agent_ids else "dana"
+        target_speaker = (
+            target_id
+            if target_id in agent_ids and target_id != speaker
+            else ("alma" if speaker != "alma" else "dana")
+        )
+        actor = display_names.get(speaker, speaker.title())
+        target = (
+            display_names.get(target_speaker, target_speaker.title())
+            if target_id in agent_ids
+            else ""
+        )
+        portraits = {
+            "dana": "sprite_dana",
+            "dorothy": "sprite_doro",
+            "alma": "sprite_alma",
+            "stella": "sprite_stella",
+            "sei": "sprite_sei",
+        }
+        first = f"{target + '，' if target else ''}我有件事想和你谈谈。"
+        second = (
+            f"我在听，{actor}。慢慢说。"
+            if target
+            else "嗯，你说吧。我在听。"
+        )
+        third = (
+            "我们一起想想接下来该怎么办。"
+            if target
+            else f"今天是第{current_tick // DAY_MINUTES + 1}天，我们会处理好的。"
         )
         lines = (
-            SceneLine("world_1", speaker, portrait, "neutral", first),
-            SceneLine("world_2", "jill", "none", "neutral", second),
-            SceneLine("world_3", "jill", "none", "neutral", third),
+            SceneLine("world_1", speaker, portraits[speaker], "worry", first),
+            SceneLine("world_2", target_speaker, portraits[target_speaker], "neutral", second),
+            SceneLine("world_3", speaker, portraits[speaker], "happy", third),
         )
         return ScenePackage(scene_id, lines)
 

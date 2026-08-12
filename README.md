@@ -17,7 +17,8 @@
 - 30/100 天无人值守模拟、断点续跑和确定性回放测试
 - 仅监听本机回环地址、带令牌和幂等语义的 GameMaker HTTP 桥接协议
 - 原版 `data.win` 只读盘点、哈希基线和按资源名验证的补丁合同
-- UndertaleModTool 0.9.1.2 补丁脚本、Extra Chapters 入口和安全三句连接场景
+- UndertaleModTool 0.9.1.2 补丁脚本，以及按《后日谈》结构接入的 Extra Chapters 入口
+- 原版章节字体、过渡、酒吧房间、对白框、逐字显示、角色立绘、表情和嘴型
 - 安全 launcher、动态 Agent 世界场景、服务重启幂等和玩家观看结果回写
 
 ## 运行
@@ -89,7 +90,7 @@ $env:OPEN_SHIFT_BRIDGE_TOKEN = "至少16位的临时随机令牌"
 python -m open_shift serve-bridge --host 127.0.0.1 --port 8711
 ```
 
-固定连接场景、HTTP 合同与 GameMaker GML 已通过 UndertaleModTool 0.9.1.2 真实编译，并对补丁后的 `data.win` 副本完成二次读取和写回。补丁增加纯文字 `OPEN SHIFT` 菜单按钮；点击后从本地运行时 INI 读取临时令牌，通过 Async HTTP 获取固定三句场景，严格检查协议和资源白名单，再使用独立的 `draw_text_ext` 渲染器显示，最后复用原版 `out_to_title` 返回标题。
+HTTP 合同与 GameMaker GML 通过 UndertaleModTool 0.9.1.2 构建。补丁把 `OPEN SHIFT` 章节文字追加到原版 `extrachapter_text` 的绘制事件，使用与《后日谈》相同的 `dialogfont2` / `ch_small` 等小号字体；点击 `START` 后复用 `out_of_apartment`、`towork_load` 和 `bar` 的原版过渡链。在酒吧房间内，桥接控制器严格检查协议与人物白名单，再用原版 `obj_textbox`、逐字显示和人物对象呈现场景。模型文本不会进入原版命令解析器。
 
 `game-patch/apply_mod.csx` 只接受 `manifest.json` 中记录的 Steam Windows 原版哈希，资源缺失或名称冲突会立即终止。构建时只对副本使用；不要直接把输出写到 Steam 安装目录。启动器及人工游戏内验收将在下一阶段完成。
 
@@ -138,7 +139,7 @@ python -m open_shift launch `
   --advance-minutes 1440
 ```
 
-进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`OPEN SHIFT` 使用与《后日谈》一致的蓝色章节项；点击后会向下展开黄色 `START` 项，再点击 `START` 连接本地世界服务。
+进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`O.S.` 使用与《后日谈》一致的蓝色章节项和小号章节字体；点击后会向下展开黄色 `START` 项。再点击 `START` 会播放原版离场过渡、经过日期加载画面进入酒吧，然后由原版对白框和人物立绘持续显示 Agent 场景。Jill 是玩家视角，不会作为 Agent 出镜或发言。
 
 使用 DeepSeek BYOK 世界时，先只在当前 PowerShell 会话设置 `OPEN_SHIFT_API_KEY`，然后在上述命令后增加：
 
@@ -149,7 +150,7 @@ python -m open_shift launch `
   --provider-response-format json_object
 ```
 
-每个新的场景请求会推进一段持久世界时间，将最新 Agent 事件转换为固定三句安全场景。场景看完后，`player_scene_ack` 由服务端写入 SQLite。GameMaker 仍不能直接修改权威世界数据库。重复请求和服务重启不会重复推进世界或重复写入 ACK。
+每个新的场景请求会推进一段持久世界时间，将最新 Agent 事件转换为三句安全场景。每句的 `speaker_id` 都必须匹配其原版人物对象；表情只允许映射到已反编译核对过的原版状态。场景看完后，`player_scene_ack` 由服务端写入 SQLite。GameMaker 仍不能直接修改权威世界数据库。重复请求和服务重启不会重复推进世界或重复写入 ACK。
 
 ## 阶段 2 验收
 
