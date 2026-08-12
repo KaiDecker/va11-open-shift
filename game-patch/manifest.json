@@ -14,6 +14,8 @@
     "extrachapters",
     "gml_Object_extrachapters_Create_0",
     "gml_Object_extrachapters_Step_0",
+    "main_menu_controller",
+    "gml_Object_main_menu_controller_Create_0",
     "out_to_title",
     "sprite_dana",
     "sprite_doro"

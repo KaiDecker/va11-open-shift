@@ -10,7 +10,7 @@ resource name differs. It must write to a temporary copy, verify the result,
 and leave the installed original untouched until an explicit install step.
 
 `apply_mod.csx` is the executable UndertaleModTool 0.9.1.2 patch source. It
-adds a text-only menu button, an authenticated loopback HTTP controller, and a
+adds a text-only main-menu button, an authenticated loopback HTTP controller, and a
 safe text renderer without copying binary assets. Generated text remains plain
 data and never enters `execute_string` or the original command parser.
 

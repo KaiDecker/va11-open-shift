@@ -13,6 +13,8 @@ string[] requiredResources = new[]
     "extrachapters",
     "gml_Object_extrachapters_Create_0",
     "gml_Object_extrachapters_Step_0",
+    "main_menu_controller",
+    "gml_Object_main_menu_controller_Create_0",
     "out_to_title",
     "sprite_dana",
     "sprite_doro"
@@ -106,10 +108,10 @@ importGroup.QueueReplace(controller.EventHandlerFor(EventType.Other, (uint)62u, 
 importGroup.QueueReplace(safeText.EventHandlerFor(EventType.Create, Data), ReadSource("ag_safe_text_create.gml"));
 importGroup.QueueReplace(safeText.EventHandlerFor(EventType.Draw, EventSubtypeDraw.Draw, Data), ReadSource("ag_safe_text_draw.gml"));
 
-UndertaleCode entrypoint = Data.Code.ByName("gml_Object_extrachapters_Create_0");
+UndertaleCode entrypoint = Data.Code.ByName("gml_Object_main_menu_controller_Create_0");
 importGroup.QueueAppend(entrypoint, @"
 if (!instance_exists(ag_open_shift_button))
-    instance_create(x + 42, y + 84, ag_open_shift_button);");
+    instance_create(254, 318, ag_open_shift_button);");
 
 importGroup.Import();
 

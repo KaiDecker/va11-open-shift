@@ -18,7 +18,18 @@ string[] requested = new[]
     "gml_Object_out_to_title_Create_0",
     "gml_Object_out_to_title_Step_0",
     "gml_Object_out_to_title_Draw_0",
-    "gml_Object_title_to_room_Step_0"
+    "gml_Object_title_to_room_Step_0",
+    "gml_Object_main_menu_controller_Create_0",
+    "gml_Object_main_menu_controller_Step_0",
+    "gml_Object_main_menu_controller_Draw_0",
+    "gml_Object_mainng_button_Create_0",
+    "gml_Object_mainng_button_Step_0",
+    "gml_Object_mainload_button_Create_0",
+    "gml_Object_mainload_button_Step_0",
+    "gml_Object_mainsettings_button_Create_0",
+    "gml_Object_mainsettings_button_Step_0",
+    "gml_Object_mainexit_button_Create_0",
+    "gml_Object_mainexit_button_Step_0"
 };
 
 GlobalDecompileContext globalContext = new(Data);
@@ -26,7 +37,7 @@ foreach (string name in requested)
 {
     UndertaleCode code = Data.Code.ByName(name);
     if (code is null)
-        throw new Exception("Required code entry was missing: " + name);
+        continue;
     string source = new DecompileContext(
         globalContext,
         code,
