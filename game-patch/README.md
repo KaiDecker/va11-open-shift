@@ -10,9 +10,13 @@ resource name differs. It must write to a temporary copy, verify the result,
 and leave the installed original untouched until an explicit install step.
 
 `apply_mod.csx` is the executable UndertaleModTool 0.9.1.2 patch source. It
-adds a text-only menu button, an authenticated loopback HTTP controller, and a
-safe text renderer without copying binary assets. Generated text remains plain
-data and never enters `execute_string` or the original command parser.
+adds an Extra Chapters entry using the original `blue_chapter` and
+`yellow_chapter` sprites. Its position, 14-pixel expansion, chapter-label
+fonts, transition through `towork_load`, and bar-room entry follow the
+reference mod's `reun` / `reunstart` flow. The authenticated loopback
+controller then drives the original `obj_textbox` and whitelisted character
+objects. Generated text remains plain data and never enters `execute_string`
+or the original command parser.
 
 The controller reads the ephemeral port and token from GameMaker's local
 `open-shift-runtime.ini`. A launcher creates that runtime-only file before the

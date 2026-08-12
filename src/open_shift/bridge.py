@@ -10,7 +10,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 
@@ -20,10 +20,17 @@ MAX_TEXT_CHARACTERS = 240
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
-ALLOWED_SPEAKERS = frozenset({"jill", "dana", "dorothy", "alma", "stella", "sei"})
-ALLOWED_PORTRAITS = frozenset({"none", "sprite_dana", "sprite_doro"})
+ALLOWED_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
+SPEAKER_PORTRAITS = {
+    "dana": "sprite_dana",
+    "dorothy": "sprite_doro",
+    "alma": "sprite_alma",
+    "stella": "sprite_stella",
+    "sei": "sprite_sei",
+}
+ALLOWED_PORTRAITS = frozenset(SPEAKER_PORTRAITS.values())
 ALLOWED_EXPRESSIONS = frozenset({"neutral", "happy", "worry", "playful"})
-ALLOWED_RETURN_TARGETS = frozenset({"title"})
+ALLOWED_RETURN_TARGETS = frozenset({"bar"})
 
 
 class BridgeError(ValueError):
@@ -49,6 +56,8 @@ class SceneLine:
             raise ValueError("speaker_id was not allowed")
         if self.portrait_id not in ALLOWED_PORTRAITS:
             raise ValueError("portrait_id was not allowed")
+        if self.portrait_id != SPEAKER_PORTRAITS[self.speaker_id]:
+            raise ValueError("portrait_id did not match speaker_id")
         if self.expression_id not in ALLOWED_EXPRESSIONS:
             raise ValueError("expression_id was not allowed")
         if not self.text or len(self.text) > MAX_TEXT_CHARACTERS:
@@ -70,7 +79,7 @@ class SceneLine:
 class ScenePackage:
     scene_id: str
     lines: tuple[SceneLine, ...]
-    return_to: str = "title"
+    return_to: str = "bar"
 
     def __post_init__(self) -> None:
         if not _RESOURCE_ID.fullmatch(self.scene_id):
@@ -105,8 +114,8 @@ def stage_three_scene() -> ScenePackage:
             ),
             SceneLine(
                 "connection_2",
-                "jill",
-                "none",
+                "alma",
+                "sprite_alma",
                 "neutral",
                 "场景文本正在作为普通字符安全显示。",
             ),
@@ -115,7 +124,7 @@ def stage_three_scene() -> ScenePackage:
                 "dana",
                 "sprite_dana",
                 "neutral",
-                "测试结束后将安全返回标题画面。",
+                "测试结束后会留在酒吧继续运行。",
             ),
         ),
     )
@@ -184,9 +193,18 @@ def _require_request_id(value: Any) -> str:
 class BridgeApplication:
     """Pure request handler; no model calls and no authoritative world writes."""
 
-    def __init__(self, config: BridgeConfig, scene: ScenePackage | None = None) -> None:
+    def __init__(
+        self,
+        config: BridgeConfig,
+        scene: ScenePackage | None = None,
+        *,
+        scene_provider: Callable[[Mapping[str, Any]], ScenePackage] | None = None,
+        ack_handler: Callable[[Mapping[str, Any]], None] | None = None,
+    ) -> None:
         self.config = config
         self.scene = scene or stage_three_scene()
+        self._scene_provider = scene_provider
+        self._ack_handler = ack_handler
         self._open_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._ack_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
@@ -241,9 +259,27 @@ class BridgeApplication:
                 )
             self._authenticate(headers)
             if method == "POST" and route == "/v1/scenes/open":
-                return BridgeResponse(200, self._open_scene(_require_object(body)))
+                try:
+                    return BridgeResponse(200, self._open_scene(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception:
+                    raise BridgeError(
+                        503,
+                        "scene_provider_unavailable",
+                        "the world service could not produce a scene",
+                    ) from None
             if method == "POST" and route == "/v1/scenes/ack":
-                return BridgeResponse(200, self._ack_scene(_require_object(body)))
+                try:
+                    return BridgeResponse(200, self._ack_scene(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception:
+                    raise BridgeError(
+                        503,
+                        "scene_ack_unavailable",
+                        "the world service could not record the scene result",
+                    ) from None
             raise BridgeError(404, "not_found", "route was not found")
         except BridgeError as error:
             return BridgeResponse(
@@ -261,12 +297,22 @@ class BridgeApplication:
             raise BridgeError(
                 409, "protocol_mismatch", "client protocol version was not supported"
             )
-        response = {
-            "protocol_version": PROTOCOL_VERSION,
-            "request_id": request_id,
-            "scene": self.scene.to_dict(),
-        }
         with self._cache_lock:
+            prior = self._open_requests.get(request_id)
+            if prior is not None:
+                return self._idempotent(
+                    self._open_requests, request_id, request, prior[1]
+                )
+            scene = (
+                self._scene_provider(request)
+                if self._scene_provider is not None
+                else self.scene
+            )
+            response = {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                "scene": scene.to_dict(),
+            }
             return self._idempotent(
                 self._open_requests, request_id, request, response
             )
@@ -288,17 +334,25 @@ class BridgeApplication:
             raise BridgeError(
                 409, "protocol_mismatch", "client protocol version was not supported"
             )
-        if request["scene_id"] != self.scene.scene_id:
+        if self._ack_handler is None and request["scene_id"] != self.scene.scene_id:
             raise BridgeError(404, "unknown_scene", "scene_id was not known")
-        if request["outcome"] != "returned_to_title":
+        if request["outcome"] != "continued_in_bar":
             raise BridgeError(400, "invalid_outcome", "scene outcome was not allowed")
         response = {
             "protocol_version": PROTOCOL_VERSION,
             "request_id": request_id,
-            "scene_id": self.scene.scene_id,
+            "scene_id": request["scene_id"],
             "status": "accepted",
         }
         with self._cache_lock:
+            prior = self._ack_requests.get(request_id)
+            if prior is None and self._ack_handler is not None:
+                try:
+                    self._ack_handler(request)
+                except BridgeError:
+                    raise
+                except (KeyError, ValueError) as exc:
+                    raise BridgeError(404, "unknown_scene", str(exc)) from None
             return self._idempotent(
                 self._ack_requests, request_id, request, response
             )
@@ -363,6 +417,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         return
 
 
-def serve_bridge(config: BridgeConfig) -> None:
-    with BridgeHTTPServer(config) as server:
+def serve_bridge(
+    config: BridgeConfig, app: BridgeApplication | None = None
+) -> None:
+    with BridgeHTTPServer(config, app=app) as server:
         server.serve_forever(poll_interval=0.1)

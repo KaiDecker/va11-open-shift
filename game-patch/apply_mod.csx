@@ -13,15 +13,33 @@ string[] requiredResources = new[]
     "extrachapters",
     "gml_Object_extrachapters_Create_0",
     "gml_Object_extrachapters_Step_0",
-    "out_to_title",
+    "main_menu_controller",
+    "gml_Object_main_menu_controller_Create_0",
+    "prologuechapter",
+    "gml_Object_prologuechapter_Step_0",
+    "blue_chapter",
+    "yellow_chapter",
+    "cursor_hitbox",
+    "out_of_apartment",
+    "towork_load",
+    "bar",
+    "extrachapter_text",
+    "gml_Object_extrachapter_text_Draw_0",
+    "dialog_control",
+    "gml_Object_dialog_control_Create_0",
+    "obj_textbox",
+    "gml_Script_reset_lips",
     "sprite_dana",
-    "sprite_doro"
+    "sprite_doro",
+    "sprite_alma",
+    "sprite_stella",
+    "sprite_sei"
 };
 string[] newResources = new[]
 {
-    "ag_open_shift_button",
-    "ag_bridge_controller",
-    "ag_safe_text"
+    "ag_open_shift_chapter",
+    "ag_open_shift_start",
+    "ag_bridge_controller"
 };
 
 string inputHash;
@@ -66,10 +84,20 @@ string ReadSource(string filename)
 
 UndertaleGameObject button = new()
 {
-    Name = Data.Strings.MakeString("ag_open_shift_button"),
+    Name = Data.Strings.MakeString("ag_open_shift_chapter"),
+    Sprite = Data.Sprites.ByName("blue_chapter"),
     Visible = true,
     Solid = false,
-    Depth = -1000,
+    Depth = -189,
+    Persistent = false
+};
+UndertaleGameObject start = new()
+{
+    Name = Data.Strings.MakeString("ag_open_shift_start"),
+    Sprite = Data.Sprites.ByName("yellow_chapter"),
+    Visible = true,
+    Solid = false,
+    Depth = -180,
     Persistent = false
 };
 UndertaleGameObject controller = new()
@@ -80,36 +108,58 @@ UndertaleGameObject controller = new()
     Depth = -2000,
     Persistent = false
 };
-UndertaleGameObject safeText = new()
-{
-    Name = Data.Strings.MakeString("ag_safe_text"),
-    Visible = true,
-    Solid = false,
-    Depth = -3000,
-    Persistent = false
-};
 Data.GameObjects.Add(button);
+Data.GameObjects.Add(start);
 Data.GameObjects.Add(controller);
-Data.GameObjects.Add(safeText);
 
 UndertaleModLib.Compiler.CodeImportGroup importGroup = new(Data)
 {
     MainThreadAction = MainThreadAction
 };
 
-importGroup.QueueReplace(button.EventHandlerFor(EventType.Create, Data), ReadSource("ag_open_shift_button_create.gml"));
-importGroup.QueueReplace(button.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_open_shift_button_step.gml"));
-importGroup.QueueReplace(button.EventHandlerFor(EventType.Draw, EventSubtypeDraw.Draw, Data), ReadSource("ag_open_shift_button_draw.gml"));
+importGroup.QueueReplace(button.EventHandlerFor(EventType.Create, Data), ReadSource("ag_open_shift_chapter_create.gml"));
+importGroup.QueueReplace(button.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_open_shift_chapter_step.gml"));
+importGroup.QueueReplace(start.EventHandlerFor(EventType.Create, Data), ReadSource("ag_open_shift_start_create.gml"));
+importGroup.QueueReplace(start.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_open_shift_start_step.gml"));
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Create, Data), ReadSource("ag_bridge_controller_create.gml"));
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_bridge_controller_step.gml"));
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Other, (uint)62u, Data), ReadSource("ag_bridge_controller_http.gml"));
-importGroup.QueueReplace(safeText.EventHandlerFor(EventType.Create, Data), ReadSource("ag_safe_text_create.gml"));
-importGroup.QueueReplace(safeText.EventHandlerFor(EventType.Draw, EventSubtypeDraw.Draw, Data), ReadSource("ag_safe_text_draw.gml"));
 
-UndertaleCode entrypoint = Data.Code.ByName("gml_Object_extrachapters_Create_0");
+UndertaleCode entrypoint = Data.Code.ByName("gml_Object_prologuechapter_Step_0");
 importGroup.QueueAppend(entrypoint, @"
-if (!instance_exists(ag_open_shift_button))
-    instance_create(x + 42, y + 84, ag_open_shift_button);");
+if (appear && image_xscale >= 1 && instance_exists(annachapter) && !instance_exists(ag_open_shift_chapter))
+    instance_create(x, y, ag_open_shift_chapter);");
+
+UndertaleCode chapterTextDraw = Data.Code.ByName("gml_Object_extrachapter_text_Draw_0");
+importGroup.QueueAppend(chapterTextDraw, @"
+if (instance_exists(ag_open_shift_chapter) && ag_open_shift_chapter.ready == 1)
+{
+    if (global.language == ""jp"") draw_set_font(jpdialog2);
+    else if (global.language == ""ch"") draw_set_font(ch_small);
+    else if (global.language == ""kor"") draw_set_font(kor_fontsm);
+    else if (global.language == ""rus"") draw_set_font(rusfontsm);
+    else draw_set_font(dialogfont2);
+    draw_set_color(#237CF4);
+    draw_text(ag_open_shift_chapter.x + 2, (ag_open_shift_chapter.y - 1) + t_offset, ""O.S."");
+}
+if (instance_exists(ag_open_shift_start) && ag_open_shift_start.ready == 1)
+{
+    if (global.language == ""jp"") draw_set_font(jpdialog2);
+    else if (global.language == ""ch"") draw_set_font(ch_small);
+    else if (global.language == ""kor"") draw_set_font(kor_fontsm);
+    else if (global.language == ""rus"") draw_set_font(rusfontsm);
+    else draw_set_font(dialogfont2);
+    draw_set_color(#F4B323);
+    draw_text(ag_open_shift_start.x + 2, (ag_open_shift_start.y - 1) + t_offset, ""START"");
+}");
+
+UndertaleCode dialogCreate = Data.Code.ByName("gml_Object_dialog_control_Create_0");
+importGroup.QueueAppend(dialogCreate, @"
+if (global.cur_day == 1001 && !instance_exists(ag_bridge_controller))
+{
+    global.block_click = 1;
+    instance_create(x, y, ag_bridge_controller);
+}");
 
 importGroup.Import();
 
@@ -128,14 +178,13 @@ foreach (string name in requiredFunctions)
 
 string[] expectedCode = new[]
 {
-    "gml_Object_ag_open_shift_button_Create_0",
-    "gml_Object_ag_open_shift_button_Step_0",
-    "gml_Object_ag_open_shift_button_Draw_0",
+    "gml_Object_ag_open_shift_chapter_Create_0",
+    "gml_Object_ag_open_shift_chapter_Step_0",
+    "gml_Object_ag_open_shift_start_Create_0",
+    "gml_Object_ag_open_shift_start_Step_0",
     "gml_Object_ag_bridge_controller_Create_0",
     "gml_Object_ag_bridge_controller_Step_0",
-    "gml_Object_ag_bridge_controller_Other_62",
-    "gml_Object_ag_safe_text_Create_0",
-    "gml_Object_ag_safe_text_Draw_0"
+    "gml_Object_ag_bridge_controller_Other_62"
 };
 foreach (string name in expectedCode)
 {
@@ -143,4 +192,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 3 patch compiled successfully.");
+ScriptMessage("Open Shift Stage 4 patch compiled successfully.");

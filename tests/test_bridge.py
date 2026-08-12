@@ -51,12 +51,12 @@ class BridgeApplicationTests(unittest.TestCase):
         self.assertNotIn(TOKEN, json.dumps(response.body))
         self.assertNotIn(TOKEN, repr(self.app.config))
 
-    def test_fixed_scene_has_three_whitelisted_lines_and_returns_to_title(self) -> None:
+    def test_fixed_scene_has_three_whitelisted_lines_and_returns_to_bar(self) -> None:
         response = self.open_scene()
         self.assertEqual(response.status, 200)
         scene = response.body["scene"]
         self.assertEqual(len(scene["lines"]), 3)
-        self.assertEqual(scene["return_to"], "title")
+        self.assertEqual(scene["return_to"], "bar")
         self.assertEqual(response.body["request_id"], "open-1")
 
     def test_open_and_ack_are_idempotent(self) -> None:
@@ -69,7 +69,7 @@ class BridgeApplicationTests(unittest.TestCase):
             "request_id": "same-ack",
             "client_session_id": self.session_id,
             "scene_id": first.body["scene"]["scene_id"],
-            "outcome": "returned_to_title",
+            "outcome": "continued_in_bar",
         }
         first_ack = self.app.handle(
             "POST", "/v1/scenes/ack", self.headers, encoded(acknowledgement)
@@ -107,7 +107,7 @@ class BridgeApplicationTests(unittest.TestCase):
                     "request_id": "ack-conflict",
                     "client_session_id": self.session_id,
                     "scene_id": self.app.scene.scene_id,
-                    "outcome": "returned_to_title",
+                    "outcome": "continued_in_bar",
                 }
             ),
         )
@@ -122,7 +122,7 @@ class BridgeApplicationTests(unittest.TestCase):
                     "request_id": "ack-conflict",
                     "client_session_id": "game-session-2",
                     "scene_id": self.app.scene.scene_id,
-                    "outcome": "returned_to_title",
+                    "outcome": "continued_in_bar",
                 }
             ),
         )
@@ -204,6 +204,14 @@ class BridgeApplicationTests(unittest.TestCase):
                 "obj_execute_shell",
                 "neutral",
                 "unsafe resource",
+            )
+        with self.assertRaisesRegex(ValueError, "match speaker_id"):
+            SceneLine(
+                "wrong_character",
+                "stella",
+                "sprite_dana",
+                "neutral",
+                "wrong portrait",
             )
 
     def test_non_loopback_binding_is_rejected(self) -> None:
