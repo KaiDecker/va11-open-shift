@@ -121,6 +121,8 @@ VA-11 HALL-A 的 GameMaker 本地目录通常为：
 %LOCALAPPDATA%\VA_11_Hall_A
 ```
 
+这个旧版 Steam API 会相对于进程工作目录寻找 `.\Steam\Steam2.dll`。`--steam-root` 会验证正版 Steam 目录并只调整游戏子进程的工作目录；`--steam-app-id 447530` 阻止 Steam 将会话重启到登记的原版目录。游戏 EXE 和补丁资源仍从隔离副本加载，E 盘原版不会被修改。
+
 使用工作区游戏副本启动确定性 MockProvider 世界：
 
 ```powershell
@@ -131,6 +133,8 @@ python -m open_shift launch `
   --runtime-file "$env:LOCALAPPDATA\VA_11_Hall_A\open-shift-runtime.ini" `
   --game-cwd "reference-local\stage-4-game-copy" `
   --game-command "VA-11 Hall A.exe" `
+  --steam-root "C:\Program Files (x86)\Steam" `
+  --steam-app-id 447530 `
   --advance-minutes 1440
 ```
 

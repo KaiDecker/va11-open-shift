@@ -86,6 +86,8 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--runtime-file", type=Path, required=True)
     launch.add_argument("--game-cwd", type=Path, required=True)
     launch.add_argument("--game-command", nargs="+", required=True)
+    launch.add_argument("--steam-root", type=Path)
+    launch.add_argument("--steam-app-id", type=int)
     launch.add_argument("--seed", type=int, default=7)
     launch.add_argument("--port", type=int, default=0)
     launch.add_argument("--advance-minutes", type=int, default=1440)
@@ -270,6 +272,8 @@ def _launch(args: argparse.Namespace) -> int:
             runtime_file=args.runtime_file,
             game_command=args.game_command,
             game_cwd=args.game_cwd,
+            steam_root=args.steam_root,
+            steam_app_id=args.steam_app_id,
             seed=args.seed,
             port=args.port,
             advance_minutes=args.advance_minutes,

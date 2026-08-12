@@ -152,6 +152,7 @@ class Stage4LauncherTests(unittest.TestCase):
                 runtime_file=root / "runtime.ini",
                 game_command=("fake-game",),
                 game_cwd=root,
+                steam_app_id=447530,
             )
             session = RuntimeSession(config)
             with patch.dict(os.environ, {"OPEN_SHIFT_API_KEY": "secret-key"}, clear=False):
@@ -162,6 +163,55 @@ class Stage4LauncherTests(unittest.TestCase):
                     env = popen.call_args.kwargs["env"]
             self.assertNotIn("OPEN_SHIFT_API_KEY", env)
             self.assertNotIn("OPEN_SHIFT_BRIDGE_TOKEN", env)
+            self.assertEqual(env["SteamAppId"], "447530")
+            self.assertEqual(env["SteamGameId"], "447530")
+
+    def test_legacy_steam_root_changes_only_process_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            game = root / "game"
+            steam = root / "Steam"
+            game.mkdir()
+            steam.mkdir()
+            (game / "fake-game.exe").touch()
+            (steam / "Steam2.dll").touch()
+            session = RuntimeSession(
+                LaunchConfig(
+                    db_path=root / "world.sqlite3",
+                    runtime_file=root / "runtime.ini",
+                    game_command=("fake-game.exe",),
+                    game_cwd=game,
+                    steam_root=steam,
+                )
+            )
+            with patch("subprocess.Popen") as popen:
+                session.start_game()
+            self.assertEqual(popen.call_args.args[0][0], str(game / "fake-game.exe"))
+            self.assertEqual(popen.call_args.kwargs["cwd"], root)
+
+    def test_legacy_steam_root_requires_steam2_dll(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with self.assertRaisesRegex(Exception, "steam_root must contain Steam2.dll"):
+                LaunchConfig(
+                    db_path=root / "world.sqlite3",
+                    runtime_file=root / "runtime.ini",
+                    game_command=("fake-game",),
+                    game_cwd=root,
+                    steam_root=root / "Steam",
+                )
+
+    def test_invalid_steam_app_id_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with self.assertRaisesRegex(Exception, "steam_app_id must be positive"):
+                LaunchConfig(
+                    db_path=root / "world.sqlite3",
+                    runtime_file=root / "runtime.ini",
+                    game_command=("fake-game",),
+                    game_cwd=root,
+                    steam_app_id=0,
+                )
 
     def test_bridge_readiness_fails_if_process_exits(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

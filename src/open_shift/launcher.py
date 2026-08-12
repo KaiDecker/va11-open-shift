@@ -39,6 +39,8 @@ class LaunchConfig:
     bridge_command: tuple[str, ...] = ()
     bridge_extra_args: tuple[str, ...] = ()
     health_timeout_seconds: float = 10.0
+    steam_root: Path | None = None
+    steam_app_id: int | None = None
 
     def __post_init__(self) -> None:
         if not self.game_command:
@@ -49,6 +51,10 @@ class LaunchConfig:
             raise LauncherError("advance_minutes must be between 0 and 43200")
         if not 0.1 <= self.health_timeout_seconds <= 120.0:
             raise LauncherError("health_timeout_seconds must be between 0.1 and 120")
+        if self.steam_root is not None and not (self.steam_root / "Steam2.dll").is_file():
+            raise LauncherError("steam_root must contain Steam2.dll")
+        if self.steam_app_id is not None and self.steam_app_id <= 0:
+            raise LauncherError("steam_app_id must be positive")
 
 
 @dataclass(slots=True)
@@ -153,15 +159,24 @@ class RuntimeSession:
         env = os.environ.copy()
         env.pop("OPEN_SHIFT_API_KEY", None)
         env.pop("OPEN_SHIFT_BRIDGE_TOKEN", None)
+        if self.config.steam_app_id is not None:
+            app_id = str(self.config.steam_app_id)
+            env["SteamAppId"] = app_id
+            env["SteamGameId"] = app_id
         command = list(self.config.game_command)
         executable = Path(command[0])
         if not executable.is_absolute():
             candidate = self.config.game_cwd / executable
             if candidate.exists():
-                command[0] = str(candidate)
+                command[0] = str(candidate.resolve())
+        process_cwd = (
+            self.config.steam_root.parent
+            if self.config.steam_root is not None
+            else self.config.game_cwd
+        )
         return subprocess.Popen(
             command,
-            cwd=self.config.game_cwd,
+            cwd=process_cwd,
             env=env,
             stdin=subprocess.DEVNULL,
         )
@@ -208,6 +223,8 @@ def build_launch_config(
     advance_minutes: int = 1440,
     bridge_extra_args: Sequence[str] = (),
     health_timeout_seconds: float = 10.0,
+    steam_root: str | Path | None = None,
+    steam_app_id: int | None = None,
 ) -> LaunchConfig:
     return LaunchConfig(
         db_path=Path(db_path),
@@ -219,4 +236,6 @@ def build_launch_config(
         advance_minutes=advance_minutes,
         bridge_extra_args=tuple(bridge_extra_args),
         health_timeout_seconds=health_timeout_seconds,
+        steam_root=Path(steam_root) if steam_root is not None else None,
+        steam_app_id=steam_app_id,
     )
