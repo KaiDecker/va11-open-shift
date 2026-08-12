@@ -15,6 +15,8 @@
 - 消息、邀请、承诺、双向关系后果和可持续事件弧
 - 目标完成后创建后续目标，世界不依赖玩家触发即可继续演化
 - 30/100 天无人值守模拟、断点续跑和确定性回放测试
+- 仅监听本机回环地址、带令牌和幂等语义的 GameMaker HTTP 桥接协议
+- 原版 `data.win` 只读盘点、哈希基线和按资源名验证的补丁合同
 
 ## 运行
 
@@ -75,6 +77,35 @@ python -m open_shift probe-provider `
 ```
 
 `json_object` 只要求远端返回 JSON 对象，本地仍会执行完整字段、目标、地点和行动语义校验。对于明确支持严格 JSON Schema 的端点，可选择 `--response-format json_schema`，以获得更早的远端约束。
+
+## GameMaker 本地桥接
+
+阶段 3 的桥接服务只接受回环 IP 地址。令牌必须由启动器为每次游戏会话生成，并通过环境变量传给服务；不要把令牌提交到仓库或写入普通日志。
+
+```powershell
+$env:OPEN_SHIFT_BRIDGE_TOKEN = "至少16位的临时随机令牌"
+python -m open_shift serve-bridge --host 127.0.0.1 --port 8711
+```
+
+当前固定连接场景和 HTTP 合同已完成自动测试。真正的 `data.win` 写入仍需要固定并验证 UndertaleModTool 版本；在此之前不会直接修改游戏目录。
+
+只读检查原版补丁基线：
+
+```powershell
+python -m open_shift validate-patch-target `
+  --data-win "E:\SteamLibrary\steamapps\common\VA-11 HALL-A\data.win" `
+  --manifest "game-patch\manifest.json"
+```
+
+比较原版与参考 Mod 的名称级差异：
+
+```powershell
+python -m open_shift inspect-game-data `
+  --data-win "原版data.win路径" `
+  --compare "参考Mod的data.win路径"
+```
+
+命令只输出文件哈希、数据块尺寸和可识别资源名，不导出代码、贴图、音频或文本资源内容。
 
 ## 阶段 2 验收
 

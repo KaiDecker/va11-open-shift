@@ -1,0 +1,33 @@
+{
+  "mod_id": "open_shift",
+  "protocol_version": 1,
+  "supported_originals": [
+    {
+      "platform": "steam-windows",
+      "data_win_size": 221895676,
+      "data_win_sha256": "f14c4443838179f633f362c6fa20ca849d479c555eb315a507b4165ffa940991",
+      "executable_name": "VA-11 Hall A.exe",
+      "executable_sha256": "03253f7dca72a9155e83914806d01b66125ae811538b405c9101327ac038eda6"
+    }
+  ],
+  "required_resources": [
+    "extrachapters",
+    "gml_Object_extrachapters_Create_0",
+    "gml_Object_extrachapters_Step_0",
+    "out_to_title",
+    "sprite_dana",
+    "sprite_doro"
+  ],
+  "new_resources": [
+    "ag_open_shift_button",
+    "ag_bridge_controller",
+    "ag_safe_text",
+    "ag_bridge_scene"
+  ],
+  "allowed_portraits": {
+    "none": null,
+    "sprite_dana": "sprite_dana",
+    "sprite_doro": "sprite_doro"
+  },
+  "return_target": "title"
+}
