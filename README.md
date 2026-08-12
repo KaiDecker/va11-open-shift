@@ -18,6 +18,7 @@
 - 仅监听本机回环地址、带令牌和幂等语义的 GameMaker HTTP 桥接协议
 - 原版 `data.win` 只读盘点、哈希基线和按资源名验证的补丁合同
 - UndertaleModTool 0.9.1.2 补丁脚本、Extra Chapters 入口和安全三句连接场景
+- 安全 launcher、动态 Agent 世界场景、服务重启幂等和玩家观看结果回写
 
 ## 运行
 
@@ -109,6 +110,40 @@ python -m open_shift inspect-game-data `
 ```
 
 命令只输出文件哈希、数据块尺寸和可识别资源名，不导出代码、贴图、音频或文本资源内容。
+
+## 阶段 4 Launcher
+
+Launcher 会为每次游戏会话生成随机桥接令牌、选择空闲回环端口、原子写入 GameMaker 运行时 INI、等待桥接健康检查、启动游戏，并在游戏退出后停止服务和删除 INI。API Key 只传给桥接子进程，不会传给游戏进程。
+
+VA-11 HALL-A 的 GameMaker 本地目录通常为：
+
+```text
+%LOCALAPPDATA%\VA_11_Hall_A
+```
+
+使用工作区游戏副本启动确定性 MockProvider 世界：
+
+```powershell
+$env:PYTHONPATH = "src"
+
+python -m open_shift launch `
+  --db "work\playable-world.sqlite3" `
+  --runtime-file "$env:LOCALAPPDATA\VA_11_Hall_A\open-shift-runtime.ini" `
+  --game-cwd "reference-local\stage-4-game-copy" `
+  --game-command "VA-11 Hall A.exe" `
+  --advance-minutes 1440
+```
+
+使用 DeepSeek BYOK 世界时，先只在当前 PowerShell 会话设置 `OPEN_SHIFT_API_KEY`，然后在上述命令后增加：
+
+```powershell
+  --provider-base-url "https://api.deepseek.com" `
+  --provider-model "deepseek-chat" `
+  --provider-protocol chat_completions `
+  --provider-response-format json_object
+```
+
+每个新的场景请求会推进一段持久世界时间，将最新 Agent 事件转换为固定三句安全场景。场景看完后，`player_scene_ack` 由服务端写入 SQLite。GameMaker 仍不能直接修改权威世界数据库。重复请求和服务重启不会重复推进世界或重复写入 ACK。
 
 ## 阶段 2 验收
 

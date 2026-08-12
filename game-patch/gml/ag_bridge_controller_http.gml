@@ -59,7 +59,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_scene_id = ds_map_find_value(ag_scene, "scene_id");
             ag_return_to = ds_map_find_value(ag_scene, "return_to");
             ag_lines = ds_map_find_value(ag_scene, "lines");
-            if (ag_scene_id != "stage_3_connection_test" || ag_return_to != "title" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) != 3)
+            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_") || ag_return_to != "title" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) != 3)
                 ag_valid = false;
         }
 
