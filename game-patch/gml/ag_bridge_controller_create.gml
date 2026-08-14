@@ -5,8 +5,9 @@ ag_scene_id = "";
 ag_line_index = 0;
 ag_line_count = 0;
 ag_return_to = "";
-ag_timeout_at = current_time + 5000;
+ag_timeout_at = current_time + 120000;
 ag_line_active = 0;
+ag_wait_box = noone;
 ag_portrait_speaker = "";
 ag_error_message = "";
 

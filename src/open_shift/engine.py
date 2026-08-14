@@ -69,7 +69,8 @@ class SimulationEngine:
                 tick += DAY_MINUTES
             self.store.schedule_event(tick, "agent_turn", agent.agent_id)
 
-    def _context(self, tick: int, actor_id: str) -> DecisionContext:
+    def context_for_agent(self, tick: int, actor_id: str) -> DecisionContext:
+        """Build one agent's private, read-only observation at a world tick."""
         actor = self.store.get_agent(actor_id)
         if actor is None:
             raise KeyError(f"unknown actor: {actor_id}")
@@ -96,6 +97,10 @@ class SimulationEngine:
             commitments=tuple(self.store.list_commitments(actor_id, "pending")),
             story_arcs=tuple(self.store.list_story_arcs(actor_id, "active")),
         )
+
+    def _context(self, tick: int, actor_id: str) -> DecisionContext:
+        """Compatibility alias for Stage 1-4 callers and tests."""
+        return self.context_for_agent(tick, actor_id)
 
     @staticmethod
     def _fallback(context: DecisionContext) -> ActionProposal:
@@ -144,7 +149,7 @@ class SimulationEngine:
                 )
                 continue
 
-            context = self._context(scheduled.tick, scheduled.actor_id)
+            context = self.context_for_agent(scheduled.tick, scheduled.actor_id)
             try:
                 proposal = self.provider.decide(context)
             except Exception as exc:  # provider failure must not stop the world
