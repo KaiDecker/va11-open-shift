@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from .dialogue import DialogueLineDraft, DialogueTurnContext
 from .models import ActionProposal, ActionType, DecisionContext, GoalStatus
 
 
@@ -10,6 +11,15 @@ class ModelProvider(Protocol):
     """A provider may propose actions but never mutate world state."""
 
     def decide(self, context: DecisionContext) -> ActionProposal:
+        ...
+
+
+class DialogueProvider(Protocol):
+    """A dialogue provider sees only one speaker's turn context."""
+
+    def generate_dialogue_line(
+        self, context: DialogueTurnContext
+    ) -> DialogueLineDraft:
         ...
 
 

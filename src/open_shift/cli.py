@@ -11,8 +11,10 @@ from .byok import (
     BYOKError,
     BYOKProvider,
     ResponseFormat,
+    ThinkingMode,
 )
 from .bridge import BridgeApplication, BridgeConfig, serve_bridge
+from .dialogue import DialogueTurnContext
 from .world_bridge import WorldSceneService
 from .launcher import LauncherError, RuntimeSession, build_launch_config
 from .game_data import (
@@ -21,7 +23,7 @@ from .game_data import (
     inspect_game_data,
     inventory_json,
 )
-from .models import AgentState, DecisionContext, Goal, Relationship
+from .models import AgentState, DecisionContext, Goal, Memory, Relationship
 from .patch_contract import (
     PatchContractError,
     load_patch_manifest,
@@ -56,10 +58,38 @@ def _build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--api-key-env", default="OPEN_SHIFT_API_KEY")
     probe.add_argument("--timeout", type=float, default=30.0)
     probe.add_argument(
+        "--thinking",
+        choices=[mode.value for mode in ThinkingMode],
+        default=ThinkingMode.DEFAULT.value,
+    )
+    probe.add_argument(
         "--response-format",
         choices=[response_format.value for response_format in ResponseFormat],
         default=ResponseFormat.JSON_OBJECT.value,
         help="use json_object for providers without strict JSON Schema support",
+    )
+    dialogue_probe = subparsers.add_parser(
+        "probe-dialogue",
+        help="make exactly one private Agent dialogue call without writing a database",
+    )
+    dialogue_probe.add_argument("--base-url", required=True)
+    dialogue_probe.add_argument("--model", required=True)
+    dialogue_probe.add_argument(
+        "--protocol",
+        choices=[protocol.value for protocol in APIProtocol],
+        default=APIProtocol.CHAT_COMPLETIONS.value,
+    )
+    dialogue_probe.add_argument("--api-key-env", default="OPEN_SHIFT_API_KEY")
+    dialogue_probe.add_argument("--timeout", type=float, default=30.0)
+    dialogue_probe.add_argument(
+        "--thinking",
+        choices=[mode.value for mode in ThinkingMode],
+        default=ThinkingMode.DEFAULT.value,
+    )
+    dialogue_probe.add_argument(
+        "--response-format",
+        choices=[response_format.value for response_format in ResponseFormat],
+        default=ResponseFormat.JSON_OBJECT.value,
     )
     bridge = subparsers.add_parser(
         "serve-bridge",
@@ -78,6 +108,11 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--provider-api-key-env", default="OPEN_SHIFT_API_KEY")
     bridge.add_argument("--provider-timeout", type=float, default=30.0)
     bridge.add_argument("--provider-max-calls", type=int, default=100000)
+    bridge.add_argument(
+        "--provider-thinking",
+        choices=[mode.value for mode in ThinkingMode],
+        default=ThinkingMode.DEFAULT.value,
+    )
     launch = subparsers.add_parser(
         "launch",
         help="start the local world bridge and a copied GameMaker game",
@@ -99,6 +134,11 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--provider-api-key-env", default="OPEN_SHIFT_API_KEY")
     launch.add_argument("--provider-timeout", type=float, default=30.0)
     launch.add_argument("--provider-max-calls", type=int, default=100000)
+    launch.add_argument(
+        "--provider-thinking",
+        choices=[mode.value for mode in ThinkingMode],
+        default=ThinkingMode.DEFAULT.value,
+    )
     inventory = subparsers.add_parser(
         "inspect-game-data",
         help="read a data.win and print a names-only inventory",
@@ -173,6 +213,7 @@ def _probe_provider(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout,
             api_key_env=args.api_key_env,
             max_calls=1,
+            thinking_mode=ThinkingMode(args.thinking),
         )
         action = BYOKProvider.from_env(config).decide(_probe_context())
     except BYOKError as exc:
@@ -192,6 +233,71 @@ def _probe_provider(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _probe_dialogue(args: argparse.Namespace) -> int:
+    decision = _probe_context()
+    decision = DecisionContext(
+        tick=decision.tick,
+        seed=decision.seed,
+        actor=decision.actor,
+        agents=decision.agents,
+        relationships=decision.relationships,
+        goals=decision.goals,
+        locations=decision.locations,
+        memories=(
+            Memory(
+                1,
+                1,
+                420,
+                0.7,
+                "Dorothy recently checked in after a difficult shift.",
+                ("social", "dorothy"),
+            ),
+        ),
+    )
+    context = DialogueTurnContext(
+        scene_id="dialogue_probe",
+        turn_index=0,
+        turn_count=4,
+        premise="第1天，Dana结束工作后在酒吧遇到了Dorothy。",
+        speaker=decision,
+        participant_ids=("dana", "dorothy"),
+    )
+    try:
+        provider = BYOKProvider.from_env(
+            BYOKConfig(
+                base_url=args.base_url,
+                model=args.model,
+                protocol=APIProtocol(args.protocol),
+                response_format=ResponseFormat(args.response_format),
+                timeout_seconds=args.timeout,
+                api_key_env=args.api_key_env,
+                max_calls=1,
+                thinking_mode=ThinkingMode(args.thinking),
+            )
+        )
+        line = provider.generate_dialogue_line(context)
+    except BYOKError as exc:
+        print(f"Dialogue probe failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {"speaker_id": "dana", "expression_id": line.expression_id, "text": line.text},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _report_world_error(operation: str, error: Exception) -> None:
+    detail = str(error) if isinstance(error, BYOKError) else "unexpected internal error"
+    print(
+        f"World {operation} failed ({type(error).__name__}): {detail}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _serve_bridge(args: argparse.Namespace) -> int:
@@ -219,6 +325,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
             world = WorldSceneService(
                 args.world_db,
                 provider_factory=provider_factory,
+                error_reporter=_report_world_error,
                 seed=args.seed,
                 advance_minutes=args.advance_minutes,
             )
@@ -228,6 +335,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                     config,
                     scene_provider=world.open_scene,
                     ack_handler=world.ack_scene,
+                    error_reporter=_report_world_error,
                 ),
             )
     except KeyboardInterrupt:
@@ -259,6 +367,7 @@ def _provider_factory(args: argparse.Namespace):
             timeout_seconds=args.provider_timeout,
             api_key_env=args.provider_api_key_env,
             max_calls=args.provider_max_calls,
+            thinking_mode=ThinkingMode(args.provider_thinking),
         )
     )
 
@@ -288,6 +397,7 @@ def _launch(args: argparse.Namespace) -> int:
                     ("--provider-api-key-env", args.provider_api_key_env),
                     ("--provider-timeout", str(args.provider_timeout)),
                     ("--provider-max-calls", str(args.provider_max_calls)),
+                    ("--provider-thinking", args.provider_thinking),
                 )
                 if pair[1] is not None
                 for item in pair
@@ -348,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
         return _simulate(args)
     if args.command == "probe-provider":
         return _probe_provider(args)
+    if args.command == "probe-dialogue":
+        return _probe_dialogue(args)
     if args.command == "serve-bridge":
         return _serve_bridge(args)
     if args.command == "launch":

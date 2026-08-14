@@ -84,8 +84,8 @@ class ScenePackage:
     def __post_init__(self) -> None:
         if not _RESOURCE_ID.fullmatch(self.scene_id):
             raise ValueError("scene_id was invalid")
-        if not 1 <= len(self.lines) <= 20:
-            raise ValueError("scene must contain between 1 and 20 lines")
+        if not 1 <= len(self.lines) <= 8:
+            raise ValueError("scene must contain between 1 and 8 lines")
         if len({line.line_id for line in self.lines}) != len(self.lines):
             raise ValueError("scene line identifiers must be unique")
         if self.return_to not in ALLOWED_RETURN_TARGETS:
@@ -97,6 +97,40 @@ class ScenePackage:
             "lines": [line.to_dict() for line in self.lines],
             "return_to": self.return_to,
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ScenePackage":
+        if set(value) != {"scene_id", "lines", "return_to"}:
+            raise ValueError("persisted scene fields did not match the schema")
+        raw_lines = value["lines"]
+        if not isinstance(raw_lines, list):
+            raise ValueError("persisted scene lines must be a list")
+        lines: list[SceneLine] = []
+        for item in raw_lines:
+            if not isinstance(item, dict) or set(item) != {
+                "line_id",
+                "speaker_id",
+                "portrait_id",
+                "expression_id",
+                "text",
+            }:
+                raise ValueError("persisted scene line fields did not match the schema")
+            if not all(isinstance(field, str) for field in item.values()):
+                raise ValueError("persisted scene line values must be strings")
+            lines.append(
+                SceneLine(
+                    item["line_id"],
+                    item["speaker_id"],
+                    item["portrait_id"],
+                    item["expression_id"],
+                    item["text"],
+                )
+            )
+        scene_id = value["scene_id"]
+        return_to = value["return_to"]
+        if not isinstance(scene_id, str) or not isinstance(return_to, str):
+            raise ValueError("persisted scene identifiers must be strings")
+        return cls(scene_id, tuple(lines), return_to)
 
 
 def stage_three_scene() -> ScenePackage:
@@ -200,11 +234,13 @@ class BridgeApplication:
         *,
         scene_provider: Callable[[Mapping[str, Any]], ScenePackage] | None = None,
         ack_handler: Callable[[Mapping[str, Any]], None] | None = None,
+        error_reporter: Callable[[str, Exception], None] | None = None,
     ) -> None:
         self.config = config
         self.scene = scene or stage_three_scene()
         self._scene_provider = scene_provider
         self._ack_handler = ack_handler
+        self._error_reporter = error_reporter
         self._open_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._ack_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
@@ -263,7 +299,8 @@ class BridgeApplication:
                     return BridgeResponse(200, self._open_scene(_require_object(body)))
                 except BridgeError:
                     raise
-                except Exception:
+                except Exception as error:
+                    self._report_error("scene generation", error)
                     raise BridgeError(
                         503,
                         "scene_provider_unavailable",
@@ -274,7 +311,8 @@ class BridgeApplication:
                     return BridgeResponse(200, self._ack_scene(_require_object(body)))
                 except BridgeError:
                     raise
-                except Exception:
+                except Exception as error:
+                    self._report_error("scene acknowledgement", error)
                     raise BridgeError(
                         503,
                         "scene_ack_unavailable",
@@ -286,6 +324,14 @@ class BridgeApplication:
                 error.status,
                 {"error": {"code": error.code, "message": error.message}},
             )
+
+    def _report_error(self, operation: str, error: Exception) -> None:
+        if self._error_reporter is None:
+            return
+        try:
+            self._error_reporter(operation, error)
+        except Exception:
+            pass
 
     def _open_scene(self, request: dict[str, Any]) -> dict[str, Any]:
         _require_fields(

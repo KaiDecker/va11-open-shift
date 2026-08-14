@@ -7,6 +7,12 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     ag_http_status = ds_map_find_value(async_load, "http_status");
     ag_result = ds_map_find_value(async_load, "result");
 
+    if (ag_state == 1 && instance_exists(ag_wait_box))
+    {
+        with (ag_wait_box) instance_destroy();
+        ag_wait_box = noone;
+    }
+
     if (ag_status != 0 || ag_http_status != 200)
     {
         if (ag_state == 3)
@@ -17,7 +23,14 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         else
         {
             ag_state = 4;
-            ag_error_message = "O.S.：本地世界服务拒绝了请求。";
+            if (ag_http_status == 429)
+                ag_error_message = "O.S.：API调用额度已用完，请用更高额度重新启动。";
+            else if (ag_http_status == 503)
+                ag_error_message = "O.S.：本轮对话生成失败，请查看启动窗口。";
+            else if (ag_http_status <= 0)
+                ag_error_message = "O.S.：本地服务连接中断，请确认启动命令仍在运行。";
+            else
+                ag_error_message = "O.S.：本地世界服务拒绝了请求。";
         }
     }
     else if (ag_state == 3)
@@ -38,7 +51,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         ag_http_request = http_request(ag_bridge_url + "/v1/scenes/open", "POST", ag_next_headers, json_encode(ag_next_body));
         ds_map_destroy(ag_next_body);
         ds_map_destroy(ag_next_headers);
-        ag_timeout_at = current_time + 5000;
+        ag_timeout_at = current_time + 120000;
         ag_state = 1;
     }
     else if (ag_state == 1)
@@ -72,13 +85,13 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_scene_id = ds_map_find_value(ag_scene, "scene_id");
             ag_return_to = ds_map_find_value(ag_scene, "return_to");
             ag_lines = ds_map_find_value(ag_scene, "lines");
-            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) != 3)
+            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 3 || ds_list_size(ag_lines) > 8)
                 ag_valid = false;
         }
 
         if (ag_valid)
         {
-            ag_line_count = 3;
+            ag_line_count = ds_list_size(ag_lines);
             for (var ag_i = 0; ag_i < ag_line_count; ag_i += 1)
             {
                 var ag_line;
@@ -109,7 +122,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     ag_valid = false;
                 if (ag_expression_id != "neutral" && ag_expression_id != "happy" && ag_expression_id != "worry" && ag_expression_id != "playful")
                     ag_valid = false;
-                if (string_length(ag_line_text) < 1 || string_length(ag_line_text) > 240)
+                if (string_length(ag_line_text) < 1 || string_length(ag_line_text) > 72)
                     ag_valid = false;
                 if (!ag_valid)
                     break;

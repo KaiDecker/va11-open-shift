@@ -51,6 +51,31 @@ class BridgeApplicationTests(unittest.TestCase):
         self.assertNotIn(TOKEN, json.dumps(response.body))
         self.assertNotIn(TOKEN, repr(self.app.config))
 
+    def test_scene_provider_failure_reports_diagnostic_only_locally(self) -> None:
+        reports: list[tuple[str, Exception]] = []
+        failure = RuntimeError("private diagnostic")
+        app = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0),
+            scene_provider=lambda request: (_ for _ in ()).throw(failure),
+            error_reporter=lambda operation, error: reports.append((operation, error)),
+        )
+        response = app.handle(
+            "POST",
+            "/v1/scenes/open",
+            self.headers,
+            encoded(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": "report-open-1",
+                    "client_session_id": self.session_id,
+                }
+            ),
+        )
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.body["error"]["code"], "scene_provider_unavailable")
+        self.assertNotIn("private diagnostic", json.dumps(response.body))
+        self.assertEqual(reports, [("scene generation", failure)])
+
     def test_fixed_scene_has_three_whitelisted_lines_and_returns_to_bar(self) -> None:
         response = self.open_scene()
         self.assertEqual(response.status, 200)
