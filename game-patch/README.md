@@ -4,7 +4,7 @@ This directory contains original patch metadata and GML source only. It must
 never contain `data.win`, extracted sprites, fonts, audio, or dialogue from the
 game or reference mods.
 
-The Stage 3 patch targets only the Steam Windows baseline recorded in
+The Stage 5 patch targets only the Steam Windows baseline recorded in
 `manifest.json`. A patcher must fail closed when the hash or any required
 resource name differs. It must write to a temporary copy, verify the result,
 and leave the installed original untouched until an explicit install step.
@@ -17,6 +17,14 @@ reference mod's `reun` / `reunstart` flow. The authenticated loopback
 controller then drives the original `obj_textbox` and whitelisted character
 objects. Generated text remains plain data and never enters `execute_string`
 or the original command parser.
+
+The controller accepts 3-8 validated lines per scene. It derives the line
+count from the decoded list instead of assuming exactly three lines, keeps the
+speaker/portrait/expression checks for every entry, and allows up to 120
+seconds for private per-Agent BYOK dialogue generation before failing closed.
+While a scene is being generated, the original textbox surface shows a short
+waiting status instead of an empty panel. Provider-budget exhaustion, provider
+failure, and a disconnected local service have distinct Chinese messages.
 
 The controller reads the ephemeral port and token from GameMaker's local
 `open-shift-runtime.ini`. A launcher creates that runtime-only file before the

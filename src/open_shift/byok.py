@@ -18,6 +18,15 @@ from enum import Enum
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlparse
 
+from .dialogue import (
+    DIALOGUE_OUTPUT_SCHEMA,
+    DIALOGUE_SYSTEM_INSTRUCTION,
+    DialogueLineDraft,
+    DialogueTurnContext,
+    dialogue_input_json,
+    normalize_dialogue_output,
+    validate_dialogue_output,
+)
 from .models import (
     ActionProposal,
     ActionType,
@@ -39,6 +48,12 @@ class APIProtocol(str, Enum):
 class ResponseFormat(str, Enum):
     JSON_SCHEMA = "json_schema"
     JSON_OBJECT = "json_object"
+
+
+class ThinkingMode(str, Enum):
+    DEFAULT = "default"
+    DISABLED = "disabled"
+    ENABLED = "enabled"
 
 
 class BYOKError(RuntimeError):
@@ -74,6 +89,7 @@ class BYOKConfig:
     timeout_seconds: float = 30.0
     api_key_env: str = "OPEN_SHIFT_API_KEY"
     max_calls: int = 1
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)
@@ -96,6 +112,13 @@ class BYOKConfig:
             raise BYOKConfigurationError("api_key_env is not a safe environment name")
         if not 1 <= self.max_calls <= 100_000:
             raise BYOKConfigurationError("max_calls must be between 1 and 100000")
+        if (
+            self.protocol is not APIProtocol.CHAT_COMPLETIONS
+            and self.thinking_mode is not ThinkingMode.DEFAULT
+        ):
+            raise BYOKConfigurationError(
+                "thinking_mode is supported only with chat_completions"
+            )
 
     @property
     def endpoint(self) -> str:
@@ -334,6 +357,7 @@ def _chat_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any
             },
         ],
     }
+    _apply_chat_thinking(config, payload)
     if config.response_format is ResponseFormat.JSON_OBJECT:
         payload["response_format"] = {"type": "json_object"}
     else:
@@ -343,6 +367,58 @@ def _chat_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any
                 "name": "action_proposal",
                 "strict": True,
                 "schema": ACTION_OUTPUT_SCHEMA,
+            },
+        }
+    return payload
+
+
+def _apply_chat_thinking(config: BYOKConfig, payload: dict[str, Any]) -> None:
+    if config.thinking_mode is not ThinkingMode.DEFAULT:
+        payload["thinking"] = {"type": config.thinking_mode.value}
+
+
+def _dialogue_responses_payload(
+    config: BYOKConfig, context: DialogueTurnContext
+) -> dict[str, Any]:
+    output_format: dict[str, Any]
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        output_format = {"type": "json_object"}
+    else:
+        output_format = {
+            "type": "json_schema",
+            "name": "dialogue_line",
+            "strict": True,
+            "schema": DIALOGUE_OUTPUT_SCHEMA,
+        }
+    return {
+        "model": config.model,
+        "instructions": DIALOGUE_SYSTEM_INSTRUCTION,
+        "input": dialogue_input_json(context),
+        "text": {"format": output_format},
+    }
+
+
+def _dialogue_chat_payload(
+    config: BYOKConfig, context: DialogueTurnContext
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": config.model,
+        "max_tokens": 160,
+        "messages": [
+            {"role": "system", "content": DIALOGUE_SYSTEM_INSTRUCTION},
+            {"role": "user", "content": dialogue_input_json(context)},
+        ],
+    }
+    _apply_chat_thinking(config, payload)
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        payload["response_format"] = {"type": "json_object"}
+    else:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "dialogue_line",
+                "strict": True,
+                "schema": DIALOGUE_OUTPUT_SCHEMA,
             },
         }
     return payload
@@ -549,23 +625,10 @@ class BYOKProvider:
         )
 
     def decide(self, context: DecisionContext) -> ActionProposal:
-        if self.calls_used >= self.config.max_calls:
-            raise BYOKBudgetExceeded("provider call budget was exhausted")
-        self.calls_used += 1
-        payload = (
+        response = self._request(
             _responses_payload(self.config, context)
             if self.config.protocol is APIProtocol.RESPONSES
             else _chat_payload(self.config, context)
-        )
-        response = self.transport.post_json(
-            url=self.config.endpoint,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            payload=payload,
-            timeout_seconds=self.config.timeout_seconds,
         )
         raw = (
             _extract_responses_output(response)
@@ -576,3 +639,42 @@ class BYOKProvider:
         if self.config.response_format is ResponseFormat.JSON_OBJECT:
             value = normalize_json_object_output(value)
         return validate_action_output(value, context)
+
+    def _request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        if self.calls_used >= self.config.max_calls:
+            raise BYOKBudgetExceeded("provider call budget was exhausted")
+        self.calls_used += 1
+        return self.transport.post_json(
+            url=self.config.endpoint,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            payload=payload,
+            timeout_seconds=self.config.timeout_seconds,
+        )
+
+    def generate_dialogue_line(
+        self, context: DialogueTurnContext
+    ) -> DialogueLineDraft:
+        response = self._request(
+            _dialogue_responses_payload(self.config, context)
+            if self.config.protocol is APIProtocol.RESPONSES
+            else _dialogue_chat_payload(self.config, context)
+        )
+        raw = (
+            _extract_responses_output(response)
+            if self.config.protocol is APIProtocol.RESPONSES
+            else _extract_chat_output(response)
+        )
+        value = _as_action_object(raw)
+        if self.config.response_format is ResponseFormat.JSON_OBJECT:
+            try:
+                value = normalize_dialogue_output(value)
+            except ValueError as exc:
+                raise BYOKValidationError(str(exc)) from None
+        try:
+            return validate_dialogue_output(value, context)
+        except ValueError as exc:
+            raise BYOKValidationError(str(exc)) from None

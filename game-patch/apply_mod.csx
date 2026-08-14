@@ -192,4 +192,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 4 patch compiled successfully.");
+ScriptMessage("Open Shift Stage 5 patch compiled successfully.");

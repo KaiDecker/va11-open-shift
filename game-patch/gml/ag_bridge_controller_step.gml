@@ -12,6 +12,22 @@ if ((ag_state == 1 || ag_state == 3) && current_time > ag_timeout_at)
     }
 }
 
+if (ag_state == 1 && !instance_exists(obj_textbox))
+{
+    ag_wait_box = instance_create(0, 0, obj_textbox);
+    ag_wait_box.current_text = 0;
+    ag_wait_box.current_chr = 0;
+    ag_wait_box.current_line = 0;
+    ag_wait_box.total_boxes = 0;
+    ag_wait_box.input_text[0] = "O.S.：正在准备下一段对话……";
+    ag_wait_box.edited_text[0] = ag_wait_box.input_text[0];
+    ag_wait_box.cmd_data_queue = ds_queue_create();
+    ag_wait_box.cmd_pos_queue = ds_queue_create();
+    ag_wait_box.next_cmd_pos = -1;
+    ag_wait_box.textbox_skip_possible = 0;
+    global.output_text = "";
+}
+
 if (ag_state == 2 && !instance_exists(obj_textbox))
 {
     if (ag_line_active)
@@ -89,12 +105,38 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
             if (!instance_exists(sprite_sei)) instance_create(185, 268, sprite_sei);
         }
         var ag_textbox;
+        var ag_raw_text;
+        var ag_wrapped_text;
+        var ag_line_buffer;
+        ag_raw_text = ag_display_name[ag_line_index] + ": " + ag_text[ag_line_index];
+        ag_wrapped_text = "";
+        ag_line_buffer = "";
+        draw_set_font(global.fnt_textbox);
+        for (var ag_char_i = 1; ag_char_i <= string_length(ag_raw_text); ag_char_i += 1)
+        {
+            var ag_next_char;
+            var ag_wrap_candidate;
+            ag_next_char = string_char_at(ag_raw_text, ag_char_i);
+            ag_wrap_candidate = ag_line_buffer + ag_next_char;
+            if (string_length(ag_line_buffer) > 0 && string_width(ag_wrap_candidate) > 380)
+            {
+                if (string_length(ag_wrapped_text) > 0) ag_wrapped_text += "#";
+                ag_wrapped_text += ag_line_buffer;
+                ag_line_buffer = ag_next_char;
+            }
+            else
+            {
+                ag_line_buffer = ag_wrap_candidate;
+            }
+        }
+        if (string_length(ag_wrapped_text) > 0) ag_wrapped_text += "#";
+        ag_wrapped_text += ag_line_buffer;
         ag_textbox = instance_create(0, 0, obj_textbox);
         ag_textbox.current_text = 0;
         ag_textbox.current_chr = 0;
         ag_textbox.current_line = 0;
         ag_textbox.total_boxes = 0;
-        ag_textbox.input_text[0] = ag_display_name[ag_line_index] + ": " + ag_text[ag_line_index];
+        ag_textbox.input_text[0] = ag_wrapped_text;
         ag_textbox.edited_text[0] = ag_textbox.input_text[0];
         ag_textbox.cmd_data_queue = ds_queue_create();
         ag_textbox.cmd_pos_queue = ds_queue_create();

@@ -16,6 +16,7 @@ from open_shift.byok import (
     BYOKResponseError,
     BYOKValidationError,
     ResponseFormat,
+    ThinkingMode,
     normalize_json_object_output,
     validate_action_output,
 )
@@ -132,6 +133,35 @@ class BYOKProviderTests(unittest.TestCase):
         )
         self.assertIn("response_format", call["payload"])
         self.assertNotIn("text", call["payload"])
+        self.assertNotIn("thinking", call["payload"])
+
+    def test_chat_thinking_can_be_explicitly_disabled(self) -> None:
+        transport = FakeTransport(
+            {"choices": [{"message": {"content": action_json()}}]}
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "deepseek-v4-flash",
+                protocol=APIProtocol.CHAT_COMPLETIONS,
+                thinking_mode=ThinkingMode.DISABLED,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+        provider.decide(context())
+        self.assertEqual(
+            transport.calls[0]["payload"]["thinking"], {"type": "disabled"}
+        )
+
+    def test_explicit_thinking_rejects_responses_protocol(self) -> None:
+        with self.assertRaises(BYOKConfigurationError):
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                protocol=APIProtocol.RESPONSES,
+                thinking_mode=ThinkingMode.DISABLED,
+            )
 
     def test_chat_json_object_mode_uses_compatible_response_format(self) -> None:
         transport = FakeTransport(

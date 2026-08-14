@@ -1,6 +1,6 @@
 # Open Shift Simulator
 
-这是 VA-11 HALL-A 多 Agent 永续世界 Mod。当前已完成 BYOK 决策闭环、多 Agent 社会模拟，以及阶段 3 的 GameMaker 本地桥接和可复现补丁源码。仓库不会包含或分发游戏资源。
+这是 VA-11 HALL-A 多 Agent 永续世界 Mod。当前已完成 BYOK 行动与对白闭环、多 Agent 社会模拟、可玩 GameMaker 本地桥接和可复现补丁源码。仓库不会包含或分发游戏资源。
 
 当前能力：
 
@@ -8,7 +8,7 @@
 - 事件驱动的世界时间，不按每秒轮询所有角色
 - 模型供应商接口、完全确定性的 `MockProvider` 与 BYOK HTTP Provider
 - 已验证的兼容 Chat Completions 协议，以及可选的 Responses 风格隔离适配器
-- 严格 JSON 行动校验、单次探针、调用预算和安全故障兜底
+- 严格 JSON 行动与对白校验、独立单次探针、共享调用预算和安全故障兜底
 - 白名单行动与规则验证，Provider 不能直接修改数据库
 - Dana、Dorothy、Alma、Stella、Sei 五个持久 Agent
 - Agent 私有、相关且有固定上下文预算的确定性记忆检索
@@ -17,9 +17,12 @@
 - 30/100 天无人值守模拟、断点续跑和确定性回放测试
 - 仅监听本机回环地址、带令牌和幂等语义的 GameMaker HTTP 桥接协议
 - 原版 `data.win` 只读盘点、哈希基线和按资源名验证的补丁合同
-- UndertaleModTool 0.9.1.2 补丁脚本，以及按《后日谈》结构接入的 Extra Chapters 入口
+- UndertaleModTool 0.9.1.2 补丁脚本，以及复用原版资源的 Extra Chapters 入口
 - 原版章节字体、过渡、酒吧房间、对白框、逐字显示、角色立绘、表情和嘴型
 - 安全 launcher、动态 Agent 世界场景、服务重启幂等和玩家观看结果回写
+- 逐角色生成的 3 轮中文对白，每轮只向模型提供当前发言者的私有观察和公开对话历史
+- 基于官方站点、VNDB 和角色资料整理的结构化角色核心、人物／立绘／表情白名单，以及 Jill 玩家视角隔离
+- 原作角色核心不可自行改写；看完的生成对白会成为参与 Agent 的私有长期记忆，固定回退文本不会被学习
 
 ## 运行
 
@@ -52,6 +55,7 @@ python -m unittest discover -s tests -v
 - BYOK Key 只从用户指定的环境变量读取，不写入数据库或普通配置。
 - Provider 的网络层可注入；自动测试不会发出真实请求。
 - Provider 只能看到当前行动者检索出的记忆、邀请、承诺和事件弧，不能读取其他角色的私有记忆。
+- 对白按发言轮次分别调用 Provider；每轮只序列化当前角色的状态、关系、目标、相关记忆和已公开台词。
 - 远程端点必须使用 HTTPS，明文 HTTP 只允许本机回环地址。
 - 当前已使用 DeepSeek 的兼容 Chat Completions 端点完成真实单次探针；其他供应商和协议需要各自单独验证。
 
@@ -81,6 +85,18 @@ python -m open_shift probe-provider `
 
 `json_object` 只要求远端返回 JSON 对象，本地仍会执行完整字段、目标、地点和行动语义校验。对于明确支持严格 JSON Schema 的端点，可选择 `--response-format json_schema`，以获得更早的远端约束。
 
+对白探针同样只调用一次，不创建或修改世界数据库：
+
+```powershell
+python -m open_shift probe-dialogue `
+  --base-url "https://api.deepseek.com" `
+  --model "deepseek-chat" `
+  --protocol chat_completions `
+  --response-format json_object
+```
+
+成功输出必须是简体中文，并且只包含固定发言者、白名单表情与普通文本。Jill 是玩家视角，不会作为 Agent 被模型选择或代替发言。
+
 ## GameMaker 本地桥接
 
 阶段 3 的桥接服务只接受回环 IP 地址。令牌必须由启动器为每次游戏会话生成，并通过环境变量传给服务；不要把令牌提交到仓库或写入普通日志。
@@ -90,7 +106,7 @@ $env:OPEN_SHIFT_BRIDGE_TOKEN = "至少16位的临时随机令牌"
 python -m open_shift serve-bridge --host 127.0.0.1 --port 8711
 ```
 
-HTTP 合同与 GameMaker GML 通过 UndertaleModTool 0.9.1.2 构建。补丁把 `OPEN SHIFT` 章节文字追加到原版 `extrachapter_text` 的绘制事件，使用与《后日谈》相同的 `dialogfont2` / `ch_small` 等小号字体；点击 `START` 后复用 `out_of_apartment`、`towork_load` 和 `bar` 的原版过渡链。在酒吧房间内，桥接控制器严格检查协议与人物白名单，再用原版 `obj_textbox`、逐字显示和人物对象呈现场景。模型文本不会进入原版命令解析器。
+HTTP 合同与 GameMaker GML 通过 UndertaleModTool 0.9.1.2 构建。补丁把 `OPEN SHIFT` 章节文字追加到原版 `extrachapter_text` 的绘制事件，使用原版 `dialogfont2` / `ch_small` 等小号字体；点击 `START` 后复用 `out_of_apartment`、`towork_load` 和 `bar` 的原版过渡链。在酒吧房间内，桥接控制器严格检查协议与人物白名单，再用原版 `obj_textbox`、逐字显示和人物对象呈现场景。模型文本不会进入原版命令解析器。
 
 `game-patch/apply_mod.csx` 只接受 `manifest.json` 中记录的 Steam Windows 原版哈希，资源缺失或名称冲突会立即终止。构建时只对副本使用；不要直接把输出写到 Steam 安装目录。启动器及人工游戏内验收将在下一阶段完成。
 
@@ -112,7 +128,7 @@ python -m open_shift inspect-game-data `
 
 命令只输出文件哈希、数据块尺寸和可识别资源名，不导出代码、贴图、音频或文本资源内容。
 
-## 阶段 4 Launcher
+## 阶段 4/5 Launcher 与 Agent 对话
 
 Launcher 会为每次游戏会话生成随机桥接令牌、选择空闲回环端口、原子写入 GameMaker 运行时 INI、等待桥接健康检查、启动游戏，并在游戏退出后停止服务和删除 INI。API Key 只传给桥接子进程，不会传给游戏进程。
 
@@ -139,7 +155,7 @@ python -m open_shift launch `
   --advance-minutes 1440
 ```
 
-进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`O.S.` 使用与《后日谈》一致的蓝色章节项和小号章节字体；点击后会向下展开黄色 `START` 项。再点击 `START` 会播放原版离场过渡、经过日期加载画面进入酒吧，然后由原版对白框和人物立绘持续显示 Agent 场景。Jill 是玩家视角，不会作为 Agent 出镜或发言。
+进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`O.S.` 使用原版蓝色章节项和小号章节字体；点击后会向下展开黄色 `START` 项。再点击 `START` 会播放原版离场过渡、经过日期加载画面进入酒吧，然后由原版对白框和人物立绘持续显示 Agent 场景。Jill 是玩家视角，不会作为 Agent 出镜或发言。
 
 使用 DeepSeek BYOK 世界时，先只在当前 PowerShell 会话设置 `OPEN_SHIFT_API_KEY`，然后在上述命令后增加：
 
@@ -150,7 +166,13 @@ python -m open_shift launch `
   --provider-response-format json_object
 ```
 
-每个新的场景请求会推进一段持久世界时间，将最新 Agent 事件转换为三句安全场景。每句的 `speaker_id` 都必须匹配其原版人物对象；表情只允许映射到已反编译核对过的原版状态。场景看完后，`player_scene_ack` 由服务端写入 SQLite。GameMaker 仍不能直接修改权威世界数据库。重复请求和服务重启不会重复推进世界或重复写入 ACK。
+每个新的场景请求会推进一段持久世界时间，并从最新权威事件选择两名参与者。世界从原版主线及结局事件发生之后继续运转；已经建立的人物关系和生活状态不会被重置。配置 BYOK Provider 时，系统按固定安全顺序生成 3 轮对话：模型每次只负责当前角色的一句，并只能看到该角色自己的结构化角色核心、定性状态、相关长期记忆和此前公开台词。金钱、目标数值和数据库时间不会进入对白观察。单句最多 72 个字符，GameMaker 使用原版字体按酒吧左侧对白区域的 380 像素宽度插入原生换行，并在请求期间显示等待提示。未配置 Provider、超时或任意一轮输出不合规时，整段场景回退为三句确定性中文模板；调用预算耗尽会单独提示，不再伪装成本地服务离线。
+
+DeepSeek V4 Flash 应使用模型 `deepseek-v4-flash`，并显式传入 `--thinking disabled`（探针）或 `--provider-thinking disabled`（游戏启动器），避免默认思考占用对白输出预算和等待时间。思考开关默认不发送，因此不会改变其他兼容端点的既有请求。
+
+最终场景会完整序列化到 SQLite。重复请求和服务重启直接重放已保存场景，不会再次调用 API、重复推进世界或重复写入 ACK。每句的 `speaker_id` 必须匹配原版人物对象，表情只允许映射到已反编译核对过的原版状态；Python 与 GameMaker 都限制场景为 3～8 句。场景看完后，服务端会幂等写入 `player_scene_ack`；真实生成的公开谈话会被压缩为一份情景记忆，分别写入参与 Agent 的私有记忆流，并在以后相关对话中检索。GameMaker 仍不能直接修改权威世界数据库。
+
+当前阶段仍是“观看一段 Agent 酒吧对话”的闭环，不包含点单或调酒。下一阶段会把 Agent 点单、原版调酒界面、饮品结果回写、单日多位顾客、营业结束后 Jill 回家结算／存档，以及从家中进入下一营业日串成完整循环；届时世界时间也会改为按营业日推进，而不是每段对话直接推进一天。
 
 ## 阶段 2 验收
 

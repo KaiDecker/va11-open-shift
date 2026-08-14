@@ -110,6 +110,12 @@ class PatchContractTests(unittest.TestCase):
         controller = (root / "game-patch" / "gml" / "ag_bridge_controller_step.gml").read_text(
             encoding="utf-8"
         )
+        controller_http = (
+            root / "game-patch" / "gml" / "ag_bridge_controller_http.gml"
+        ).read_text(encoding="utf-8")
+        controller_create = (
+            root / "game-patch" / "gml" / "ag_bridge_controller_create.gml"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('Data.Sprites.ByName("blue_chapter")', patch)
         self.assertIn('Data.Sprites.ByName("yellow_chapter")', patch)
@@ -128,10 +134,21 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("sprite_stella", controller)
         self.assertIn("ag_name_color", controller)
         self.assertIn("ds_queue_enqueue", controller)
+        self.assertIn("draw_set_font(global.fnt_textbox)", controller)
+        self.assertIn("string_width(ag_wrap_candidate) > 380", controller)
+        self.assertIn('ag_wrapped_text += "#"', controller)
+        self.assertIn("string_length(ag_line_text) > 72", controller_http)
         self.assertNotIn("ag_safe_text", patch)
         self.assertNotIn("draw_rectangle", controller)
         self.assertNotIn("out_to_title", controller)
         self.assertIn('"continued_in_bar"', controller)
+        self.assertIn("ds_list_size(ag_lines) < 3", controller_http)
+        self.assertIn("ds_list_size(ag_lines) > 8", controller_http)
+        self.assertIn("ag_line_count = ds_list_size(ag_lines)", controller_http)
+        self.assertIn("current_time + 120000", controller_create)
+        self.assertIn("current_time + 120000", controller_http)
+        self.assertIn("正在准备下一段对话", controller)
+        self.assertIn("API调用额度已用完", controller_http)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

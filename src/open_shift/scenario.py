@@ -27,7 +27,11 @@ def create_demo_world(
     *,
     seed: int = 7,
 ) -> SimulationEngine:
-    """Create the three-agent demo exactly once and return its engine."""
+    """Create the post-good-ending five-Agent world once and return its engine."""
+
+    timeline_id = store.get_meta("timeline_id")
+    if timeline_id != "after_main_story":
+        store.set_meta("timeline_id", "after_main_story")
 
     if not store.list_agents():
         agents = [
