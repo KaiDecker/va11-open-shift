@@ -1,9 +1,14 @@
-if ((ag_state == 1 || ag_state == 3) && current_time > ag_timeout_at)
+if ((ag_state == 1 || ag_state == 3 || ag_state == 7) && current_time > ag_timeout_at)
 {
     if (ag_state == 3)
     {
         ag_state = 4;
         ag_error_message = "O.S.：本地世界服务没有确认场景结果。";
+    }
+    else if (ag_state == 7)
+    {
+        ag_state = 4;
+        ag_error_message = "O.S.：本地世界服务没有返回调酒结果。";
     }
     else
     {
@@ -12,14 +17,17 @@ if ((ag_state == 1 || ag_state == 3) && current_time > ag_timeout_at)
     }
 }
 
-if (ag_state == 1 && !instance_exists(obj_textbox))
+if ((ag_state == 1 || ag_state == 7) && !instance_exists(obj_textbox))
 {
     ag_wait_box = instance_create(0, 0, obj_textbox);
     ag_wait_box.current_text = 0;
     ag_wait_box.current_chr = 0;
     ag_wait_box.current_line = 0;
     ag_wait_box.total_boxes = 0;
-    ag_wait_box.input_text[0] = "O.S.：正在准备下一段对话……";
+    if (ag_state == 7)
+        ag_wait_box.input_text[0] = "调酒杯在吧台上轻轻落定。";
+    else
+        ag_wait_box.input_text[0] = "O.S.：正在准备下一段对话……";
     ag_wait_box.edited_text[0] = ag_wait_box.input_text[0];
     ag_wait_box.cmd_data_queue = ds_queue_create();
     ag_wait_box.cmd_pos_queue = ds_queue_create();
@@ -39,30 +47,33 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
 
     if (ag_line_index < ag_line_count)
     {
-        global.danahide = 0;
-        global.dorohide = 0;
-        global.almahide = 0;
-        global.stelhide = 0;
-        global.seihide = 0;
-        global.danaface = "";
-        global.doroface = "";
-        global.almaface = "";
-        global.stelface = "";
-        global.seiface = "";
-
         var ag_current_speaker;
         var ag_current_expression;
         ag_current_speaker = ag_speaker[ag_line_index];
         ag_current_expression = ag_expression[ag_line_index];
 
-        if (ag_current_speaker != ag_portrait_speaker)
+        if (ag_current_speaker != "jill")
         {
-            with (sprite_dana) instance_destroy();
-            with (sprite_doro) instance_destroy();
-            with (sprite_alma) instance_destroy();
-            with (sprite_stella) instance_destroy();
-            with (sprite_sei) instance_destroy();
-            ag_portrait_speaker = ag_current_speaker;
+            global.danahide = 0;
+            global.dorohide = 0;
+            global.almahide = 0;
+            global.stelhide = 0;
+            global.seihide = 0;
+            global.danaface = "";
+            global.doroface = "";
+            global.almaface = "";
+            global.stelface = "";
+            global.seiface = "";
+
+            if (ag_current_speaker != ag_portrait_speaker)
+            {
+                with (sprite_dana) instance_destroy();
+                with (sprite_doro) instance_destroy();
+                with (sprite_alma) instance_destroy();
+                with (sprite_stella) instance_destroy();
+                with (sprite_sei) instance_destroy();
+                ag_portrait_speaker = ag_current_speaker;
+            }
         }
 
         if (ag_current_speaker == "dana")
@@ -163,7 +174,10 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         ds_map_add(ag_body, "request_id", "ack_" + ag_session_id + "_" + string(ag_request_sequence));
         ds_map_add(ag_body, "client_session_id", ag_session_id);
         ds_map_add(ag_body, "scene_id", ag_scene_id);
-        ds_map_add(ag_body, "outcome", "continued_in_bar");
+        if (ag_order_pending)
+            ds_map_add(ag_body, "outcome", "order_started");
+        else
+            ds_map_add(ag_body, "outcome", "continued_in_bar");
         ag_http_request = http_request(ag_bridge_url + "/v1/scenes/ack", "POST", ag_headers, json_encode(ag_body));
         ds_map_destroy(ag_body);
         ds_map_destroy(ag_headers);

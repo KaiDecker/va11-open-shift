@@ -5,6 +5,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from typing import Any
 
 from open_shift.bridge import (
     MAX_REQUEST_BYTES,
@@ -12,8 +13,15 @@ from open_shift.bridge import (
     BridgeApplication,
     BridgeConfig,
     BridgeHTTPServer,
+    OrderResolution,
     SceneLine,
     ScenePackage,
+)
+from open_shift.drinks import (
+    AlcoholRequirement,
+    DrinkOrder,
+    ServiceCategory,
+    ServiceResult,
 )
 
 
@@ -238,6 +246,107 @@ class BridgeApplicationTests(unittest.TestCase):
                 "neutral",
                 "wrong portrait",
             )
+        jill = SceneLine(
+            "player_line", "jill", None, "neutral", "这杯先放在这里。"
+        )
+        self.assertIsNone(jill.to_dict()["portrait_id"])
+        self.assertEqual(jill.to_gamemaker_dict()["portrait_id"], "")
+        with self.assertRaisesRegex(ValueError, "must not have"):
+            SceneLine(
+                "player_portrait",
+                "jill",
+                "sprite_dana",
+                "neutral",
+                "Jill 不应显示立绘。",
+            )
+
+    def test_order_resolution_endpoint_is_authenticated_strict_and_idempotent(self) -> None:
+        order = DrinkOrder(
+            "order_1",
+            "alma",
+            "btini",
+            "Brandtini",
+            ("sweet", "classy"),
+            AlcoholRequirement.REQUIRED,
+            "Jill，一杯 Brandtini。",
+        )
+        calls: list[dict[str, Any]] = []
+
+        def resolve(request):
+            calls.append(dict(request))
+            return OrderResolution(
+                ServiceResult(
+                    order.order_id,
+                    order.customer_id,
+                    ServiceCategory.EXACT,
+                    "btini",
+                    "Brandtini",
+                    True,
+                ),
+                ScenePackage(
+                    "order_result_1",
+                    (
+                        SceneLine(
+                            "result_1",
+                            "alma",
+                            "sprite_alma",
+                            "happy",
+                            "这杯正好。",
+                        ),
+                        SceneLine(
+                            "result_2",
+                            "jill",
+                            None,
+                            "neutral",
+                            "请慢用。",
+                        ),
+                    ),
+                ),
+            )
+
+        app = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0), order_handler=resolve
+        )
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "resolve-1",
+            "client_session_id": self.session_id,
+            "scene_id": "world_event_1",
+            "order_id": order.order_id,
+            "drink": {
+                "adelhyde": 6,
+                "bronson_extract": 0,
+                "powdered_delta": 3,
+                "flanergide": 0,
+                "karmotrine": 1,
+                "ice": 0,
+                "aged": 1,
+                "preparation": "mixed",
+            },
+        }
+        first = app.handle(
+            "POST", "/v1/orders/resolve", self.headers, encoded(request)
+        )
+        second = app.handle(
+            "POST", "/v1/orders/resolve", self.headers, encoded(request)
+        )
+        self.assertEqual(first.status, 200)
+        self.assertEqual(first.body, second.body)
+        self.assertEqual(first.body["result"]["category"], "exact")
+        transported_jill = [
+            line
+            for line in first.body["scene"]["lines"]
+            if line["speaker_id"] == "jill"
+        ]
+        self.assertEqual(len(transported_jill), 1)
+        self.assertEqual(transported_jill[0]["portrait_id"], "")
+        self.assertEqual(len(calls), 1)
+        extra = dict(request)
+        extra["unexpected"] = True
+        invalid = app.handle(
+            "POST", "/v1/orders/resolve", self.headers, encoded(extra)
+        )
+        self.assertEqual(invalid.status, 400)
 
     def test_non_loopback_binding_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "loopback"):

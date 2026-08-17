@@ -3,7 +3,11 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
-from .dialogue import DialogueLineDraft, DialogueTurnContext
+from .dialogue import (
+    DialogueLineDraft,
+    DialogueTurnContext,
+    PlayerDialogueTurnContext,
+)
 from .models import ActionProposal, ActionType, DecisionContext, GoalStatus
 
 
@@ -19,6 +23,11 @@ class DialogueProvider(Protocol):
 
     def generate_dialogue_line(
         self, context: DialogueTurnContext
+    ) -> DialogueLineDraft:
+        ...
+
+    def generate_player_dialogue_line(
+        self, context: PlayerDialogueTurnContext
     ) -> DialogueLineDraft:
         ...
 
