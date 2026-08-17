@@ -26,6 +26,12 @@ from .models import Commitment, Invitation, Memory, StoryArc
 from .providers import MockProvider, ModelProvider
 from .scenario import create_demo_world
 from .store import WorldStore
+from .story_graph import (
+    DAILY_STORY_GRAPH_VERSION,
+    DailyStoryGraph,
+    StoryGraphNode,
+    StoryNodeKind,
+)
 
 __all__ = [
     "MockProvider",
@@ -57,6 +63,10 @@ __all__ = [
     "Invitation",
     "Memory",
     "StoryArc",
+    "DAILY_STORY_GRAPH_VERSION",
+    "DailyStoryGraph",
+    "StoryGraphNode",
+    "StoryNodeKind",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"

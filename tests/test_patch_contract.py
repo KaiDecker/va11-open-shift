@@ -151,12 +151,19 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("ag_line_count = ds_list_size(ag_lines)", controller_http)
         self.assertIn("current_time + 120000", controller_create)
         self.assertIn("current_time + 120000", controller_http)
-        self.assertIn("正在准备下一段对话", controller)
+        self.assertIn("冰箱压缩机在吧台后低声运转", controller)
+        self.assertNotIn("正在准备下一段对话", controller)
         self.assertIn("API调用额度已用完", controller_http)
         self.assertIn('ag_speaker_id != "jill"', controller_http)
         self.assertIn('ag_portrait_id != ""', controller_http)
         self.assertNotIn("is_undefined(ag_portrait_id)", controller_http)
         self.assertIn('ag_current_speaker != "jill"', controller)
+        self.assertIn('ag_speaker_id == ""', controller_http)
+        self.assertIn("story_generation_failed", controller_http)
+        self.assertIn("income_delta", controller_http)
+        self.assertIn("global.cashcounter += ag_income_delta", controller_http)
+        self.assertIn("global.barscore += ag_income_delta", controller_http)
+        self.assertNotIn("global.money", controller_http)
         self.assertNotIn('"ini_close", "is_undefined"', patch)
         self.assertIn("ag_was_order_response = (ag_state == 7)", controller_http)
         self.assertIn("else if (ag_was_order_response)", controller_http)
@@ -174,6 +181,21 @@ class PatchContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(PatchContractError, "did not match"):
                 validate_patch_source_tree(temp_dir)
+
+    def test_nonexistent_original_money_variable_is_rejected(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "game-patch" / "gml"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            copy = Path(temp_dir)
+            for source in root.glob("*.gml"):
+                text = source.read_text(encoding="utf-8")
+                if source.name == "ag_bridge_controller_http.gml":
+                    text = text.replace(
+                        "global.cashcounter += ag_income_delta",
+                        "global.money += ag_income_delta",
+                    )
+                (copy / source.name).write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(PatchContractError, "money variable"):
+                validate_patch_source_tree(copy)
 
     def test_legacy_jill_null_check_is_rejected(self) -> None:
         root = Path(__file__).resolve().parents[1] / "game-patch" / "gml"

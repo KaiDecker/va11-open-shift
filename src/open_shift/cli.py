@@ -328,6 +328,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 error_reporter=_report_world_error,
                 seed=args.seed,
                 advance_minutes=args.advance_minutes,
+                daily_story_mode=True,
             )
             serve_bridge(
                 config,
@@ -350,7 +351,10 @@ def _serve_bridge(args: argparse.Namespace) -> int:
 def _provider_factory(args: argparse.Namespace):
     if args.provider_base_url is None and args.provider_model is None:
         return None
-    if not args.provider_base_url or not args.provider_model:
+    provider_model = args.provider_model
+    if args.provider_base_url and provider_model is None and "deepseek.com" in args.provider_base_url:
+        provider_model = "deepseek-v4-flash"
+    if not args.provider_base_url or not provider_model:
         raise BYOKError(
             "provider-base-url and provider-model must be supplied together"
         )
@@ -359,16 +363,19 @@ def _provider_factory(args: argparse.Namespace):
         args.provider_response_format or ResponseFormat.JSON_OBJECT.value
     )
 
+    thinking_mode = ThinkingMode(args.provider_thinking)
+    if provider_model == "deepseek-v4-flash" and thinking_mode is ThinkingMode.DEFAULT:
+        thinking_mode = ThinkingMode.DISABLED
     provider = BYOKProvider.from_env(
         BYOKConfig(
             base_url=args.provider_base_url,
-            model=args.provider_model,
+            model=provider_model,
             protocol=protocol,
             response_format=response_format,
             timeout_seconds=args.provider_timeout,
             api_key_env=args.provider_api_key_env,
             max_calls=args.provider_max_calls,
-            thinking_mode=ThinkingMode(args.provider_thinking),
+            thinking_mode=thinking_mode,
         )
     )
 

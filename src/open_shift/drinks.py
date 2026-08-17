@@ -31,6 +31,14 @@ class ServiceCategory(str, Enum):
     SPECIAL = "special"
 
 
+SERVICE_INCOME = {
+    ServiceCategory.EXACT: 200,
+    ServiceCategory.ACCEPTABLE: 100,
+    ServiceCategory.WRONG: 0,
+    ServiceCategory.SPECIAL: 300,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class DrinkOrder:
     order_id: str

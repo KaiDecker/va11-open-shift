@@ -17,6 +17,7 @@ from open_shift.bridge import (
     BridgeHTTPServer,
 )
 from open_shift.launcher import LaunchConfig, RuntimeSession
+from open_shift.providers import MockProvider
 from open_shift.store import WorldStore
 from open_shift.world_bridge import WorldSceneService
 
@@ -140,6 +141,61 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_daily_story_ambient_http_uses_legacy_empty_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            world = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            config = BridgeConfig(token=TOKEN, port=0)
+            app = BridgeApplication(
+                config,
+                scene_provider=world.open_scene,
+                ack_handler=world.ack_scene,
+                order_handler=world.resolve_order,
+            )
+            server = BridgeHTTPServer(config, app=app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            opened = {
+                "protocol_version": 1,
+                "request_id": "http-ambient-1",
+                "client_session_id": "http-ambient-session",
+            }
+            try:
+                request = Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/v1/scenes/open",
+                    data=json.dumps(opened).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Open-Shift-Token": TOKEN,
+                    },
+                    method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    payload = json.loads(response.read().decode())
+                self.assertTrue(payload["scene"]["scene_id"].startswith("opening_"))
+                self.assertTrue(
+                    all(
+                        line["speaker_id"] == "" and line["portrait_id"] == ""
+                        for line in payload["scene"]["lines"]
+                    )
+                )
+                replay = world.open_scene(opened)
+                self.assertTrue(
+                    all(
+                        line.speaker_id is None and line.portrait_id is None
+                        for line in replay.lines
+                    )
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+                world.wait_for_background_generation()
 
     def test_gamemaker_real_number_empty_drink_resolves_as_wrong(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -340,6 +396,7 @@ import configparser
 import json
 import pathlib
 import sys
+import time
 import urllib.request
 
 runtime = pathlib.Path(sys.argv[1])
@@ -350,14 +407,19 @@ port = parser.getint("bridge", "port")
 token = parser.get("bridge", "token")
 base = f"http://127.0.0.1:{port}"
 headers = {"Content-Type": "application/json", "X-Open-Shift-Token": token}
-opened = {"protocol_version": 1, "request_id": "launcher-open-1", "client_session_id": "launcher-session"}
-request = urllib.request.Request(base + "/v1/scenes/open", data=json.dumps(opened).encode(), headers=headers, method="POST")
-with urllib.request.urlopen(request, timeout=5) as response:
-    scene = json.loads(response.read().decode())["scene"]
-ack = {"protocol_version": 1, "request_id": "launcher-ack-1", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": "order_started"}
-request = urllib.request.Request(base + "/v1/scenes/ack", data=json.dumps(ack).encode(), headers=headers, method="POST")
-with urllib.request.urlopen(request, timeout=5) as response:
-    accepted = json.loads(response.read().decode())["status"]
+for index in range(20):
+    opened = {"protocol_version": 1, "request_id": f"launcher-open-{index}", "client_session_id": "launcher-session"}
+    request = urllib.request.Request(base + "/v1/scenes/open", data=json.dumps(opened).encode(), headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        scene = json.loads(response.read().decode())["scene"]
+    outcome = "order_started" if "order" in scene else "continued_in_bar"
+    ack = {"protocol_version": 1, "request_id": f"launcher-ack-{index}", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": outcome}
+    request = urllib.request.Request(base + "/v1/scenes/ack", data=json.dumps(ack).encode(), headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        accepted = json.loads(response.read().decode())["status"]
+    if "order" in scene:
+        break
+    time.sleep(0.02)
 result.write_text(json.dumps({"scene_id": scene["scene_id"], "lines": len(scene["lines"]), "ack": accepted}), encoding="utf-8")
 '''
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -375,14 +437,14 @@ result.write_text(json.dumps({"scene_id": scene["scene_id"], "lines": len(scene[
             self.assertEqual(RuntimeSession(config).run(), 0)
             self.assertFalse(runtime.exists())
             payload = json.loads(result.read_text(encoding="utf-8"))
-            self.assertTrue(payload["scene_id"].startswith("world_event_"))
+            self.assertTrue(payload["scene_id"].startswith("day_"))
             self.assertEqual(payload["lines"], 3)
             self.assertEqual(payload["ack"], "accepted")
             with WorldStore(db_path) as store:
-                self.assertEqual(store.current_tick, 60)
-                self.assertEqual(
+                self.assertEqual(store.current_tick, 0)
+                self.assertGreaterEqual(
                     len([event for event in store.list_events() if event["event_type"] == "player_scene_ack"]),
-                    1,
+                    3,
                 )
 
 
