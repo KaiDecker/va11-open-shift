@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -21,6 +22,18 @@ from .models import DecisionContext, GoalStatus
 
 MAX_DIALOGUE_CHARACTERS = 72
 FORBIDDEN_META_TERMS = ("原版", "好结局", "续篇", "模组", "时间线")
+_NON_PLAYER_BARTENDING_PATTERNS = (
+    re.compile(r"(?:这|那|哪|一)?杯(?:酒)?(?:就)?(?:我来|由我|交给我)"),
+    re.compile(
+        r"(?:我(?:先|来|去|现在|马上|负责|替|帮|给|正(?:在)?|已经|刚)|"
+        r"让我|由我|交给我|本老板)[^。！？]{0,10}"
+        r"(?:调酒|调(?:这|那|一)?杯(?:酒)?|摇(?:制|酒)|搅拌|出杯|"
+        r"端(?:上|出)(?:这|那|一)?杯(?:酒)?|做(?:这|那|一)?杯(?:酒)?|"
+        r"把(?:这|那|一)?杯(?:酒)?(?:调|摇|搅拌|做)(?:好|完))"
+    ),
+    re.compile(r"我(?:也|就)?调酒"),
+    re.compile(r"我(?:先|来|去|给|替|帮)(?:你|她|他|Jill)?调(?=[，。！？]|$)"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,8 +156,11 @@ private_relevant_memories 是角色后来亲历的成长，不得用新经历覆
 猜测或说出金钱余额、目标数值、数据库时间、Classy 等英文分类词。保持角色设定，并
 遵循 original_dialogue_style 的结构规律，但不得复述或仿写原作台词。
 输出简体中文，不要旁白、舞台说明、
-说话者姓名前缀、Markdown 或对玩家的操作说明。Jill 是吧台后的玩家角色，可以自然
-称呼她，但不得代替她发言或替玩家决定调酒结果。service_result 若存在，是规则层已经
+说话者姓名前缀、Markdown 或对玩家的操作说明。Jill 是吧台后的玩家角色，也是当前
+值班中唯一执行调酒的人。只有 Jill 能选择或操作配料、调制、摇制、搅拌和出杯；当前
+角色只能点单、观察、交谈、提醒或评价，不能声称自己正在或将要替 Jill 调酒，即使
+speaker 是酒吧老板 Dana 也不例外。可以自然称呼 Jill，但不得代替她发言或替玩家决定
+调酒结果。service_result 若存在，是规则层已经
 确认的事实，必须据此反应，不得改写饮品名称或宣称另一个结果。回复必须是一个 JSON
 对象，且只能包含 expression_id 和 text。
 expression_id 只能是 neutral、happy、worry、playful 之一。text 最多 72 个字符。"""
@@ -385,6 +401,8 @@ def validate_dialogue_output(
         f"{display_name}："
     ):
         raise ValueError("dialogue text included a speaker prefix")
+    if any(pattern.search(text) for pattern in _NON_PLAYER_BARTENDING_PATTERNS):
+        raise ValueError("non-player dialogue claimed Jill's bartending action")
     return DialogueLineDraft(expression, text)
 
 

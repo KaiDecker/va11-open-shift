@@ -251,6 +251,13 @@ class BridgeApplicationTests(unittest.TestCase):
         )
         self.assertIsNone(jill.to_dict()["portrait_id"])
         self.assertEqual(jill.to_gamemaker_dict()["portrait_id"], "")
+        ambient = SceneLine(
+            "ambient_line", None, None, "neutral", "门铃响了。"
+        )
+        self.assertIsNone(ambient.to_dict()["speaker_id"])
+        self.assertIsNone(ambient.to_dict()["portrait_id"])
+        self.assertEqual(ambient.to_gamemaker_dict()["speaker_id"], "")
+        self.assertEqual(ambient.to_gamemaker_dict()["portrait_id"], "")
         with self.assertRaisesRegex(ValueError, "must not have"):
             SceneLine(
                 "player_portrait",

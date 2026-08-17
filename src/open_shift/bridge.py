@@ -50,7 +50,7 @@ class BridgeError(ValueError):
 @dataclass(frozen=True, slots=True)
 class SceneLine:
     line_id: str
-    speaker_id: str
+    speaker_id: str | None
     portrait_id: str | None
     expression_id: str
     text: str
@@ -58,14 +58,19 @@ class SceneLine:
     def __post_init__(self) -> None:
         if not _RESOURCE_ID.fullmatch(self.line_id):
             raise ValueError("line_id was invalid")
-        if self.speaker_id not in ALLOWED_SPEAKERS:
+        if self.speaker_id is None:
+            if self.portrait_id is not None or self.expression_id != "neutral":
+                raise ValueError("environment line must not have a portrait or expression")
+        elif self.speaker_id not in ALLOWED_SPEAKERS:
             raise ValueError("speaker_id was not allowed")
-        if self.speaker_id == "jill":
+        elif self.speaker_id == "jill":
             if self.portrait_id is not None:
                 raise ValueError("Jill must not have a portrait_id")
         elif self.portrait_id not in ALLOWED_PORTRAITS:
             raise ValueError("portrait_id was not allowed")
-        if self.portrait_id != SPEAKER_PORTRAITS[self.speaker_id]:
+        if self.speaker_id is not None and self.portrait_id != SPEAKER_PORTRAITS[
+            self.speaker_id
+        ]:
             raise ValueError("portrait_id did not match speaker_id")
         if self.expression_id not in ALLOWED_EXPRESSIONS:
             raise ValueError("expression_id was not allowed")
@@ -88,7 +93,7 @@ class SceneLine:
 
         return {
             "line_id": self.line_id,
-            "speaker_id": self.speaker_id,
+            "speaker_id": self.speaker_id or "",
             "portrait_id": self.portrait_id or "",
             "expression_id": self.expression_id,
             "text": self.text,
@@ -148,14 +153,15 @@ class ScenePackage:
             }:
                 raise ValueError("persisted scene line fields did not match the schema")
             if not all(
-                isinstance(field, str) or (key == "portrait_id" and field is None)
+                isinstance(field, str)
+                or (key in {"speaker_id", "portrait_id"} and field is None)
                 for key, field in item.items()
             ):
                 raise ValueError("persisted scene line values must be strings")
             lines.append(
                 SceneLine(
                     item["line_id"],
-                    item["speaker_id"],
+                    item["speaker_id"] or None,
                     item["portrait_id"],
                     item["expression_id"],
                     item["text"],
@@ -176,14 +182,26 @@ class ScenePackage:
 class OrderResolution:
     result: ServiceResult
     scene: ScenePackage
+    income_delta: int = 0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.income_delta, bool) or not isinstance(
+            self.income_delta, int
+        ) or self.income_delta < 0:
+            raise ValueError("order income_delta was invalid")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"result": self.result.to_dict(), "scene": self.scene.to_dict()}
+        return {
+            "result": self.result.to_dict(),
+            "scene": self.scene.to_dict(),
+            "income_delta": self.income_delta,
+        }
 
     def to_gamemaker_dict(self) -> dict[str, Any]:
         return {
             "result": self.result.to_dict(),
             "scene": self.scene.to_gamemaker_dict(),
+            "income_delta": self.income_delta,
         }
 
 

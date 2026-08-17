@@ -4,8 +4,10 @@ import json
 import os
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from typing import Any, Mapping
+from unittest.mock import patch
 
 from open_shift.byok import (
     APIProtocol,
@@ -20,6 +22,7 @@ from open_shift.byok import (
     normalize_json_object_output,
     validate_action_output,
 )
+from open_shift.cli import _provider_factory
 from open_shift.models import AgentState, DecisionContext, Goal, Relationship
 from open_shift.providers import MockProvider
 from open_shift.scenario import create_demo_world
@@ -77,6 +80,27 @@ def action_json(**overrides: Any) -> str:
 
 
 class BYOKProviderTests(unittest.TestCase):
+    def test_deepseek_v4_flash_defaults_disable_thinking(self) -> None:
+        args = Namespace(
+            provider_base_url="https://api.deepseek.com",
+            provider_model=None,
+            provider_protocol=None,
+            provider_response_format=None,
+            provider_timeout=30.0,
+            provider_api_key_env="OPEN_SHIFT_API_KEY",
+            provider_max_calls=100,
+            provider_thinking=ThinkingMode.DEFAULT.value,
+        )
+        sentinel = object()
+        with patch.object(BYOKProvider, "from_env", return_value=sentinel) as from_env:
+            factory = _provider_factory(args)
+        self.assertIsNotNone(factory)
+        assert factory is not None
+        self.assertIs(factory(), sentinel)
+        config = from_env.call_args.args[0]
+        self.assertEqual(config.model, "deepseek-v4-flash")
+        self.assertIs(config.thinking_mode, ThinkingMode.DISABLED)
+
     def test_responses_protocol_builds_schema_request_and_parses_action(self) -> None:
         transport = FakeTransport(
             {

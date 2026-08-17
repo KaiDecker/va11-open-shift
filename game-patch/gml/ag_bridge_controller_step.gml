@@ -27,7 +27,7 @@ if ((ag_state == 1 || ag_state == 7) && !instance_exists(obj_textbox))
     if (ag_state == 7)
         ag_wait_box.input_text[0] = "调酒杯在吧台上轻轻落定。";
     else
-        ag_wait_box.input_text[0] = "O.S.：正在准备下一段对话……";
+        ag_wait_box.input_text[0] = "冰箱压缩机在吧台后低声运转。";
     ag_wait_box.edited_text[0] = ag_wait_box.input_text[0];
     ag_wait_box.cmd_data_queue = ds_queue_create();
     ag_wait_box.cmd_pos_queue = ds_queue_create();
@@ -52,7 +52,7 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         ag_current_speaker = ag_speaker[ag_line_index];
         ag_current_expression = ag_expression[ag_line_index];
 
-        if (ag_current_speaker != "jill")
+        if (ag_current_speaker != "jill" && ag_current_speaker != "")
         {
             global.danahide = 0;
             global.dorohide = 0;
@@ -119,7 +119,10 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         var ag_raw_text;
         var ag_wrapped_text;
         var ag_line_buffer;
-        ag_raw_text = ag_display_name[ag_line_index] + ": " + ag_text[ag_line_index];
+        if (ag_display_name[ag_line_index] == "")
+            ag_raw_text = ag_text[ag_line_index];
+        else
+            ag_raw_text = ag_display_name[ag_line_index] + ": " + ag_text[ag_line_index];
         ag_wrapped_text = "";
         ag_line_buffer = "";
         draw_set_font(global.fnt_textbox);
@@ -151,11 +154,16 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         ag_textbox.edited_text[0] = ag_textbox.input_text[0];
         ag_textbox.cmd_data_queue = ds_queue_create();
         ag_textbox.cmd_pos_queue = ds_queue_create();
-        ds_queue_enqueue(ag_textbox.cmd_pos_queue, 0);
-        ds_queue_enqueue(ag_textbox.cmd_data_queue, "C:" + string(ag_name_color[ag_line_index]));
-        ds_queue_enqueue(ag_textbox.cmd_pos_queue, string_length(ag_display_name[ag_line_index]) + 1);
-        ds_queue_enqueue(ag_textbox.cmd_data_queue, "C:C");
-        ag_textbox.next_cmd_pos = ds_queue_head(ag_textbox.cmd_pos_queue);
+        if (ag_display_name[ag_line_index] != "")
+        {
+            ds_queue_enqueue(ag_textbox.cmd_pos_queue, 0);
+            ds_queue_enqueue(ag_textbox.cmd_data_queue, "C:" + string(ag_name_color[ag_line_index]));
+            ds_queue_enqueue(ag_textbox.cmd_pos_queue, string_length(ag_display_name[ag_line_index]) + 1);
+            ds_queue_enqueue(ag_textbox.cmd_data_queue, "C:C");
+            ag_textbox.next_cmd_pos = ds_queue_head(ag_textbox.cmd_pos_queue);
+        }
+        else
+            ag_textbox.next_cmd_pos = -1;
         ag_textbox.textbox_skip_possible = 1;
         global.output_text = "";
         ag_line_active = 1;

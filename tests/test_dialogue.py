@@ -198,6 +198,8 @@ class DialogueContractTests(unittest.TestCase):
         self.assertIn("不得询问", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("不可自行改写", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("通用客服式句型", DIALOGUE_SYSTEM_INSTRUCTION)
+        self.assertIn("唯一执行调酒", DIALOGUE_SYSTEM_INSTRUCTION)
+        self.assertIn("Dana", DIALOGUE_SYSTEM_INSTRUCTION)
         for forbidden_meta_term in (
             "原版",
             "好结局",
@@ -238,6 +240,31 @@ class DialogueContractTests(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_dialogue_output(invalid, context)
+
+    def test_only_jill_may_claim_bartending_actions(self) -> None:
+        context = turn_context()
+        for allowed in (
+            "Jill，这杯还是交给你。",
+            "Jill，你调的这杯很合适。",
+            "那就看你的了，Jill。",
+        ):
+            with self.subTest(allowed=allowed):
+                draft = validate_dialogue_output(
+                    {"expression_id": "neutral", "text": allowed}, context
+                )
+                self.assertEqual(draft.text, allowed)
+
+        for forbidden in (
+            "行，我先调酒，你继续说。",
+            "这杯我来，Jill 去歇会儿。",
+            "我给你调一杯。",
+            "我来把这杯摇好。",
+            "今晚由我出杯。",
+        ):
+            with self.subTest(forbidden=forbidden), self.assertRaises(ValueError):
+                validate_dialogue_output(
+                    {"expression_id": "neutral", "text": forbidden}, context
+                )
 
     def test_player_dialogue_has_no_private_agent_state_or_portrait_role(self) -> None:
         context = PlayerDialogueTurnContext(
