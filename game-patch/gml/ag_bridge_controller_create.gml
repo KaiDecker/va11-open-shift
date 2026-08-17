@@ -10,6 +10,11 @@ ag_line_active = 0;
 ag_wait_box = noone;
 ag_portrait_speaker = "";
 ag_error_message = "";
+ag_order_pending = 0;
+ag_order_started = 0;
+ag_order_id = "";
+ag_order_customer = "";
+ag_order_display_text = "";
 
 ini_open("open-shift-runtime.ini");
 ag_bridge_port = ini_read_real("bridge", "port", 8711);

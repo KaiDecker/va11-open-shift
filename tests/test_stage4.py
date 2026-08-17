@@ -53,7 +53,7 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 "request_id": "world-ack-1",
                 "client_session_id": "session-1",
                 "scene_id": first.body["scene"]["scene_id"],
-                "outcome": "continued_in_bar",
+                "outcome": "order_started",
             }
             ack_body = json.dumps(ack).encode()
             self.assertEqual(app.handle("POST", "/v1/scenes/ack", headers, ack_body).status, 200)
@@ -100,15 +100,14 @@ class Stage4WorldBridgeTests(unittest.TestCase):
             thread.start()
             try:
                 url = f"http://127.0.0.1:{server.server_address[1]}/v1/scenes/open"
+                opened = {
+                    "protocol_version": 1,
+                    "request_id": "http-world-1",
+                    "client_session_id": "http-session",
+                }
                 request = Request(
                     url,
-                    data=json.dumps(
-                        {
-                            "protocol_version": 1,
-                            "request_id": "http-world-1",
-                            "client_session_id": "http-session",
-                        }
-                    ).encode(),
+                    data=json.dumps(opened).encode(),
                     headers={"Content-Type": "application/json", "X-Open-Shift-Token": TOKEN},
                     method="POST",
                 )
@@ -116,10 +115,21 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                     payload = json.loads(response.read().decode())
                 self.assertEqual(payload["scene"]["return_to"], "bar")
                 self.assertEqual(len(payload["scene"]["lines"]), 3)
-                self.assertNotIn(
+                self.assertIn(
                     "jill",
                     {line["speaker_id"] for line in payload["scene"]["lines"]},
                 )
+                jill = next(
+                    line
+                    for line in payload["scene"]["lines"]
+                    if line["speaker_id"] == "jill"
+                )
+                self.assertEqual(jill["portrait_id"], "")
+                persisted = world.open_scene(opened)
+                persisted_jill = next(
+                    line for line in persisted.lines if line.speaker_id == "jill"
+                )
+                self.assertIsNone(persisted_jill.portrait_id)
                 self.assertTrue(
                     all(
                         any("\u4e00" <= char <= "\u9fff" for char in line["text"])
@@ -130,6 +140,88 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_gamemaker_real_number_empty_drink_resolves_as_wrong(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            world = WorldSceneService(db_path, advance_minutes=0)
+            app = BridgeApplication(
+                BridgeConfig(token=TOKEN, port=0),
+                scene_provider=world.open_scene,
+                ack_handler=world.ack_scene,
+                order_handler=world.resolve_order,
+            )
+            headers = {"X-Open-Shift-Token": TOKEN}
+            opened = app.handle(
+                "POST",
+                "/v1/scenes/open",
+                headers,
+                json.dumps(
+                    {
+                        "protocol_version": 1.0,
+                        "request_id": "gm-open-1",
+                        "client_session_id": "gm-session-1",
+                    }
+                ).encode(),
+            )
+            self.assertEqual(opened.status, 200)
+            scene = opened.body["scene"]
+            order = scene["order"]
+            acknowledged = app.handle(
+                "POST",
+                "/v1/scenes/ack",
+                headers,
+                json.dumps(
+                    {
+                        "protocol_version": 1.0,
+                        "request_id": "gm-ack-1",
+                        "client_session_id": "gm-session-1",
+                        "scene_id": scene["scene_id"],
+                        "outcome": "order_started",
+                    }
+                ).encode(),
+            )
+            self.assertEqual(acknowledged.status, 200)
+            request = {
+                "protocol_version": 1.0,
+                "request_id": "gm-resolve-1",
+                "client_session_id": "gm-session-1",
+                "scene_id": scene["scene_id"],
+                "order_id": order["order_id"],
+                "drink": {
+                    "adelhyde": 0.0,
+                    "bronson_extract": 0.0,
+                    "powdered_delta": 0.0,
+                    "flanergide": 0.0,
+                    "karmotrine": 0.0,
+                    "ice": 0.0,
+                    "aged": 0.0,
+                    "preparation": "mixed",
+                },
+            }
+            first = app.handle(
+                "POST",
+                "/v1/orders/resolve",
+                headers,
+                json.dumps(request).encode(),
+            )
+            replay = app.handle(
+                "POST",
+                "/v1/orders/resolve",
+                headers,
+                json.dumps(request).encode(),
+            )
+            self.assertEqual(first.status, 200)
+            self.assertEqual(replay.body, first.body)
+            self.assertEqual(first.body["result"]["category"], "wrong")
+            with WorldStore(db_path) as store:
+                served = [
+                    event
+                    for event in store.list_events()
+                    if event["event_type"] == "drink_served"
+                ]
+                self.assertEqual(len(served), 1)
+                self.assertEqual(served[0]["payload"]["drink"]["adelhyde"], 0)
 
 
 class Stage4LauncherTests(unittest.TestCase):
@@ -262,7 +354,7 @@ opened = {"protocol_version": 1, "request_id": "launcher-open-1", "client_sessio
 request = urllib.request.Request(base + "/v1/scenes/open", data=json.dumps(opened).encode(), headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=5) as response:
     scene = json.loads(response.read().decode())["scene"]
-ack = {"protocol_version": 1, "request_id": "launcher-ack-1", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": "continued_in_bar"}
+ack = {"protocol_version": 1, "request_id": "launcher-ack-1", "client_session_id": "launcher-session", "scene_id": scene["scene_id"], "outcome": "order_started"}
 request = urllib.request.Request(base + "/v1/scenes/ack", data=json.dumps(ack).encode(), headers=headers, method="POST")
 with urllib.request.urlopen(request, timeout=5) as response:
     accepted = json.loads(response.read().decode())["status"]

@@ -28,8 +28,12 @@
     "gml_Object_extrachapter_text_Draw_0",
     "dialog_control",
     "gml_Object_dialog_control_Create_0",
+    "recipebook_bg",
+    "order_text",
     "obj_textbox",
     "gml_Script_reset_lips",
+    "gml_Script_resetmixer_2",
+    "gml_Script_mixcontrol",
     "sprite_dana",
     "sprite_doro",
     "sprite_alma",
@@ -46,7 +50,8 @@
     "sprite_doro": "sprite_doro",
     "sprite_alma": "sprite_alma",
     "sprite_stella": "sprite_stella",
-    "sprite_sei": "sprite_sei"
+    "sprite_sei": "sprite_sei",
+    "jill": null
   },
   "return_target": "bar"
 }

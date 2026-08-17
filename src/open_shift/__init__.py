@@ -1,8 +1,26 @@
 """Open Shift persistent world simulator."""
 
 from .byok import APIProtocol, BYOKConfig, BYOKProvider, ResponseFormat, ThinkingMode
-from .bridge import BridgeApplication, BridgeConfig, SceneLine, ScenePackage
-from .dialogue import DialogueLineDraft, DialogueTurnContext, DialogueUtterance
+from .bridge import (
+    BridgeApplication,
+    BridgeConfig,
+    OrderResolution,
+    SceneLine,
+    ScenePackage,
+)
+from .dialogue import (
+    DialogueLineDraft,
+    DialogueTurnContext,
+    DialogueUtterance,
+    PlayerDialogueTurnContext,
+)
+from .drinks import (
+    DrinkOrder,
+    DrinkSubmission,
+    ServiceCategory,
+    ServiceResult,
+    evaluate_service,
+)
 from .engine import SimulationEngine, SimulationReport
 from .models import Commitment, Invitation, Memory, StoryArc
 from .providers import MockProvider, ModelProvider
@@ -21,9 +39,16 @@ __all__ = [
     "ThinkingMode",
     "SceneLine",
     "ScenePackage",
+    "OrderResolution",
     "DialogueLineDraft",
     "DialogueTurnContext",
     "DialogueUtterance",
+    "PlayerDialogueTurnContext",
+    "DrinkOrder",
+    "DrinkSubmission",
+    "ServiceCategory",
+    "ServiceResult",
+    "evaluate_service",
     "SimulationEngine",
     "SimulationReport",
     "WorldStore",
@@ -34,4 +59,4 @@ __all__ = [
     "StoryArc",
 ]
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"

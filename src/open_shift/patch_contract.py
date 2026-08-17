@@ -138,6 +138,7 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_bridge_controller_create.gml",
         "ag_bridge_controller_step.gml",
         "ag_bridge_controller_http.gml",
+        "ag_bridge_mixcontrol_append.gml",
     }
     sources = tuple(sorted(directory.glob("*.gml")))
     if {source.name for source in sources} != expected:
@@ -154,7 +155,15 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "out_of_apartment",
         "obj_textbox",
         "sprite_stella",
+        "/v1/orders/resolve",
+        "global.mod_aa",
+        '"jill"',
+        'ag_portrait_id != ""',
+        'ag_current_speaker != "jill"',
+        "ag_was_order_response",
     )
+    if "is_undefined(ag_portrait_id)" in combined:
+        raise PatchContractError("GML used the incompatible JSON null portrait check")
     missing = [item for item in required_boundaries if item not in combined]
     if missing:
         raise PatchContractError(

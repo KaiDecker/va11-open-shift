@@ -27,8 +27,12 @@ string[] requiredResources = new[]
     "gml_Object_extrachapter_text_Draw_0",
     "dialog_control",
     "gml_Object_dialog_control_Create_0",
+    "recipebook_bg",
+    "order_text",
     "obj_textbox",
     "gml_Script_reset_lips",
+    "gml_Script_resetmixer_2",
+    "gml_Script_mixcontrol",
     "sprite_dana",
     "sprite_doro",
     "sprite_alma",
@@ -161,13 +165,16 @@ if (global.cur_day == 1001 && !instance_exists(ag_bridge_controller))
     instance_create(x, y, ag_bridge_controller);
 }");
 
+UndertaleCode mixControl = Data.Code.ByName("gml_Script_mixcontrol");
+importGroup.QueueAppend(mixControl, ReadSource("ag_bridge_mixcontrol_append.gml"));
+
 importGroup.Import();
 
 string[] requiredFunctions = new[]
 {
     "http_request", "json_encode", "json_decode", "ds_exists", "ds_map_size",
     "ds_map_exists", "ds_map_find_value", "ds_map_create", "ds_map_add",
-    "ds_map_destroy", "ds_list_size", "ds_list_find_value", "ini_open",
+    "ds_map_destroy", "ds_map_add_map", "ds_list_size", "ds_list_find_value", "ini_open",
     "ini_read_real", "ini_read_string", "ini_close"
 };
 foreach (string name in requiredFunctions)
@@ -192,4 +199,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 5 patch compiled successfully.");
+ScriptMessage("Open Shift Stage 6 patch compiled successfully.");

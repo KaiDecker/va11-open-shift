@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
+from .drinks import DrinkOrder, ServiceResult
+
 
 PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = 64 * 1024
@@ -20,15 +22,19 @@ MAX_TEXT_CHARACTERS = 240
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
-ALLOWED_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
+AGENT_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
+ALLOWED_SPEAKERS = AGENT_SPEAKERS | {"jill"}
 SPEAKER_PORTRAITS = {
     "dana": "sprite_dana",
     "dorothy": "sprite_doro",
     "alma": "sprite_alma",
     "stella": "sprite_stella",
     "sei": "sprite_sei",
+    "jill": None,
 }
-ALLOWED_PORTRAITS = frozenset(SPEAKER_PORTRAITS.values())
+ALLOWED_PORTRAITS = frozenset(
+    portrait for portrait in SPEAKER_PORTRAITS.values() if portrait is not None
+)
 ALLOWED_EXPRESSIONS = frozenset({"neutral", "happy", "worry", "playful"})
 ALLOWED_RETURN_TARGETS = frozenset({"bar"})
 
@@ -45,7 +51,7 @@ class BridgeError(ValueError):
 class SceneLine:
     line_id: str
     speaker_id: str
-    portrait_id: str
+    portrait_id: str | None
     expression_id: str
     text: str
 
@@ -54,7 +60,10 @@ class SceneLine:
             raise ValueError("line_id was invalid")
         if self.speaker_id not in ALLOWED_SPEAKERS:
             raise ValueError("speaker_id was not allowed")
-        if self.portrait_id not in ALLOWED_PORTRAITS:
+        if self.speaker_id == "jill":
+            if self.portrait_id is not None:
+                raise ValueError("Jill must not have a portrait_id")
+        elif self.portrait_id not in ALLOWED_PORTRAITS:
             raise ValueError("portrait_id was not allowed")
         if self.portrait_id != SPEAKER_PORTRAITS[self.speaker_id]:
             raise ValueError("portrait_id did not match speaker_id")
@@ -65,11 +74,22 @@ class SceneLine:
         if any(ord(character) < 32 for character in self.text):
             raise ValueError("scene text contained a control character")
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "line_id": self.line_id,
             "speaker_id": self.speaker_id,
             "portrait_id": self.portrait_id,
+            "expression_id": self.expression_id,
+            "text": self.text,
+        }
+
+    def to_gamemaker_dict(self) -> dict[str, str]:
+        """Serialize the line for the legacy GameMaker JSON decoder."""
+
+        return {
+            "line_id": self.line_id,
+            "speaker_id": self.speaker_id,
+            "portrait_id": self.portrait_id or "",
             "expression_id": self.expression_id,
             "text": self.text,
         }
@@ -80,6 +100,7 @@ class ScenePackage:
     scene_id: str
     lines: tuple[SceneLine, ...]
     return_to: str = "bar"
+    order: DrinkOrder | None = None
 
     def __post_init__(self) -> None:
         if not _RESOURCE_ID.fullmatch(self.scene_id):
@@ -92,15 +113,26 @@ class ScenePackage:
             raise ValueError("return target was not allowed")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value: dict[str, Any] = {
             "scene_id": self.scene_id,
             "lines": [line.to_dict() for line in self.lines],
             "return_to": self.return_to,
         }
+        if self.order is not None:
+            value["order"] = self.order.to_dict()
+        return value
+
+    def to_gamemaker_dict(self) -> dict[str, Any]:
+        value = self.to_dict()
+        value["lines"] = [line.to_gamemaker_dict() for line in self.lines]
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ScenePackage":
-        if set(value) != {"scene_id", "lines", "return_to"}:
+        if set(value) not in (
+            {"scene_id", "lines", "return_to"},
+            {"scene_id", "lines", "return_to", "order"},
+        ):
             raise ValueError("persisted scene fields did not match the schema")
         raw_lines = value["lines"]
         if not isinstance(raw_lines, list):
@@ -115,7 +147,10 @@ class ScenePackage:
                 "text",
             }:
                 raise ValueError("persisted scene line fields did not match the schema")
-            if not all(isinstance(field, str) for field in item.values()):
+            if not all(
+                isinstance(field, str) or (key == "portrait_id" and field is None)
+                for key, field in item.items()
+            ):
                 raise ValueError("persisted scene line values must be strings")
             lines.append(
                 SceneLine(
@@ -130,7 +165,26 @@ class ScenePackage:
         return_to = value["return_to"]
         if not isinstance(scene_id, str) or not isinstance(return_to, str):
             raise ValueError("persisted scene identifiers must be strings")
-        return cls(scene_id, tuple(lines), return_to)
+        raw_order = value.get("order")
+        if raw_order is not None and not isinstance(raw_order, dict):
+            raise ValueError("persisted scene order must be an object")
+        order = DrinkOrder.from_dict(raw_order) if raw_order is not None else None
+        return cls(scene_id, tuple(lines), return_to, order)
+
+
+@dataclass(frozen=True, slots=True)
+class OrderResolution:
+    result: ServiceResult
+    scene: ScenePackage
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"result": self.result.to_dict(), "scene": self.scene.to_dict()}
+
+    def to_gamemaker_dict(self) -> dict[str, Any]:
+        return {
+            "result": self.result.to_dict(),
+            "scene": self.scene.to_gamemaker_dict(),
+        }
 
 
 def stage_three_scene() -> ScenePackage:
@@ -234,15 +288,18 @@ class BridgeApplication:
         *,
         scene_provider: Callable[[Mapping[str, Any]], ScenePackage] | None = None,
         ack_handler: Callable[[Mapping[str, Any]], None] | None = None,
+        order_handler: Callable[[Mapping[str, Any]], OrderResolution] | None = None,
         error_reporter: Callable[[str, Exception], None] | None = None,
     ) -> None:
         self.config = config
         self.scene = scene or stage_three_scene()
         self._scene_provider = scene_provider
         self._ack_handler = ack_handler
+        self._order_handler = order_handler
         self._error_reporter = error_reporter
         self._open_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._ack_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._order_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
 
     def _authenticate(self, headers: Mapping[str, str]) -> None:
@@ -318,6 +375,18 @@ class BridgeApplication:
                         "scene_ack_unavailable",
                         "the world service could not record the scene result",
                     ) from None
+            if method == "POST" and route == "/v1/orders/resolve":
+                try:
+                    return BridgeResponse(200, self._resolve_order(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("drink resolution", error)
+                    raise BridgeError(
+                        503,
+                        "order_resolution_unavailable",
+                        "the world service could not resolve the served drink",
+                    ) from None
             raise BridgeError(404, "not_found", "route was not found")
         except BridgeError as error:
             return BridgeResponse(
@@ -357,7 +426,7 @@ class BridgeApplication:
             response = {
                 "protocol_version": PROTOCOL_VERSION,
                 "request_id": request_id,
-                "scene": scene.to_dict(),
+                "scene": scene.to_gamemaker_dict(),
             }
             return self._idempotent(
                 self._open_requests, request_id, request, response
@@ -382,7 +451,7 @@ class BridgeApplication:
             )
         if self._ack_handler is None and request["scene_id"] != self.scene.scene_id:
             raise BridgeError(404, "unknown_scene", "scene_id was not known")
-        if request["outcome"] != "continued_in_bar":
+        if request["outcome"] not in {"continued_in_bar", "order_started"}:
             raise BridgeError(400, "invalid_outcome", "scene outcome was not allowed")
         response = {
             "protocol_version": PROTOCOL_VERSION,
@@ -401,6 +470,51 @@ class BridgeApplication:
                     raise BridgeError(404, "unknown_scene", str(exc)) from None
             return self._idempotent(
                 self._ack_requests, request_id, request, response
+            )
+
+    def _resolve_order(self, request: dict[str, Any]) -> dict[str, Any]:
+        _require_fields(
+            request,
+            {
+                "protocol_version",
+                "request_id",
+                "client_session_id",
+                "scene_id",
+                "order_id",
+                "drink",
+            },
+        )
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        _require_request_id(request["scene_id"])
+        _require_request_id(request["order_id"])
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(
+                409, "protocol_mismatch", "client protocol version was not supported"
+            )
+        if not isinstance(request["drink"], dict):
+            raise BridgeError(400, "invalid_drink", "drink must be a JSON object")
+        if self._order_handler is None:
+            raise BridgeError(404, "unknown_order", "order resolution was not enabled")
+        with self._cache_lock:
+            prior = self._order_requests.get(request_id)
+            if prior is not None:
+                return self._idempotent(
+                    self._order_requests, request_id, request, prior[1]
+                )
+            try:
+                resolution = self._order_handler(request)
+            except BridgeError:
+                raise
+            except (KeyError, ValueError) as exc:
+                raise BridgeError(400, "invalid_drink", str(exc)) from None
+            response = {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                **resolution.to_gamemaker_dict(),
+            }
+            return self._idempotent(
+                self._order_requests, request_id, request, response
             )
 
 
