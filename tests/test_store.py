@@ -46,7 +46,7 @@ class WorldStoreTests(unittest.TestCase):
                 store.set_meta("schema_version", 1)
 
             with WorldStore(path) as upgraded:
-                self.assertEqual(upgraded.get_meta("schema_version"), "2")
+                self.assertEqual(upgraded.get_meta("schema_version"), "3")
                 self.assertEqual(upgraded.get_agent("a").display_name, "A")
                 self.assertEqual(upgraded.list_invitations(), [])
                 self.assertEqual(upgraded.list_commitments(), [])

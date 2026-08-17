@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,7 +20,8 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+_ERROR_CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
 def _json_dump(value: Any) -> str:
@@ -199,6 +201,58 @@ class WorldStore:
 
                 CREATE INDEX IF NOT EXISTS idx_schedule_due
                 ON scheduled_events(tick, schedule_id);
+
+                CREATE TABLE IF NOT EXISTS daily_story_graphs (
+                    day_index INTEGER NOT NULL CHECK (day_index >= 1),
+                    generation_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('generating', 'ready', 'failed')
+                    ),
+                    source_tick INTEGER NOT NULL CHECK (source_tick >= 0),
+                    source_event_ids_json TEXT NOT NULL,
+                    graph_json TEXT,
+                    error_code TEXT,
+                    attempt_count INTEGER NOT NULL CHECK (attempt_count >= 1),
+                    PRIMARY KEY (day_index, generation_version),
+                    CHECK (
+                        (status = 'ready' AND graph_json IS NOT NULL AND error_code IS NULL)
+                        OR (status = 'generating' AND graph_json IS NULL AND error_code IS NULL)
+                        OR (status = 'failed' AND graph_json IS NULL AND error_code IS NOT NULL)
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS daily_story_progress (
+                    day_index INTEGER NOT NULL,
+                    generation_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('active', 'completed')),
+                    current_node_id TEXT,
+                    committed_branch_count INTEGER NOT NULL DEFAULT 0
+                        CHECK (committed_branch_count >= 0),
+                    PRIMARY KEY (day_index, generation_version),
+                    FOREIGN KEY (day_index, generation_version)
+                        REFERENCES daily_story_graphs(day_index, generation_version),
+                    CHECK (
+                        (status = 'active' AND current_node_id IS NOT NULL)
+                        OR (status = 'completed' AND current_node_id IS NULL)
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS story_branch_commits (
+                    day_index INTEGER NOT NULL,
+                    generation_version TEXT NOT NULL,
+                    order_id TEXT NOT NULL,
+                    arrival_node_id TEXT NOT NULL,
+                    result_node_id TEXT NOT NULL,
+                    category TEXT NOT NULL CHECK (
+                        category IN ('exact', 'acceptable', 'wrong', 'special')
+                    ),
+                    service_event_id INTEGER NOT NULL UNIQUE REFERENCES events(event_id),
+                    income_delta INTEGER NOT NULL CHECK (income_delta >= 0),
+                    PRIMARY KEY (day_index, generation_version, order_id),
+                    UNIQUE (order_id),
+                    FOREIGN KEY (day_index, generation_version)
+                        REFERENCES daily_story_graphs(day_index, generation_version)
+                );
                 """
             )
             self._conn.execute(
@@ -236,6 +290,288 @@ class WorldStore:
         if tick < self.current_tick:
             raise ValueError("world time cannot move backwards")
         self.set_meta("current_tick", tick)
+
+    def get_daily_story_graph(
+        self, day_index: int, generation_version: str
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM daily_story_graphs
+            WHERE day_index = ? AND generation_version = ?
+            """,
+            (day_index, generation_version),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "day_index": int(row["day_index"]),
+            "generation_version": str(row["generation_version"]),
+            "status": str(row["status"]),
+            "source_tick": int(row["source_tick"]),
+            "source_event_ids": tuple(json.loads(row["source_event_ids_json"])),
+            "graph": json.loads(row["graph_json"]) if row["graph_json"] else None,
+            "error_code": row["error_code"],
+            "attempt_count": int(row["attempt_count"]),
+        }
+
+    def list_daily_story_graphs(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            SELECT day_index, generation_version
+            FROM daily_story_graphs
+            ORDER BY day_index, generation_version
+            """
+        ).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            record = self.get_daily_story_graph(
+                int(row["day_index"]), str(row["generation_version"])
+            )
+            if record is None:
+                raise RuntimeError("daily story graph disappeared while listing")
+            records.append(record)
+        return records
+
+    def begin_daily_story_graph(
+        self,
+        day_index: int,
+        generation_version: str,
+        source_tick: int,
+        source_event_ids: Iterable[int],
+    ) -> dict[str, Any]:
+        event_ids = tuple(source_event_ids)
+        if (
+            day_index < 1
+            or source_tick < 0
+            or not generation_version
+            or not 1 <= len(event_ids) <= 3
+            or len(set(event_ids)) != len(event_ids)
+            or any(
+                isinstance(event_id, bool)
+                or not isinstance(event_id, int)
+                or event_id < 1
+                for event_id in event_ids
+            )
+        ):
+            raise ValueError("daily story graph generation input was invalid")
+        with self.transaction():
+            existing = self.get_daily_story_graph(day_index, generation_version)
+            if existing is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO daily_story_graphs(
+                        day_index, generation_version, status, source_tick,
+                        source_event_ids_json, graph_json, error_code, attempt_count
+                    ) VALUES(?, ?, 'generating', ?, ?, NULL, NULL, 1)
+                    """,
+                    (
+                        day_index,
+                        generation_version,
+                        source_tick,
+                        _json_dump(event_ids),
+                    ),
+                )
+            elif existing["status"] != "ready":
+                if (
+                    existing["source_tick"] != source_tick
+                    or existing["source_event_ids"] != event_ids
+                ):
+                    raise ValueError("daily story graph recovery source changed")
+                self._conn.execute(
+                    """
+                    UPDATE daily_story_graphs
+                    SET status = 'generating', graph_json = NULL,
+                        error_code = NULL, attempt_count = attempt_count + 1
+                    WHERE day_index = ? AND generation_version = ?
+                    """,
+                    (day_index, generation_version),
+                )
+        record = self.get_daily_story_graph(day_index, generation_version)
+        assert record is not None
+        return record
+
+    def complete_daily_story_graph(
+        self,
+        day_index: int,
+        generation_version: str,
+        graph: Mapping[str, Any],
+    ) -> None:
+        from .story_graph import DailyStoryGraph
+
+        validated = DailyStoryGraph.from_dict(graph)
+        if (
+            validated.day_index != day_index
+            or validated.generation_version != generation_version
+        ):
+            raise ValueError("daily story graph identity did not match its record")
+        with self.transaction():
+            record = self.get_daily_story_graph(day_index, generation_version)
+            if record is None or (
+                validated.source_tick != record["source_tick"]
+                or validated.source_event_ids != record["source_event_ids"]
+            ):
+                raise ValueError("daily story graph source did not match its record")
+            cursor = self._conn.execute(
+                """
+                UPDATE daily_story_graphs
+                SET status = 'ready', graph_json = ?, error_code = NULL
+                WHERE day_index = ? AND generation_version = ?
+                  AND status = 'generating'
+                """,
+                (_json_dump(validated.to_dict()), day_index, generation_version),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("daily story graph was not generating")
+            cursor = self._conn.execute(
+                """
+                INSERT INTO daily_story_progress(
+                    day_index, generation_version, status, current_node_id,
+                    committed_branch_count
+                ) VALUES(?, ?, 'active', ?, 0)
+                ON CONFLICT(day_index, generation_version) DO NOTHING
+                """,
+                (day_index, generation_version, validated.entry_node_id),
+            )
+
+    def fail_daily_story_graph(
+        self, day_index: int, generation_version: str, error_code: str
+    ) -> None:
+        if not _ERROR_CODE.fullmatch(error_code):
+            raise ValueError("daily story graph error_code was invalid")
+        with self._write_scope():
+            cursor = self._conn.execute(
+                """
+                UPDATE daily_story_graphs
+                SET status = 'failed', graph_json = NULL, error_code = ?
+                WHERE day_index = ? AND generation_version = ?
+                  AND status = 'generating'
+                """,
+                (error_code, day_index, generation_version),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("daily story graph was not generating")
+
+    def get_daily_story_progress(
+        self, day_index: int, generation_version: str
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM daily_story_progress
+            WHERE day_index = ? AND generation_version = ?
+            """,
+            (day_index, generation_version),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "day_index": int(row["day_index"]),
+            "generation_version": str(row["generation_version"]),
+            "status": str(row["status"]),
+            "current_node_id": row["current_node_id"],
+            "committed_branch_count": int(row["committed_branch_count"]),
+        }
+
+    def advance_daily_story_cursor(
+        self,
+        day_index: int,
+        generation_version: str,
+        expected_node_id: str,
+        next_node_id: str | None,
+    ) -> None:
+        status = "completed" if next_node_id is None else "active"
+        with self._write_scope():
+            cursor = self._conn.execute(
+                """
+                UPDATE daily_story_progress
+                SET status = ?, current_node_id = ?
+                WHERE day_index = ? AND generation_version = ?
+                  AND status = 'active' AND current_node_id = ?
+                """,
+                (
+                    status,
+                    next_node_id,
+                    day_index,
+                    generation_version,
+                    expected_node_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("daily story cursor did not match the expected node")
+
+    def get_story_branch_commit(self, order_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT * FROM story_branch_commits WHERE order_id = ?", (order_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "day_index": int(row["day_index"]),
+            "generation_version": str(row["generation_version"]),
+            "order_id": str(row["order_id"]),
+            "arrival_node_id": str(row["arrival_node_id"]),
+            "result_node_id": str(row["result_node_id"]),
+            "category": str(row["category"]),
+            "service_event_id": int(row["service_event_id"]),
+            "income_delta": int(row["income_delta"]),
+        }
+
+    def record_story_branch_commit(
+        self,
+        *,
+        day_index: int,
+        generation_version: str,
+        order_id: str,
+        arrival_node_id: str,
+        result_node_id: str,
+        category: str,
+        service_event_id: int,
+        income_delta: int,
+    ) -> None:
+        if category not in {"exact", "acceptable", "wrong", "special"}:
+            raise ValueError("story branch category was invalid")
+        if service_event_id < 1 or income_delta < 0:
+            raise ValueError("story branch effects were invalid")
+        with self._write_scope():
+            self._conn.execute(
+                """
+                INSERT INTO story_branch_commits(
+                    day_index, generation_version, order_id, arrival_node_id,
+                    result_node_id, category, service_event_id, income_delta
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    day_index,
+                    generation_version,
+                    order_id,
+                    arrival_node_id,
+                    result_node_id,
+                    category,
+                    service_event_id,
+                    income_delta,
+                ),
+            )
+            cursor = self._conn.execute(
+                """
+                UPDATE daily_story_progress
+                SET committed_branch_count = committed_branch_count + 1
+                WHERE day_index = ? AND generation_version = ?
+                """,
+                (day_index, generation_version),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("daily story progress was missing for branch commit")
+
+    def list_story_branch_commits(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT order_id FROM story_branch_commits ORDER BY service_event_id"
+        ).fetchall()
+        commits: list[dict[str, Any]] = []
+        for row in rows:
+            commit = self.get_story_branch_commit(str(row["order_id"]))
+            if commit is None:
+                raise RuntimeError("story branch commit disappeared while listing")
+            commits.append(commit)
+        return commits
 
     def add_agent(self, agent: AgentState) -> None:
         with self._write_scope():
@@ -838,6 +1174,18 @@ class WorldStore:
     def dump_state(self) -> dict[str, Any]:
         return {
             "current_tick": self.current_tick,
+            "daily_story_graphs": self.list_daily_story_graphs(),
+            "daily_story_progress": [
+                progress
+                for graph in self.list_daily_story_graphs()
+                if (
+                    progress := self.get_daily_story_progress(
+                        graph["day_index"], graph["generation_version"]
+                    )
+                )
+                is not None
+            ],
+            "story_branch_commits": self.list_story_branch_commits(),
             "agents": [
                 {
                     "agent_id": agent.agent_id,

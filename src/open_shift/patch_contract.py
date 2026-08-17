@@ -160,8 +160,17 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         '"jill"',
         'ag_portrait_id != ""',
         'ag_current_speaker != "jill"',
+        'ag_current_speaker != "jill" && ag_current_speaker != ""',
+        'ag_speaker_id == ""',
+        "冰箱压缩机在吧台后低声运转。",
+        "story_generation_failed",
         "ag_was_order_response",
+        '"income_delta"',
+        "global.cashcounter += ag_income_delta",
+        "global.barscore += ag_income_delta",
     )
+    if "global.money" in combined:
+        raise PatchContractError("GML used a nonexistent original money variable")
     if "is_undefined(ag_portrait_id)" in combined:
         raise PatchContractError("GML used the incompatible JSON null portrait check")
     missing = [item for item in required_boundaries if item not in combined]

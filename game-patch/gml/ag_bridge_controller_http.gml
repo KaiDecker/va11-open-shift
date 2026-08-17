@@ -30,7 +30,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             else if (ag_was_order_response)
                 ag_error_message = "O.S.：本轮调酒结果无法确认，请查看启动窗口。";
             else if (ag_http_status == 503)
-                ag_error_message = "O.S.：本轮对话生成失败，请查看启动窗口。";
+                ag_error_message = "O.S.：剧情生成失败（story_generation_failed）。关闭本段后重新进入即可重试。";
             else if (ag_http_status <= 0)
                 ag_error_message = "O.S.：本地服务连接中断，请确认启动命令仍在运行。";
             else
@@ -88,7 +88,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
 
         if (!ds_exists(ag_root, ds_type_map))
             ag_valid = false;
-        if (ag_valid && ((!ag_is_order_response && ds_map_size(ag_root) != 3) || (ag_is_order_response && ds_map_size(ag_root) != 4)))
+        if (ag_valid && ((!ag_is_order_response && ds_map_size(ag_root) != 3) || (ag_is_order_response && ds_map_size(ag_root) != 5)))
             ag_valid = false;
         if (ag_valid && (!ds_map_exists(ag_root, "protocol_version") || ds_map_find_value(ag_root, "protocol_version") != 1))
             ag_valid = false;
@@ -101,7 +101,11 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         {
             var ag_service_result;
             var ag_service_category;
+            var ag_income_delta;
             ag_service_result = ds_map_find_value(ag_root, "result");
+            ag_income_delta = ds_map_find_value(ag_root, "income_delta");
+            if (!ds_map_exists(ag_root, "income_delta") || ag_income_delta < 0 || ag_income_delta > 10000 || floor(ag_income_delta) != ag_income_delta)
+                ag_valid = false;
             if (!ds_map_exists(ag_root, "result") || !ds_exists(ag_service_result, ds_type_map) || ds_map_size(ag_service_result) != 6)
                 ag_valid = false;
             if (ag_valid && (!ds_map_exists(ag_service_result, "order_id") || !ds_map_exists(ag_service_result, "customer_id") || !ds_map_exists(ag_service_result, "category") || !ds_map_exists(ag_service_result, "beverage_id") || !ds_map_exists(ag_service_result, "beverage_name") || !ds_map_exists(ag_service_result, "alcoholic")))
@@ -131,7 +135,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_scene_id = ds_map_find_value(ag_scene, "scene_id");
             ag_return_to = ds_map_find_value(ag_scene, "return_to");
             ag_lines = ds_map_find_value(ag_scene, "lines");
-            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
+            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_" && string_copy(ag_scene_id, 1, 4) != "day_" && string_copy(ag_scene_id, 1, 8) != "opening_" && string_copy(ag_scene_id, 1, 8) != "waiting_" && string_copy(ag_scene_id, 1, 9) != "doorbell_" && string_copy(ag_scene_id, 1, 8) != "closing_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
                 ag_valid = false;
         }
 
@@ -190,9 +194,14 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                 ag_portrait_id = ds_map_find_value(ag_line, "portrait_id");
                 ag_expression_id = ds_map_find_value(ag_line, "expression_id");
                 ag_line_text = ds_map_find_value(ag_line, "text");
-                if (ag_speaker_id != "dana" && ag_speaker_id != "dorothy" && ag_speaker_id != "alma" && ag_speaker_id != "stella" && ag_speaker_id != "sei" && ag_speaker_id != "jill")
+                if (ag_speaker_id != "" && ag_speaker_id != "dana" && ag_speaker_id != "dorothy" && ag_speaker_id != "alma" && ag_speaker_id != "stella" && ag_speaker_id != "sei" && ag_speaker_id != "jill")
                     ag_valid = false;
-                if (ag_speaker_id == "jill")
+                if (ag_speaker_id == "")
+                {
+                    if (ag_portrait_id != "" || ag_expression_id != "neutral")
+                        ag_valid = false;
+                }
+                else if (ag_speaker_id == "jill")
                 {
                     if (ag_portrait_id != "")
                         ag_valid = false;
@@ -229,6 +238,11 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
 
         if (ag_valid)
         {
+            if (ag_is_order_response)
+            {
+                global.cashcounter += ag_income_delta;
+                global.barscore += ag_income_delta;
+            }
             ag_line_index = 0;
             if (ag_is_order_response)
                 ag_order_started = 0;
