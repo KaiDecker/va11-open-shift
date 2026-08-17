@@ -96,7 +96,7 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 7)
+        self.assertEqual(len(sources), 8)
 
     def test_menu_entry_matches_reference_chapter_layout(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -116,6 +116,9 @@ class PatchContractTests(unittest.TestCase):
         controller_create = (
             root / "game-patch" / "gml" / "ag_bridge_controller_create.gml"
         ).read_text(encoding="utf-8")
+        mixcontrol = (
+            root / "game-patch" / "gml" / "ag_bridge_mixcontrol_append.gml"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('Data.Sprites.ByName("blue_chapter")', patch)
         self.assertIn('Data.Sprites.ByName("yellow_chapter")', patch)
@@ -130,6 +133,7 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("dialogfont2", patch)
         self.assertIn("ch_small", patch)
         self.assertIn('Data.Code.ByName("gml_Object_dialog_control_Create_0")', patch)
+        self.assertIn('Data.Code.ByName("gml_Script_mixcontrol")', patch)
         self.assertIn("obj_textbox", controller)
         self.assertIn("sprite_stella", controller)
         self.assertIn("ag_name_color", controller)
@@ -142,13 +146,26 @@ class PatchContractTests(unittest.TestCase):
         self.assertNotIn("draw_rectangle", controller)
         self.assertNotIn("out_to_title", controller)
         self.assertIn('"continued_in_bar"', controller)
-        self.assertIn("ds_list_size(ag_lines) < 3", controller_http)
+        self.assertIn("ds_list_size(ag_lines) < 1", controller_http)
         self.assertIn("ds_list_size(ag_lines) > 8", controller_http)
         self.assertIn("ag_line_count = ds_list_size(ag_lines)", controller_http)
         self.assertIn("current_time + 120000", controller_create)
         self.assertIn("current_time + 120000", controller_http)
         self.assertIn("正在准备下一段对话", controller)
         self.assertIn("API调用额度已用完", controller_http)
+        self.assertIn('ag_speaker_id != "jill"', controller_http)
+        self.assertIn('ag_portrait_id != ""', controller_http)
+        self.assertNotIn("is_undefined(ag_portrait_id)", controller_http)
+        self.assertIn('ag_current_speaker != "jill"', controller)
+        self.assertNotIn('"ini_close", "is_undefined"', patch)
+        self.assertIn("ag_was_order_response = (ag_state == 7)", controller_http)
+        self.assertIn("else if (ag_was_order_response)", controller_http)
+        self.assertIn("resetmixer_2()", controller_http)
+        self.assertIn('"order_started"', controller)
+        self.assertIn('"/v1/orders/resolve"', mixcontrol)
+        self.assertIn("global.mod_aa", mixcontrol)
+        self.assertIn("global.failed_a", mixcontrol)
+        self.assertNotIn("claimed_result", mixcontrol)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -157,6 +174,21 @@ class PatchContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(PatchContractError, "did not match"):
                 validate_patch_source_tree(temp_dir)
+
+    def test_legacy_jill_null_check_is_rejected(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "game-patch" / "gml"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            copy = Path(temp_dir)
+            for source in root.glob("*.gml"):
+                text = source.read_text(encoding="utf-8")
+                if source.name == "ag_bridge_controller_http.gml":
+                    text = text.replace(
+                        'ag_portrait_id != ""',
+                        "!is_undefined(ag_portrait_id)",
+                    )
+                (copy / source.name).write_text(text, encoding="utf-8")
+            with self.assertRaisesRegex(PatchContractError, "null portrait"):
+                validate_patch_source_tree(copy)
 
 
 if __name__ == "__main__":

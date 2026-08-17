@@ -21,11 +21,16 @@ from urllib.parse import urlparse
 from .dialogue import (
     DIALOGUE_OUTPUT_SCHEMA,
     DIALOGUE_SYSTEM_INSTRUCTION,
+    PLAYER_DIALOGUE_OUTPUT_SCHEMA,
+    PLAYER_DIALOGUE_SYSTEM_INSTRUCTION,
     DialogueLineDraft,
     DialogueTurnContext,
+    PlayerDialogueTurnContext,
     dialogue_input_json,
     normalize_dialogue_output,
+    player_dialogue_input_json,
     validate_dialogue_output,
+    validate_player_dialogue_output,
 )
 from .models import (
     ActionProposal,
@@ -424,6 +429,53 @@ def _dialogue_chat_payload(
     return payload
 
 
+def _player_dialogue_responses_payload(
+    config: BYOKConfig, context: PlayerDialogueTurnContext
+) -> dict[str, Any]:
+    output_format: dict[str, Any]
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        output_format = {"type": "json_object"}
+    else:
+        output_format = {
+            "type": "json_schema",
+            "name": "player_dialogue_line",
+            "strict": True,
+            "schema": PLAYER_DIALOGUE_OUTPUT_SCHEMA,
+        }
+    return {
+        "model": config.model,
+        "instructions": PLAYER_DIALOGUE_SYSTEM_INSTRUCTION,
+        "input": player_dialogue_input_json(context),
+        "text": {"format": output_format},
+    }
+
+
+def _player_dialogue_chat_payload(
+    config: BYOKConfig, context: PlayerDialogueTurnContext
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": config.model,
+        "max_tokens": 160,
+        "messages": [
+            {"role": "system", "content": PLAYER_DIALOGUE_SYSTEM_INSTRUCTION},
+            {"role": "user", "content": player_dialogue_input_json(context)},
+        ],
+    }
+    _apply_chat_thinking(config, payload)
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        payload["response_format"] = {"type": "json_object"}
+    else:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "player_dialogue_line",
+                "strict": True,
+                "schema": PLAYER_DIALOGUE_OUTPUT_SCHEMA,
+            },
+        }
+    return payload
+
+
 def _extract_responses_output(response: Mapping[str, Any]) -> str | dict[str, Any]:
     direct = response.get("output_text")
     if isinstance(direct, str):
@@ -676,5 +728,29 @@ class BYOKProvider:
                 raise BYOKValidationError(str(exc)) from None
         try:
             return validate_dialogue_output(value, context)
+        except ValueError as exc:
+            raise BYOKValidationError(str(exc)) from None
+
+    def generate_player_dialogue_line(
+        self, context: PlayerDialogueTurnContext
+    ) -> DialogueLineDraft:
+        response = self._request(
+            _player_dialogue_responses_payload(self.config, context)
+            if self.config.protocol is APIProtocol.RESPONSES
+            else _player_dialogue_chat_payload(self.config, context)
+        )
+        raw = (
+            _extract_responses_output(response)
+            if self.config.protocol is APIProtocol.RESPONSES
+            else _extract_chat_output(response)
+        )
+        value = _as_action_object(raw)
+        if self.config.response_format is ResponseFormat.JSON_OBJECT:
+            try:
+                value = normalize_dialogue_output(value)
+            except ValueError as exc:
+                raise BYOKValidationError(str(exc)) from None
+        try:
+            return validate_player_dialogue_output(value, context)
         except ValueError as exc:
             raise BYOKValidationError(str(exc)) from None

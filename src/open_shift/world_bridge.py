@@ -8,12 +8,28 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .bridge import BridgeError, SPEAKER_PORTRAITS, SceneLine, ScenePackage
+from .bridge import (
+    BridgeError,
+    OrderResolution,
+    SPEAKER_PORTRAITS,
+    SceneLine,
+    ScenePackage,
+)
 from .byok import BYOKBudgetExceeded
 from .dialogue import (
     DialogueTurnContext,
     DialogueUtterance,
+    PlayerDialogueTurnContext,
     validate_dialogue_output,
+    validate_player_dialogue_output,
+)
+from .drinks import (
+    DrinkOrder,
+    DrinkSubmission,
+    ServiceCategory,
+    ServiceResult,
+    evaluate_service,
+    order_for_customer,
 )
 from .engine import SimulationEngine
 from .models import DAY_MINUTES
@@ -27,6 +43,7 @@ _NON_NARRATIVE_EVENTS = {
     "action_rejected",
     "agent_dialogue_completed",
     "dialogue_provider_error",
+    "drink_served",
     "player_scene_ack",
     "provider_error",
 }
@@ -113,37 +130,44 @@ class WorldSceneService:
         )
 
     @staticmethod
+    def _customer(participants: tuple[str, str]) -> str:
+        if participants[0] == "dana":
+            return participants[1]
+        return participants[0]
+
+    @staticmethod
     def _fallback_scene(
         event: Mapping[str, Any], display_names: Mapping[str, str], current_tick: int
     ) -> ScenePackage:
         event_id = int(event["event_id"])
-        speaker, target_speaker = WorldSceneService._participants(event)
-        actor = display_names.get(speaker, speaker.title())
-        target = display_names.get(target_speaker, target_speaker.title())
+        participants = WorldSceneService._participants(event)
+        customer = WorldSceneService._customer(participants)
+        other = next(item for item in participants if item != customer)
+        order = order_for_customer(customer, event_id)
         lines = (
             SceneLine(
-                "world_1",
-                speaker,
-                SPEAKER_PORTRAITS[speaker],
-                "worry",
-                f"{target}，我有件事想和你谈谈。",
-            ),
-            SceneLine(
-                "world_2",
-                target_speaker,
-                SPEAKER_PORTRAITS[target_speaker],
+                "fallback_1",
+                customer,
+                SPEAKER_PORTRAITS[customer],
                 "neutral",
-                f"我在听，{actor}。慢慢说。",
+                order.display_text,
             ),
             SceneLine(
-                "world_3",
-                speaker,
-                SPEAKER_PORTRAITS[speaker],
-                "happy",
-                "我们一起想想接下来该怎么办。",
+                "fallback_2",
+                "jill",
+                None,
+                "neutral",
+                f"好，{order.requested_name}。稍等。",
+            ),
+            SceneLine(
+                "fallback_3",
+                other,
+                SPEAKER_PORTRAITS[other],
+                "neutral",
+                "看来现在轮到吧台说话了。",
             ),
         )
-        return ScenePackage(f"world_event_{event_id}", lines)
+        return ScenePackage(f"world_event_{event_id}", lines, order=order)
 
     def _generated_scene(
         self,
@@ -154,50 +178,207 @@ class WorldSceneService:
         provider: ModelProvider,
     ) -> ScenePackage:
         generator = getattr(provider, "generate_dialogue_line", None)
-        if not callable(generator):
+        player_generator = getattr(provider, "generate_player_dialogue_line", None)
+        if not callable(generator) or not callable(player_generator):
             return self._fallback_scene(event, display_names, current_tick)
 
         event_id = int(event["event_id"])
         scene_id = f"world_event_{event_id}"
         participants = self._participants(event)
-        # Three dependent Agent turns keep the exchange responsive while each
-        # speaker still sees the public result of the previous turn.
+        customer = self._customer(participants)
+        other = next(item for item in participants if item != customer)
+        order = order_for_customer(customer, event_id)
+        public_participants = tuple(dict.fromkeys((*participants, "jill")))
         turn_count = 3
-        speaker_order = tuple(
-            participants[index % len(participants)] for index in range(turn_count)
+        premise = (
+            self._event_premise(event, display_names, current_tick)
+            + f" {display_names.get(customer, customer.title())}明确点了"
+            + f"{order.requested_name}，Jill 正在吧台后确认这份点单。"
         )
-        premise = self._event_premise(event, display_names, current_tick)
-        transcript: list[DialogueUtterance] = []
-        lines: list[SceneLine] = []
-        for index, speaker_id in enumerate(speaker_order):
-            context = DialogueTurnContext(
-                scene_id=scene_id,
-                turn_index=index,
-                turn_count=turn_count,
-                premise=premise,
-                speaker=engine.context_for_agent(current_tick, speaker_id),
-                participant_ids=participants,
-                transcript=tuple(transcript),
-            )
-            proposed = generator(context)
-            draft = validate_dialogue_output(
-                {
-                    "expression_id": proposed.expression_id,
-                    "text": proposed.text,
-                },
-                context,
-            )
-            transcript.append(DialogueUtterance(speaker_id, draft.text))
-            lines.append(
+        transcript = [DialogueUtterance(customer, order.display_text)]
+        player_context = PlayerDialogueTurnContext(
+            scene_id,
+            1,
+            turn_count,
+            premise,
+            public_participants,
+            tuple(transcript),
+        )
+        player_proposed = player_generator(player_context)
+        player_draft = validate_player_dialogue_output(
+            {
+                "expression_id": player_proposed.expression_id,
+                "text": player_proposed.text,
+            },
+            player_context,
+        )
+        transcript.append(DialogueUtterance("jill", player_draft.text))
+        agent_context = DialogueTurnContext(
+            scene_id=scene_id,
+            turn_index=2,
+            turn_count=turn_count,
+            premise=premise,
+            speaker=engine.context_for_agent(current_tick, other),
+            participant_ids=public_participants,
+            transcript=tuple(transcript),
+        )
+        agent_proposed = generator(agent_context)
+        agent_draft = validate_dialogue_output(
+            {
+                "expression_id": agent_proposed.expression_id,
+                "text": agent_proposed.text,
+            },
+            agent_context,
+        )
+        lines = (
+            SceneLine(
+                "dialogue_1",
+                customer,
+                SPEAKER_PORTRAITS[customer],
+                "neutral",
+                order.display_text,
+            ),
+            SceneLine("dialogue_2", "jill", None, "neutral", player_draft.text),
+            SceneLine(
+                "dialogue_3",
+                other,
+                SPEAKER_PORTRAITS[other],
+                agent_draft.expression_id,
+                agent_draft.text,
+            ),
+        )
+        return ScenePackage(scene_id, lines, order=order)
+
+    @staticmethod
+    def _result_closing(result: ServiceResult) -> str:
+        return {
+            ServiceCategory.EXACT: "嗯，就是这个。",
+            ServiceCategory.ACCEPTABLE: "不是原来那杯，不过这个也不错。",
+            ServiceCategory.WRONG: "……Jill，这杯好像不太对。",
+            ServiceCategory.SPECIAL: "这个分量很有诚意。",
+        }[result.category]
+
+    @staticmethod
+    def _result_premise(order: DrinkOrder, result: ServiceResult) -> str:
+        meanings = {
+            ServiceCategory.EXACT: "Jill准确完成了点单",
+            ServiceCategory.ACCEPTABLE: "Jill做的不是原点单，但符合顾客公开偏好",
+            ServiceCategory.WRONG: "Jill端出的饮品没有满足点单",
+            ServiceCategory.SPECIAL: "Jill准确完成点单并做成了加大杯",
+        }
+        return (
+            f"{order.customer_id}点了{order.requested_name}。"
+            f"规则层确认端上的是{result.beverage_name}；"
+            f"{meanings[result.category]}。角色只对这个既定事实作出反应。"
+        )
+
+    @staticmethod
+    def _fallback_reaction(
+        order: DrinkOrder, result: ServiceResult, service_event_id: int
+    ) -> ScenePackage:
+        opening = {
+            ServiceCategory.EXACT: f"这杯{result.beverage_name}正合适。",
+            ServiceCategory.ACCEPTABLE: f"{result.beverage_name}？和我点的不一样，不过可以试试。",
+            ServiceCategory.WRONG: "这个味道不对。你是不是拿错杯子了？",
+            ServiceCategory.SPECIAL: f"加大杯的{result.beverage_name}？今天这么大方？",
+        }[result.category]
+        jill_line = {
+            ServiceCategory.EXACT: "配方没跑。慢慢喝。",
+            ServiceCategory.ACCEPTABLE: "确实不是原单。你愿意的话，这杯算我的建议。",
+            ServiceCategory.WRONG: "是我失手了。下一杯我重做。",
+            ServiceCategory.SPECIAL: "杯子大了，配方还是那杯。",
+        }[result.category]
+        lines = (
+            SceneLine(
+                "fallback_1",
+                order.customer_id,
+                SPEAKER_PORTRAITS[order.customer_id],
+                "neutral",
+                opening,
+            ),
+            SceneLine("fallback_2", "jill", None, "neutral", jill_line),
+            SceneLine(
+                "fallback_3",
+                order.customer_id,
+                SPEAKER_PORTRAITS[order.customer_id],
+                "neutral",
+                WorldSceneService._result_closing(result),
+            ),
+        )
+        return ScenePackage(f"order_result_{service_event_id}", lines)
+
+    def _generated_reaction(
+        self,
+        order: DrinkOrder,
+        result: ServiceResult,
+        service_event_id: int,
+        current_tick: int,
+        engine: SimulationEngine,
+        provider: ModelProvider,
+    ) -> ScenePackage:
+        generator = getattr(provider, "generate_dialogue_line", None)
+        player_generator = getattr(provider, "generate_player_dialogue_line", None)
+        if not callable(generator) or not callable(player_generator):
+            return self._fallback_reaction(order, result, service_event_id)
+        scene_id = f"order_result_{service_event_id}"
+        participants = (order.customer_id, "jill")
+        premise = self._result_premise(order, result)
+        customer_context = DialogueTurnContext(
+            scene_id,
+            0,
+            3,
+            premise,
+            engine.context_for_agent(current_tick, order.customer_id),
+            participants,
+            (),
+            result,
+        )
+        customer_proposed = generator(customer_context)
+        customer_draft = validate_dialogue_output(
+            {
+                "expression_id": customer_proposed.expression_id,
+                "text": customer_proposed.text,
+            },
+            customer_context,
+        )
+        transcript = [DialogueUtterance(order.customer_id, customer_draft.text)]
+        player_context = PlayerDialogueTurnContext(
+            scene_id,
+            1,
+            3,
+            premise,
+            participants,
+            tuple(transcript),
+            result,
+        )
+        player_proposed = player_generator(player_context)
+        player_draft = validate_player_dialogue_output(
+            {
+                "expression_id": player_proposed.expression_id,
+                "text": player_proposed.text,
+            },
+            player_context,
+        )
+        return ScenePackage(
+            scene_id,
+            (
                 SceneLine(
-                    f"dialogue_{index + 1}",
-                    speaker_id,
-                    SPEAKER_PORTRAITS[speaker_id],
-                    draft.expression_id,
-                    draft.text,
-                )
-            )
-        return ScenePackage(scene_id, tuple(lines))
+                    "dialogue_1",
+                    order.customer_id,
+                    SPEAKER_PORTRAITS[order.customer_id],
+                    customer_draft.expression_id,
+                    customer_draft.text,
+                ),
+                SceneLine("dialogue_2", "jill", None, "neutral", player_draft.text),
+                SceneLine(
+                    "dialogue_3",
+                    order.customer_id,
+                    SPEAKER_PORTRAITS[order.customer_id],
+                    "neutral",
+                    self._result_closing(result),
+                ),
+            ),
+        )
 
     @staticmethod
     def _find_event(store: WorldStore, event_id: int) -> dict[str, Any]:
@@ -229,8 +410,9 @@ class WorldSceneService:
             line.line_id.startswith("dialogue_") for line in scene.lines
         ):
             return
-        participants = tuple(dict.fromkeys(line.speaker_id for line in scene.lines))
-        if len(participants) < 2:
+        speakers = tuple(dict.fromkeys(line.speaker_id for line in scene.lines))
+        participants = tuple(item for item in speakers if item in _AGENT_IDS)
+        if not participants:
             return
         display_names = {
             agent.agent_id: agent.display_name for agent in store.list_agents()
@@ -240,15 +422,15 @@ class WorldSceneService:
             store.current_tick,
             "agent_dialogue_completed",
             participants[0],
-            participants[1],
+            participants[1] if len(participants) > 1 else None,
             {
                 "scene_id": scene.scene_id,
                 "source_event_id": source_event_id,
-                "participants": list(participants),
+                "participants": list(speakers),
                 "summary": summary,
             },
         )
-        tags = {"dialogue", "va11_hall_a", *participants}
+        tags = {"dialogue", "va11_hall_a", *speakers}
         for participant_id in participants:
             store.append_memory(
                 participant_id,
@@ -299,13 +481,13 @@ class WorldSceneService:
                             store.current_tick,
                             "world_snapshot",
                             None,
-                            payload={"source": "stage_5_bridge"},
+                            payload={"source": "stage_6_bridge"},
                         )
                         events = [store.list_events()[-1]]
                     event = events[-1]
                     issue_tick = store.current_tick
                     record = {
-                        "dialogue_version": 1,
+                        "dialogue_version": 2,
                         "event_id": event["event_id"],
                         "issue_tick": issue_tick,
                         "request": request_json,
@@ -390,6 +572,165 @@ class WorldSceneService:
                 )
             return scene
 
+    def resolve_order(self, request: Mapping[str, Any]) -> OrderResolution:
+        scene_id = str(request["scene_id"])
+        order_id = str(request["order_id"])
+        raw_drink = request["drink"]
+        if not isinstance(raw_drink, Mapping):
+            raise ValueError("drink must be an object")
+        submission = DrinkSubmission.from_dict(raw_drink)
+        normalized_drink = submission.to_dict()
+        request_json = json.dumps(
+            dict(request), separators=(",", ":"), sort_keys=True
+        )
+        resolution_input = json.dumps(
+            {
+                "scene_id": scene_id,
+                "order_id": order_id,
+                "drink": normalized_drink,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        with self._lock, WorldStore(self.db_path) as store:
+            source_event = store.get_meta(f"bridge_scene:{scene_id}")
+            try:
+                source_event_id = int(source_event or "")
+            except ValueError:
+                raise KeyError("scene_id was not issued by the bridge") from None
+            scene_payload = store.get_meta(f"bridge_scene_payload:{scene_id}")
+            if scene_payload is None:
+                raise KeyError("scene payload was not issued by the bridge")
+            source_scene = ScenePackage.from_dict(json.loads(scene_payload))
+            order = source_scene.order
+            if order is None or order.order_id != order_id:
+                raise KeyError("order_id did not belong to the scene")
+            if store.get_meta(f"bridge_ack:{scene_id}") is None:
+                raise BridgeError(
+                    409,
+                    "scene_not_acknowledged",
+                    "the order scene must be acknowledged before serving a drink",
+                )
+
+            request_key = f"bridge_order_request:{request['request_id']}"
+            order_key = f"bridge_order:{order_id}"
+            with store.transaction():
+                prior_request = store.get_meta(request_key)
+                if prior_request is not None and prior_request != request_json:
+                    raise BridgeError(
+                        409,
+                        "request_id_conflict",
+                        "request_id was already used with different content",
+                    )
+                prior_order = store.get_meta(order_key)
+                if prior_order is not None:
+                    record = json.loads(prior_order)
+                    if record.get("resolution_input") != resolution_input:
+                        raise BridgeError(
+                            409,
+                            "order_already_resolved",
+                            "the order was already resolved with a different drink",
+                        )
+                    result = ServiceResult.from_dict(record["result"])
+                    service_event_id = int(record["service_event_id"])
+                    persisted_scene = record.get("scene")
+                    store.set_meta(request_key, request_json)
+                    if isinstance(persisted_scene, dict):
+                        return OrderResolution(
+                            result, ScenePackage.from_dict(persisted_scene)
+                        )
+                else:
+                    result = evaluate_service(order, submission)
+                    service_event_id = store.append_event(
+                        store.current_tick,
+                        "drink_served",
+                        order.customer_id,
+                        payload={
+                            "source_scene_id": scene_id,
+                            "source_event_id": source_event_id,
+                            "order": order.to_dict(),
+                            "drink": normalized_drink,
+                            "result": result.to_dict(),
+                        },
+                    )
+                    record = {
+                        "resolution_input": resolution_input,
+                        "service_event_id": service_event_id,
+                        "result": result.to_dict(),
+                        "scene": None,
+                    }
+                    store.set_meta(
+                        order_key,
+                        json.dumps(
+                            record,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                    )
+                    store.set_meta(request_key, request_json)
+
+            provider = self.provider_factory()
+            engine = self._engine(store, provider)
+            try:
+                reaction = self._generated_reaction(
+                    order,
+                    result,
+                    service_event_id,
+                    store.current_tick,
+                    engine,
+                    provider,
+                )
+            except Exception as exc:
+                self._report_error("drink reaction generation", exc)
+                store.append_event(
+                    store.current_tick,
+                    "dialogue_provider_error",
+                    order.customer_id,
+                    payload={
+                        "error_type": type(exc).__name__,
+                        "source_event_id": service_event_id,
+                    },
+                )
+                reaction = self._fallback_reaction(order, result, service_event_id)
+
+            with store.transaction():
+                latest = json.loads(store.get_meta(order_key) or "{}")
+                if latest.get("resolution_input") != resolution_input:
+                    raise BridgeError(
+                        409,
+                        "order_already_resolved",
+                        "the order resolution changed while generating dialogue",
+                    )
+                persisted_scene = latest.get("scene")
+                if isinstance(persisted_scene, dict):
+                    return OrderResolution(
+                        result, ScenePackage.from_dict(persisted_scene)
+                    )
+                latest["scene"] = reaction.to_dict()
+                store.set_meta(
+                    order_key,
+                    json.dumps(
+                        latest,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+                store.set_meta(
+                    f"bridge_scene:{reaction.scene_id}", service_event_id
+                )
+                store.set_meta(
+                    f"bridge_scene_payload:{reaction.scene_id}",
+                    json.dumps(
+                        reaction.to_dict(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+            return OrderResolution(result, reaction)
+
     def ack_scene(self, request: Mapping[str, Any]) -> None:
         scene_id = str(request["scene_id"])
         with self._lock, WorldStore(self.db_path) as store:
@@ -403,6 +744,19 @@ class WorldSceneService:
             )
             if not exists:
                 raise KeyError("scene_id was not issued by the bridge")
+            scene_payload = store.get_meta(f"bridge_scene_payload:{scene_id}")
+            if scene_payload is None:
+                raise KeyError("scene payload was not issued by the bridge")
+            scene = ScenePackage.from_dict(json.loads(scene_payload))
+            expected_outcome = (
+                "order_started" if scene.order is not None else "continued_in_bar"
+            )
+            if request["outcome"] != expected_outcome:
+                raise BridgeError(
+                    409,
+                    "scene_outcome_mismatch",
+                    "scene acknowledgement did not match its interaction",
+                )
             ack_key = f"bridge_ack:{scene_id}"
             request_key = f"bridge_ack_request:{request['request_id']}"
             request_json = json.dumps(
@@ -419,10 +773,7 @@ class WorldSceneService:
                 if store.get_meta(ack_key) is not None:
                     store.set_meta(request_key, request_json)
                     return
-                scene_payload = store.get_meta(f"bridge_scene_payload:{scene_id}")
-                if scene_payload is not None:
-                    scene = ScenePackage.from_dict(json.loads(scene_payload))
-                    self._remember_generated_dialogue(store, scene, event_id)
+                self._remember_generated_dialogue(store, scene, event_id)
                 ack_event_id = store.append_event(
                     store.current_tick,
                     "player_scene_ack",

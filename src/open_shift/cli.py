@@ -335,6 +335,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                     config,
                     scene_provider=world.open_scene,
                     ack_handler=world.ack_scene,
+                    order_handler=world.resolve_order,
                     error_reporter=_report_world_error,
                 ),
             )
