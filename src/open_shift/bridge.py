@@ -307,6 +307,8 @@ class BridgeApplication:
         scene_provider: Callable[[Mapping[str, Any]], ScenePackage] | None = None,
         ack_handler: Callable[[Mapping[str, Any]], None] | None = None,
         order_handler: Callable[[Mapping[str, Any]], OrderResolution] | None = None,
+        save_pair_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        save_restore_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         error_reporter: Callable[[str, Exception], None] | None = None,
     ) -> None:
         self.config = config
@@ -314,10 +316,14 @@ class BridgeApplication:
         self._scene_provider = scene_provider
         self._ack_handler = ack_handler
         self._order_handler = order_handler
+        self._save_pair_handler = save_pair_handler
+        self._save_restore_handler = save_restore_handler
         self._error_reporter = error_reporter
         self._open_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._ack_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._order_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._save_pair_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._save_restore_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
 
     def _authenticate(self, headers: Mapping[str, str]) -> None:
@@ -404,6 +410,30 @@ class BridgeApplication:
                         503,
                         "order_resolution_unavailable",
                         "the world service could not resolve the served drink",
+                    ) from None
+            if method == "POST" and route == "/v1/saves/pair":
+                try:
+                    return BridgeResponse(200, self._pair_save(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("paired save snapshot", error)
+                    raise BridgeError(
+                        503,
+                        "paired_save_unavailable",
+                        "the world service could not create the paired save",
+                    ) from None
+            if method == "POST" and route == "/v1/saves/restore":
+                try:
+                    return BridgeResponse(200, self._restore_save(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("paired save restore", error)
+                    raise BridgeError(
+                        503,
+                        "paired_restore_unavailable",
+                        "the world service could not restore the paired save",
                     ) from None
             raise BridgeError(404, "not_found", "route was not found")
         except BridgeError as error:
@@ -534,6 +564,84 @@ class BridgeApplication:
             return self._idempotent(
                 self._order_requests, request_id, request, response
             )
+
+    def _save_operation(
+        self,
+        request: dict[str, Any],
+        *,
+        handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None,
+        cache: dict[str, tuple[str, dict[str, Any]]],
+        unavailable_code: str,
+        expected_status: str,
+    ) -> dict[str, Any]:
+        _require_fields(
+            request,
+            {"protocol_version", "request_id", "client_session_id", "slot"},
+        )
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        raw_slot = request["slot"]
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(
+                409, "protocol_mismatch", "client protocol version was not supported"
+            )
+        if (
+            isinstance(raw_slot, bool)
+            or not isinstance(raw_slot, (int, float))
+            or not float(raw_slot).is_integer()
+            or not 1 <= raw_slot <= 24
+        ):
+            raise BridgeError(400, "invalid_save_slot", "save slot must be between 1 and 24")
+        slot = int(raw_slot)
+        if handler is None:
+            raise BridgeError(404, unavailable_code, "paired saves were not enabled")
+        with self._cache_lock:
+            prior = cache.get(request_id)
+            if prior is not None:
+                return self._idempotent(cache, request_id, request, prior[1])
+            handler_request = dict(request)
+            handler_request["slot"] = slot
+            result = dict(handler(handler_request))
+            if set(result) != {"slot", "revision", "status", "world_day"}:
+                raise BridgeError(
+                    503, "invalid_save_response", "paired save response was invalid"
+                )
+            if (
+                result["slot"] != slot
+                or result["status"] != expected_status
+                or not isinstance(result["revision"], str)
+                or len(result["revision"]) != 32
+                or isinstance(result["world_day"], bool)
+                or not isinstance(result["world_day"], int)
+                or result["world_day"] < 1
+            ):
+                raise BridgeError(
+                    503, "invalid_save_response", "paired save response was invalid"
+                )
+            response = {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                **result,
+            }
+            return self._idempotent(cache, request_id, request, response)
+
+    def _pair_save(self, request: dict[str, Any]) -> dict[str, Any]:
+        return self._save_operation(
+            request,
+            handler=self._save_pair_handler,
+            cache=self._save_pair_requests,
+            unavailable_code="paired_save_disabled",
+            expected_status="paired",
+        )
+
+    def _restore_save(self, request: dict[str, Any]) -> dict[str, Any]:
+        return self._save_operation(
+            request,
+            handler=self._save_restore_handler,
+            cache=self._save_restore_requests,
+            unavailable_code="paired_restore_disabled",
+            expected_status="restored",
+        )
 
 
 class BridgeHTTPServer(ThreadingHTTPServer):
