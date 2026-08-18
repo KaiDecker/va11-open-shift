@@ -51,24 +51,46 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         }
         else
         {
-            ag_request_sequence += 1;
-            ag_request_id = "open_" + ag_session_id + "_" + string(ag_request_sequence);
-            var ag_next_headers;
-            var ag_next_body;
-            ag_next_headers = ds_map_create();
-            ds_map_add(ag_next_headers, "Content-Type", "application/json");
-            ini_open("open-shift-runtime.ini");
-            ds_map_add(ag_next_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
-            ini_close();
-            ag_next_body = ds_map_create();
-            ds_map_add(ag_next_body, "protocol_version", 1);
-            ds_map_add(ag_next_body, "request_id", ag_request_id);
-            ds_map_add(ag_next_body, "client_session_id", ag_session_id);
-            ag_http_request = http_request(ag_bridge_url + "/v1/scenes/open", "POST", ag_next_headers, json_encode(ag_next_body));
-            ds_map_destroy(ag_next_body);
-            ds_map_destroy(ag_next_headers);
-            ag_timeout_at = current_time + 120000;
-            ag_state = 1;
+            if (string_copy(ag_scene_id, 1, 11) == "settlement_" || string_copy(ag_scene_id, 1, 14) == "save_required_")
+            {
+                var ag_completed_day;
+                if (string_copy(ag_scene_id, 1, 11) == "settlement_")
+                    ag_completed_day = string_copy(ag_scene_id, 12, string_length(ag_scene_id) - 11);
+                else
+                    ag_completed_day = string_copy(ag_scene_id, 15, string_length(ag_scene_id) - 14);
+                if (string_copy(ag_completed_day, 1, 4) == "day_")
+                    ag_completed_day = string_delete(ag_completed_day, 1, 4);
+                if (global.cashcounter > 0)
+                {
+                    global.jillwallet += global.cashcounter;
+                    global.cashcounter = 0;
+                }
+                global.datestring = "O.S. DAY " + ag_completed_day;
+                if (!instance_exists(ag_save_flow_controller))
+                    instance_create(x, y, ag_save_flow_controller);
+                instance_destroy();
+            }
+            else
+            {
+                ag_request_sequence += 1;
+                ag_request_id = "open_" + ag_session_id + "_" + string(ag_request_sequence);
+                var ag_next_headers;
+                var ag_next_body;
+                ag_next_headers = ds_map_create();
+                ds_map_add(ag_next_headers, "Content-Type", "application/json");
+                ini_open("open-shift-runtime.ini");
+                ds_map_add(ag_next_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+                ini_close();
+                ag_next_body = ds_map_create();
+                ds_map_add(ag_next_body, "protocol_version", 1);
+                ds_map_add(ag_next_body, "request_id", ag_request_id);
+                ds_map_add(ag_next_body, "client_session_id", ag_session_id);
+                ag_http_request = http_request(ag_bridge_url + "/v1/scenes/open", "POST", ag_next_headers, json_encode(ag_next_body));
+                ds_map_destroy(ag_next_body);
+                ds_map_destroy(ag_next_headers);
+                ag_timeout_at = current_time + 120000;
+                ag_state = 1;
+            }
         }
     }
     else if (ag_state == 1 || ag_state == 7)
@@ -135,7 +157,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_scene_id = ds_map_find_value(ag_scene, "scene_id");
             ag_return_to = ds_map_find_value(ag_scene, "return_to");
             ag_lines = ds_map_find_value(ag_scene, "lines");
-            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_" && string_copy(ag_scene_id, 1, 4) != "day_" && string_copy(ag_scene_id, 1, 8) != "opening_" && string_copy(ag_scene_id, 1, 8) != "waiting_" && string_copy(ag_scene_id, 1, 9) != "doorbell_" && string_copy(ag_scene_id, 1, 8) != "closing_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
+            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_" && string_copy(ag_scene_id, 1, 4) != "day_" && string_copy(ag_scene_id, 1, 8) != "opening_" && string_copy(ag_scene_id, 1, 8) != "waiting_" && string_copy(ag_scene_id, 1, 9) != "doorbell_" && string_copy(ag_scene_id, 1, 8) != "closing_" && string_copy(ag_scene_id, 1, 11) != "settlement_" && string_copy(ag_scene_id, 1, 14) != "save_required_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
                 ag_valid = false;
         }
 

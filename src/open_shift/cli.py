@@ -13,7 +13,7 @@ from .byok import (
     ResponseFormat,
     ThinkingMode,
 )
-from .bridge import BridgeApplication, BridgeConfig, serve_bridge
+from .bridge import BridgeApplication, BridgeConfig, BridgeError, serve_bridge
 from .dialogue import DialogueTurnContext
 from .world_bridge import WorldSceneService
 from .launcher import LauncherError, RuntimeSession, build_launch_config
@@ -29,6 +29,7 @@ from .patch_contract import (
     load_patch_manifest,
     validate_patch_target,
 )
+from .paired_saves import PairedSaveError, PairedSaveManager, PairedSaveMismatch
 from .providers import MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
@@ -99,6 +100,8 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--port", type=int, default=8711)
     bridge.add_argument("--token-env", default="OPEN_SHIFT_BRIDGE_TOKEN")
     bridge.add_argument("--world-db", type=Path)
+    bridge.add_argument("--native-save-dir", type=Path)
+    bridge.add_argument("--paired-save-dir", type=Path)
     bridge.add_argument("--seed", type=int, default=7)
     bridge.add_argument("--advance-minutes", type=int, default=1440)
     bridge.add_argument("--provider-base-url")
@@ -118,6 +121,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="start the local world bridge and a copied GameMaker game",
     )
     launch.add_argument("--db", type=Path, required=True)
+    launch.add_argument("--native-save-dir", type=Path)
+    launch.add_argument("--paired-save-dir", type=Path)
     launch.add_argument("--runtime-file", type=Path, required=True)
     launch.add_argument("--game-cwd", type=Path, required=True)
     launch.add_argument("--game-command", nargs="+", required=True)
@@ -330,6 +335,25 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 advance_minutes=args.advance_minutes,
                 daily_story_mode=True,
             )
+            local_app_data = Path(
+                os.environ.get("LOCALAPPDATA", str(args.world_db.parent))
+            )
+            native_save_dir = args.native_save_dir or (
+                local_app_data / "VA_11_Hall_A" / "saves"
+            )
+            paired_save_dir = args.paired_save_dir or (
+                local_app_data / "VA_11_Hall_A" / "open-shift-paired-saves"
+            )
+            paired_saves = PairedSaveManager(
+                args.world_db, native_save_dir, paired_save_dir
+            )
+
+            def save_pair(request: dict[str, object]) -> dict[str, object]:
+                return _paired_save_response(world, paired_saves, request, "paired")
+
+            def restore_pair(request: dict[str, object]) -> dict[str, object]:
+                return _paired_save_response(world, paired_saves, request, "restored")
+
             serve_bridge(
                 config,
                 app=BridgeApplication(
@@ -337,6 +361,8 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                     scene_provider=world.open_scene,
                     ack_handler=world.ack_scene,
                     order_handler=world.resolve_order,
+                    save_pair_handler=save_pair,
+                    save_restore_handler=restore_pair,
                     error_reporter=_report_world_error,
                 ),
             )
@@ -346,6 +372,51 @@ def _serve_bridge(args: argparse.Namespace) -> int:
         print(f"Bridge startup failed: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _paired_save_response(
+    world: WorldSceneService,
+    manager: PairedSaveManager,
+    request: dict[str, object],
+    status: str,
+) -> dict[str, object]:
+    world.wait_for_background_generation()
+    try:
+        record = (
+            manager.save_slot(
+                int(request["slot"]),
+                operation_id=str(request["request_id"]),
+                request=request,
+            )
+            if status == "paired"
+            else manager.restore_slot(
+                int(request["slot"]),
+                operation_id=str(request["request_id"]),
+                request=request,
+            )
+        )
+        if status == "paired":
+            world.complete_paired_save(
+                record.world_day, record.last_completed_story_day
+            )
+    except PairedSaveMismatch as exc:
+        raise BridgeError(409, exc.code, "paired save did not match") from None
+    except PairedSaveError as exc:
+        if exc.code == "paired_save_missing":
+            status_code = 404
+        elif exc.code == "operation_id_conflict":
+            status_code = 409
+        else:
+            status_code = 503
+        raise BridgeError(
+            status_code, exc.code, f"paired save {exc.layer} failed"
+        ) from None
+    return {
+        "slot": record.slot,
+        "revision": record.revision,
+        "status": status,
+        "world_day": record.world_day,
+    }
 
 
 def _provider_factory(args: argparse.Namespace):
@@ -406,6 +477,14 @@ def _launch(args: argparse.Namespace) -> int:
                     ("--provider-timeout", str(args.provider_timeout)),
                     ("--provider-max-calls", str(args.provider_max_calls)),
                     ("--provider-thinking", args.provider_thinking),
+                    (
+                        "--native-save-dir",
+                        str(args.native_save_dir) if args.native_save_dir else None,
+                    ),
+                    (
+                        "--paired-save-dir",
+                        str(args.paired_save_dir) if args.paired_save_dir else None,
+                    ),
                 )
                 if pair[1] is not None
                 for item in pair

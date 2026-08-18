@@ -355,6 +355,95 @@ class BridgeApplicationTests(unittest.TestCase):
         )
         self.assertEqual(invalid.status, 400)
 
+    def test_paired_save_endpoints_are_strict_authenticated_and_idempotent(self) -> None:
+        paired_calls: list[dict[str, Any]] = []
+        restored_calls: list[dict[str, Any]] = []
+
+        def result(status: str, calls: list[dict[str, Any]]):
+            def handle(request):
+                calls.append(dict(request))
+                return {
+                    "slot": request["slot"],
+                    "revision": "a" * 32,
+                    "status": status,
+                    "world_day": 3,
+                }
+
+            return handle
+
+        app = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0),
+            save_pair_handler=result("paired", paired_calls),
+            save_restore_handler=result("restored", restored_calls),
+        )
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "pair-slot-24",
+            "client_session_id": self.session_id,
+            "slot": 24,
+        }
+        first = app.handle(
+            "POST", "/v1/saves/pair", self.headers, encoded(request)
+        )
+        replay = app.handle(
+            "POST", "/v1/saves/pair", self.headers, encoded(request)
+        )
+        self.assertEqual(first.status, 200)
+        self.assertEqual(first.body, replay.body)
+        self.assertEqual(first.body["status"], "paired")
+        self.assertEqual(len(paired_calls), 1)
+
+        gamemaker_real = app.handle(
+            "POST",
+            "/v1/saves/pair",
+            self.headers,
+            encoded({**request, "request_id": "pair-real-slot-24", "slot": 24.0}),
+        )
+        self.assertEqual(gamemaker_real.status, 200)
+        self.assertEqual(gamemaker_real.body["slot"], 24)
+
+        restore_request = {**request, "request_id": "restore-slot-24"}
+        restored = app.handle(
+            "POST", "/v1/saves/restore", self.headers, encoded(restore_request)
+        )
+        self.assertEqual(restored.status, 200)
+        self.assertEqual(restored.body["status"], "restored")
+        self.assertEqual(len(restored_calls), 1)
+
+        for invalid_slot in (0, 25, True, "1", 1.5):
+            invalid = app.handle(
+                "POST",
+                "/v1/saves/pair",
+                self.headers,
+                encoded(
+                    {
+                        **request,
+                        "request_id": f"invalid-{invalid_slot}",
+                        "slot": invalid_slot,
+                    }
+                ),
+            )
+            self.assertEqual(invalid.status, 400)
+            self.assertEqual(invalid.body["error"]["code"], "invalid_save_slot")
+
+        conflict = app.handle(
+            "POST",
+            "/v1/saves/pair",
+            self.headers,
+            encoded({**request, "slot": 23}),
+        )
+        self.assertEqual(conflict.status, 409)
+        self.assertEqual(conflict.body["error"]["code"], "request_id_conflict")
+
+        wrong_status = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0),
+            save_pair_handler=result("restored", []),
+        ).handle(
+            "POST", "/v1/saves/pair", self.headers, encoded(request)
+        )
+        self.assertEqual(wrong_status.status, 503)
+        self.assertEqual(wrong_status.body["error"]["code"], "invalid_save_response")
+
     def test_non_loopback_binding_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "loopback"):
             BridgeConfig(token=TOKEN, host="0.0.0.0")

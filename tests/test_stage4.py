@@ -17,6 +17,8 @@ from open_shift.bridge import (
     BridgeHTTPServer,
 )
 from open_shift.launcher import LaunchConfig, RuntimeSession
+from open_shift.cli import _paired_save_response
+from open_shift.paired_saves import PairedSaveManager
 from open_shift.providers import MockProvider
 from open_shift.store import WorldStore
 from open_shift.world_bridge import WorldSceneService
@@ -26,6 +28,85 @@ TOKEN = "stage-four-runtime-token"
 
 
 class Stage4WorldBridgeTests(unittest.TestCase):
+    def test_real_http_pairs_and_restores_original_slot_with_sqlite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "world.sqlite3"
+            native_dir = root / "native" / "saves"
+            native_dir.mkdir(parents=True)
+            native_save = native_dir / "Record of Waifu Wars[6].txt"
+            native_save.write_text("17/8/2026 20:00:00\n1\n1001\n", encoding="utf-8")
+            with WorldStore(db_path) as store:
+                store.set_meta("current_story_day", 2)
+                store.set_meta("last_completed_story_day", 1)
+                store.set_meta("shift_phase", "save_required")
+                store.set_current_tick(1440)
+            world = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            manager = PairedSaveManager(db_path, native_dir, root / "paired")
+            config = BridgeConfig(token=TOKEN, port=0)
+            app = BridgeApplication(
+                config,
+                save_pair_handler=lambda request: _paired_save_response(
+                    world, manager, dict(request), "paired"
+                ),
+                save_restore_handler=lambda request: _paired_save_response(
+                    world, manager, dict(request), "restored"
+                ),
+            )
+            server = BridgeHTTPServer(config, app=app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Open-Shift-Token": TOKEN,
+                }
+
+                def post(path: str, payload: dict[str, object]):
+                    request = Request(
+                        base + path,
+                        data=json.dumps(payload).encode(),
+                        headers=headers,
+                        method="POST",
+                    )
+                    with urlopen(request, timeout=2) as response:
+                        return json.loads(response.read().decode())
+
+                pair_request = {
+                    "protocol_version": 1,
+                    "request_id": "http-pair-slot-6",
+                    "client_session_id": "http-save-session-0001",
+                    "slot": 6.0,
+                }
+                paired = post("/v1/saves/pair", pair_request)
+                self.assertEqual(paired["status"], "paired")
+                self.assertEqual(paired["world_day"], 2)
+                with WorldStore(db_path) as store:
+                    self.assertEqual(store.get_meta("shift_phase"), "playing")
+                    store.set_meta("current_story_day", 9)
+                    store.set_current_tick(9999)
+
+                restored = post(
+                    "/v1/saves/restore",
+                    {**pair_request, "request_id": "http-restore-slot-6"},
+                )
+                self.assertEqual(restored["status"], "restored")
+                self.assertEqual(restored["revision"], paired["revision"])
+                with WorldStore(db_path) as store:
+                    self.assertEqual(store.get_meta("current_story_day"), "2")
+                    self.assertEqual(store.get_meta("shift_phase"), "playing")
+                    self.assertEqual(store.current_tick, 1440)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_open_advances_world_and_ack_is_persisted_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"

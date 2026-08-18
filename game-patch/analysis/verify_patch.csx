@@ -9,11 +9,11 @@ Underanalyzer.Decompiler.IDecompileSettings settings = Data.ToolInfo.DecompilerS
 string Decompile(string name) => new Underanalyzer.Decompiler.DecompileContext(
     context, Data.Code.ByName(name), settings
 ).DecompileToString();
-string[] names = new[] { "ag_open_shift_chapter", "ag_open_shift_start", "ag_bridge_controller" };
+string[] names = new[] { "ag_open_shift_chapter", "ag_open_shift_start", "ag_bridge_controller", "ag_save_controller", "ag_save_flow_controller" };
 foreach (string name in names) if (Data.GameObjects.ByName(name) is null) throw new Exception("Missing object: " + name);
 if (Data.GameObjects.ByName("ag_open_shift_chapter").Sprite?.Name?.Content != "blue_chapter") throw new Exception("Chapter sprite mismatch");
 if (Data.GameObjects.ByName("ag_open_shift_start").Sprite?.Name?.Content != "yellow_chapter") throw new Exception("Start sprite mismatch");
-string[] code = new[] { "gml_Object_ag_open_shift_chapter_Create_0", "gml_Object_ag_open_shift_chapter_Step_0", "gml_Object_ag_open_shift_start_Create_0", "gml_Object_ag_open_shift_start_Step_0", "gml_Object_ag_bridge_controller_Create_0", "gml_Object_ag_bridge_controller_Step_0", "gml_Object_ag_bridge_controller_Other_62" };
+string[] code = new[] { "gml_Object_ag_open_shift_chapter_Create_0", "gml_Object_ag_open_shift_chapter_Step_0", "gml_Object_ag_open_shift_start_Create_0", "gml_Object_ag_open_shift_start_Step_0", "gml_Object_ag_bridge_controller_Create_0", "gml_Object_ag_bridge_controller_Step_0", "gml_Object_ag_bridge_controller_Other_62", "gml_Object_ag_save_controller_Create_0", "gml_Object_ag_save_controller_Step_0", "gml_Object_ag_save_controller_Other_62", "gml_Object_ag_save_flow_controller_Create_0", "gml_Object_ag_save_flow_controller_Step_0" };
 foreach (string name in code) if (Data.Code.ByName(name) is null) throw new Exception("Missing code: " + name);
 if (Data.Code.ByName("gml_Object_prologuechapter_Step_0") is null) throw new Exception("Missing chapter entrypoint");
 if (Data.Code.ByName("gml_Object_extrachapter_text_Draw_0") is null) throw new Exception("Missing chapter text draw entrypoint");
@@ -23,6 +23,10 @@ string controllerCreate = Decompile("gml_Object_ag_bridge_controller_Create_0");
 string controllerStep = Decompile("gml_Object_ag_bridge_controller_Step_0");
 string controllerHttp = Decompile("gml_Object_ag_bridge_controller_Other_62");
 string mixControl = Decompile("gml_Script_mixcontrol");
+string saveHttp = Decompile("gml_Object_ag_save_controller_Other_62");
+string saveFlow = Decompile("gml_Object_ag_save_flow_controller_Step_0");
+string loadSlot = Decompile("gml_Script_load_slot_script");
+string toWorkMouse = Decompile("gml_Object_towork_button_Mouse_4");
 if (!chapterDraw.Contains("O.S.")) throw new Exception("Short chapter label was missing");
 if (!controllerCreate.Contains("session_id")) throw new Exception("Unique runtime session was missing");
 if (!controllerStep.Contains("continued_in_bar")) throw new Exception("Continuous bar outcome was missing");
@@ -45,10 +49,22 @@ if (!controllerHttp.Contains("story_generation_failed")) throw new Exception("Sa
 if (!controllerHttp.Contains("ag_was_order_response") || !controllerHttp.Contains("ag_state == 7")) throw new Exception("HTTP order response state was not preserved");
 if (controllerHttp.Split("ag_was_order_response").Length < 3) throw new Exception("Order HTTP error branch was missing");
 if (!controllerHttp.Contains("income_delta") || !controllerHttp.Contains("global.cashcounter += ag_income_delta") || !controllerHttp.Contains("global.barscore += ag_income_delta")) throw new Exception("Authoritative shift income was missing");
+if (!controllerHttp.Contains("global.jillwallet += global.cashcounter") || !controllerHttp.Contains("global.datestring = \"O.S. DAY \"")) throw new Exception("End-of-day wallet settlement was missing");
 if (controllerHttp.Contains("global.money")) throw new Exception("Nonexistent original money variable remained");
 if (!controllerStep.Contains("order_started")) throw new Exception("Order acknowledgement was missing");
 if (!mixControl.Contains("/v1/orders/resolve")) throw new Exception("Drink result request was missing");
 if (!mixControl.Contains("global.mod_aa")) throw new Exception("Raw mixer ingredients were missing");
+if (!saveHttp.Contains("paired") || !saveHttp.Contains("restored")) throw new Exception("Explicit paired-save statuses were missing");
+if (!saveFlow.Contains("jill_room") || !saveFlow.Contains("out_of_apartment")) throw new Exception("Endless day room loop was missing");
+if (!loadSlot.Contains("ag_operation = \"restore\"")) throw new Exception("Paired restore boundary was missing");
+if (!toWorkMouse.Contains("data_icon.alarm[0] = 10") || !toWorkMouse.Contains("data_icon.chosen = 1")) throw new Exception("Original tablet save route was missing");
+for (int slot = 1; slot <= 24; slot++)
+{
+    string create = Decompile($"gml_Object_save{slot}_Create_0");
+    string mouse = Decompile($"gml_Object_save{slot}_Mouse_4");
+    if (!create.Contains($"ag_save_slot = {slot}")) throw new Exception($"Save slot identity was missing: {slot}");
+    if (!mouse.Contains("ag_operation = \"pair\"")) throw new Exception($"Paired save hook was missing: {slot}");
+}
 string controllerCode = controllerCreate + controllerStep + controllerHttp;
 if (controllerCode.Contains("sprite_jill")) throw new Exception("Jill must remain the player viewpoint");
 if (controllerCode.Contains("out_to_title")) throw new Exception("Controller must not force a title return");

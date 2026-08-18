@@ -139,6 +139,14 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_bridge_controller_step.gml",
         "ag_bridge_controller_http.gml",
         "ag_bridge_mixcontrol_append.gml",
+        "ag_save_controller_create.gml",
+        "ag_save_controller_step.gml",
+        "ag_save_controller_http.gml",
+        "ag_save_flow_controller_create.gml",
+        "ag_save_flow_controller_step.gml",
+        "ag_save_slot_mouse.gml",
+        "ag_load_slot_script.gml",
+        "ag_towork_button_mouse.gml",
     }
     sources = tuple(sorted(directory.glob("*.gml")))
     if {source.name for source in sources} != expected:
@@ -168,6 +176,19 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         '"income_delta"',
         "global.cashcounter += ag_income_delta",
         "global.barscore += ag_income_delta",
+        "/v1/saves/",
+        'ag_expected_status = "paired"',
+        'ag_expected_status = "restored"',
+        'ag_operation = "restore"',
+        "Record of Waifu Wars",
+        "ag_save_slot",
+        "jill_room",
+        "out_of_apartment",
+        "save_required_",
+        "data_icon.alarm[0] = 10",
+        "data_icon.chosen = 1",
+        "global.jillwallet += global.cashcounter",
+        'global.datestring = "O.S. DAY "',
     )
     if "global.money" in combined:
         raise PatchContractError("GML used a nonexistent original money variable")

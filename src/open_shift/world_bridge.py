@@ -58,6 +58,8 @@ _NON_NARRATIVE_EVENTS = {
     "player_scene_ack",
     "provider_error",
 }
+_SHIFT_PHASE_PLAYING = "playing"
+_SHIFT_PHASE_SAVE_REQUIRED = "save_required"
 
 
 class WorldSceneService:
@@ -710,6 +712,8 @@ class WorldSceneService:
             )
         elif kind == "doorbell":
             texts = ("门铃响了。",)
+        elif kind == "closing":
+            texts = ("最后一位客人离开后，门铃安静了下来。",)
         else:
             texts = ("酒馆暂时安静了下来。",)
         return ScenePackage(
@@ -717,6 +721,50 @@ class WorldSceneService:
             tuple(
                 SceneLine(f"ambient_{index}", None, None, "neutral", text)
                 for index, text in enumerate(texts, start=1)
+            ),
+        )
+
+    @staticmethod
+    def _settlement_scene(day_index: int, income: int) -> ScenePackage:
+        return ScenePackage(
+            f"settlement_day_{day_index}",
+            (
+                SceneLine(
+                    "settlement_close",
+                    None,
+                    None,
+                    "neutral",
+                    f"Jill 收好最后一只杯子。今晚的营业收入是 ¥{income}。",
+                ),
+                SceneLine(
+                    "settlement_home",
+                    None,
+                    None,
+                    "neutral",
+                    "回到家后，Jill 还可以看看当天的新闻，再整理一下房间。",
+                ),
+                SceneLine(
+                    "settlement_save",
+                    None,
+                    None,
+                    "neutral",
+                    "准备好后，在平板中存档；新的营业日会在保存成功后开始。",
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _save_required_scene(completed_day: int) -> ScenePackage:
+        return ScenePackage(
+            f"save_required_day_{completed_day}",
+            (
+                SceneLine(
+                    "save_required",
+                    None,
+                    None,
+                    "neutral",
+                    "这一天已经结束。Jill 需要先保存记录，再开始新的营业日。",
+                ),
             ),
         )
 
@@ -804,15 +852,27 @@ class WorldSceneService:
             dict(request), separators=(",", ":"), sort_keys=True
         )
         with self._lock, WorldStore(self.db_path) as store:
+            if store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING) == _SHIFT_PHASE_SAVE_REQUIRED:
+                completed_day = int(
+                    store.get_meta("last_completed_story_day", str(max(1, day_index - 1)))
+                    or max(1, day_index - 1)
+                )
+                return self._persist_ambient_request(
+                    store, request, self._save_required_scene(completed_day)
+                )
             graph_record = store.get_daily_story_graph(
                 day_index, DAILY_STORY_GRAPH_VERSION
             )
+            opening = self._ambient_scene(day_index, "opening")
+            if store.get_meta(f"bridge_ack:{opening.scene_id}") is None:
+                if graph_record is None:
+                    self._start_daily_story_generation(day_index)
+                return self._persist_ambient_request(store, request, opening)
             if graph_record is None:
-                scene = self._persist_ambient_request(
-                    store, request, self._ambient_scene(day_index, "opening")
-                )
                 self._start_daily_story_generation(day_index)
-                return scene
+                return self._persist_ambient_request(
+                    store, request, self._ambient_scene(day_index, "waiting")
+                )
             if graph_record["status"] == "generating":
                 return self._persist_ambient_request(
                     store, request, self._ambient_scene(day_index, "waiting")
@@ -861,8 +921,12 @@ class WorldSceneService:
             if progress is None:
                 raise ValueError("daily story progress was missing")
             if progress["status"] == "completed":
+                closing = self._ambient_scene(day_index, "closing")
+                if store.get_meta(f"bridge_ack:{closing.scene_id}") is None:
+                    return self._persist_ambient_request(store, request, closing)
+                income = int(store.get_meta("player_shift_income", "0") or 0)
                 return self._persist_ambient_request(
-                    store, request, self._ambient_scene(day_index, "closing")
+                    store, request, self._settlement_scene(day_index, income)
                 )
             node = self._story_node(graph, str(progress["current_node_id"]))
             if node.kind not in {
@@ -1445,6 +1509,35 @@ class WorldSceneService:
                             node_id,
                             merge.next_node_id,
                         )
+                if scene_id.startswith("settlement_day_"):
+                    try:
+                        completed_day = int(scene_id.removeprefix("settlement_day_"))
+                    except ValueError:
+                        raise ValueError("settlement scene day was invalid") from None
+                    current_day = int(store.get_meta("current_story_day", "1") or 1)
+                    if completed_day != current_day:
+                        raise BridgeError(
+                            409,
+                            "story_day_mismatch",
+                            "the settlement did not match the current story day",
+                        )
+                    income = int(store.get_meta("player_shift_income", "0") or 0)
+                    store.set_meta(f"player_shift_income_day_{completed_day}", income)
+                    store.set_meta("player_shift_income", 0)
+                    store.set_meta("last_completed_story_day", completed_day)
+                    store.set_meta("current_story_day", completed_day + 1)
+                    store.set_meta("shift_phase", _SHIFT_PHASE_SAVE_REQUIRED)
+                    store.set_current_tick(store.current_tick + DAY_MINUTES)
+                    store.append_event(
+                        store.current_tick,
+                        "player_shift_completed",
+                        None,
+                        payload={
+                            "story_day": completed_day,
+                            "income": income,
+                            "next_story_day": completed_day + 1,
+                        },
+                    )
                 if not ambient:
                     self._remember_generated_dialogue(store, scene, event_id)
                 ack_event_id = store.append_event(
@@ -1459,3 +1552,19 @@ class WorldSceneService:
                 )
                 store.set_meta(ack_key, ack_event_id)
                 store.set_meta(request_key, request_json)
+
+    def complete_paired_save(
+        self, world_day: int, last_completed_story_day: int
+    ) -> None:
+        """Release an end-of-day checkpoint after its paired snapshot is durable."""
+
+        with self._lock, WorldStore(self.db_path) as store, store.transaction():
+            current_day = int(store.get_meta("current_story_day", "1") or 1)
+            completed_day = int(store.get_meta("last_completed_story_day", "0") or 0)
+            if (
+                store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
+                == _SHIFT_PHASE_SAVE_REQUIRED
+                and current_day == world_day
+                and completed_day == last_completed_story_day
+            ):
+                store.set_meta("shift_phase", _SHIFT_PHASE_PLAYING)

@@ -276,10 +276,25 @@ class DailyStoryGraphTests(unittest.TestCase):
                 daily_story_mode=True,
             )
             service.prepare_daily_story_graph(1)
-            doorbell = service.open_scene(
+            opening = service.open_scene(
                 {
                     "protocol_version": 1,
                     "request_id": "story-open-doorbell",
+                    "client_session_id": "story-session-0001",
+                }
+            )
+            self.assertEqual(opening.scene_id, "opening_day_1")
+            service.ack_scene(
+                self._ack(
+                    opening.scene_id,
+                    "story-ack-opening",
+                    "continued_in_bar",
+                )
+            )
+            doorbell = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": "story-open-real-doorbell",
                     "client_session_id": "story-session-0001",
                 }
             )
@@ -497,6 +512,109 @@ class DailyStoryGraphTests(unittest.TestCase):
             )
             self.assertTrue(waiting.scene_id.startswith("waiting_"))
             self.assertIsNone(waiting.lines[0].speaker_id)
+            service.wait_for_background_generation()
+
+    def test_completed_shift_requires_save_then_opens_the_next_day(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            graph = service.prepare_daily_story_graph(1)
+            request_index = 1
+
+            def opened():
+                nonlocal request_index
+                scene = service.open_scene(
+                    {
+                        "protocol_version": 1,
+                        "request_id": f"day-loop-open-{request_index}",
+                        "client_session_id": "day-loop-session-0001",
+                    }
+                )
+                request_index += 1
+                return scene
+
+            opening = opened()
+            self.assertEqual(opening.scene_id, "opening_day_1")
+            service.ack_scene(
+                self._ack(opening.scene_id, "day-loop-ack-opening", "continued_in_bar")
+            )
+            doorbell = opened()
+            service.ack_scene(
+                self._ack(doorbell.scene_id, "day-loop-ack-doorbell", "continued_in_bar")
+            )
+
+            arrivals = [
+                node for node in graph.nodes if node.kind is StoryNodeKind.ARRIVAL_ORDER
+            ]
+            expected_income = 0
+            for index, _ in enumerate(arrivals, start=1):
+                arrival = opened()
+                assert arrival.order is not None
+                service.ack_scene(
+                    self._ack(
+                        arrival.scene_id,
+                        f"day-loop-ack-arrival-{index}",
+                        "order_started",
+                    )
+                )
+                resolution = service.resolve_order(
+                    {
+                        "protocol_version": 1,
+                        "request_id": f"day-loop-order-{index}",
+                        "client_session_id": "day-loop-session-0001",
+                        "scene_id": arrival.scene_id,
+                        "order_id": arrival.order.order_id,
+                        "drink": self._exact_drink(arrival.order.requested_drink_id),
+                    }
+                )
+                expected_income += resolution.income_delta
+                service.ack_scene(
+                    self._ack(
+                        resolution.scene.scene_id,
+                        f"day-loop-ack-result-{index}",
+                        "continued_in_bar",
+                    )
+                )
+
+            closing = opened()
+            self.assertEqual(closing.scene_id, "closing_day_1")
+            service.ack_scene(
+                self._ack(closing.scene_id, "day-loop-ack-closing", "continued_in_bar")
+            )
+            settlement = opened()
+            self.assertEqual(settlement.scene_id, "settlement_day_1")
+            self.assertIn(f"¥{expected_income}", settlement.lines[0].text)
+            service.ack_scene(
+                self._ack(
+                    settlement.scene_id,
+                    "day-loop-ack-settlement",
+                    "continued_in_bar",
+                )
+            )
+            recovery = opened()
+            self.assertEqual(recovery.scene_id, "save_required_day_1")
+            with WorldStore(db_path) as store:
+                self.assertEqual(store.get_meta("current_story_day"), "2")
+                self.assertEqual(store.get_meta("shift_phase"), "save_required")
+                self.assertEqual(store.get_meta("player_shift_income"), "0")
+                self.assertEqual(
+                    store.get_meta("player_shift_income_day_1"), str(expected_income)
+                )
+                completed = [
+                    event
+                    for event in store.list_events()
+                    if event["event_type"] == "player_shift_completed"
+                ]
+                self.assertEqual(len(completed), 1)
+
+            service.complete_paired_save(2, 1)
+            next_opening = opened()
+            self.assertEqual(next_opening.scene_id, "opening_day_2")
             service.wait_for_background_generation()
 
 

@@ -23,6 +23,14 @@ from .drinks import (
 )
 from .engine import SimulationEngine, SimulationReport
 from .models import Commitment, Invitation, Memory, StoryArc
+from .paired_saves import (
+    ORIGINAL_SAVE_SLOT_COUNT,
+    PAIRED_SAVE_FORMAT_VERSION,
+    PairedSaveError,
+    PairedSaveManager,
+    PairedSaveMismatch,
+    PairedSaveRecord,
+)
 from .providers import MockProvider, ModelProvider
 from .scenario import create_demo_world
 from .store import WorldStore
@@ -63,6 +71,12 @@ __all__ = [
     "Invitation",
     "Memory",
     "StoryArc",
+    "ORIGINAL_SAVE_SLOT_COUNT",
+    "PAIRED_SAVE_FORMAT_VERSION",
+    "PairedSaveError",
+    "PairedSaveManager",
+    "PairedSaveMismatch",
+    "PairedSaveRecord",
     "DAILY_STORY_GRAPH_VERSION",
     "DailyStoryGraph",
     "StoryGraphNode",

@@ -4,7 +4,7 @@ This directory contains original patch metadata and GML source only. It must
 never contain `data.win`, extracted sprites, fonts, audio, or dialogue from the
 game or reference mods.
 
-The Stage 7 patch targets only the Steam Windows baseline recorded in
+The Stage 8 patch targets only the Steam Windows baseline recorded in
 `manifest.json`. A patcher must fail closed when the hash or any required
 resource name differs. It must write to a temporary copy, verify the result,
 and leave the installed original untouched until an explicit install step.
@@ -58,6 +58,26 @@ advances the original `global.cashcounter` and `global.barscore` without allowin
 GameMaker to invent a payout. Opening, waiting, doorbell, and closing text has no
 speaker or portrait and never enters Agent memory. While day one is played, only
 day two may be prefetched.
+
+Stage 8 keeps the original 24 save slots and native text format. For Open
+Shift day 1001, each original save finishes first and then an authenticated
+`/v1/saves/pair` request creates a WAL-safe SQLite backup. Loading an Open
+Shift native slot first calls `/v1/saves/restore`; only a matching native hash,
+immutable snapshot hash, slot identity, and world revision may reach the
+original loader. A failed overwrite restores the previous paired native save,
+and a failed restore rolls the live Agent database back. Request receipts make
+pair and restore retries idempotent across bridge restarts.
+
+After the last customer, speakerless closing and settlement text records the
+authoritative shift income. A persistent, bounded controller uses the original
+apartment transition, then leaves Jill's tablet and news UI fully interactive.
+The player reaches the original Save/Load home through its Data icon and only
+then opens the 24-slot page. Choosing "go to work" before saving follows that
+same original Data-icon animation instead of skipping the checkpoint. One
+successful paired save returns through the original work transition. The next
+story day begins with its opening ambience. `current_story_day`, opening
+acknowledgements, selected branches, graph generation state, income history,
+and the save-required recovery point all remain in the paired SQLite snapshot.
 
 Verified toolchain:
 

@@ -33,6 +33,19 @@ string[] requiredResources = new[]
     "gml_Script_reset_lips",
     "gml_Script_resetmixer_2",
     "gml_Script_mixcontrol",
+    "gml_Script_load_slot_script",
+    "save_home",
+    "saveloadpage",
+    "jill_room",
+    "out_of_loading",
+    "gml_Object_towork_button_Mouse_4",
+    "data_icon",
+    "clock_icon",
+    "augmented_eye_icon",
+    "music_icon",
+    "dangeru_icon",
+    "nanocamo_icon",
+    "miki_icon",
     "sprite_dana",
     "sprite_doro",
     "sprite_alma",
@@ -43,8 +56,20 @@ string[] newResources = new[]
 {
     "ag_open_shift_chapter",
     "ag_open_shift_start",
-    "ag_bridge_controller"
+    "ag_bridge_controller",
+    "ag_save_controller",
+    "ag_save_flow_controller"
 };
+
+for (int slot = 1; slot <= 24; slot++)
+{
+    requiredResources = requiredResources.Concat(new[]
+    {
+        $"save{slot}",
+        $"gml_Object_save{slot}_Create_0",
+        $"gml_Object_save{slot}_Mouse_4"
+    }).ToArray();
+}
 
 string inputHash;
 using (FileStream stream = File.OpenRead(FilePath))
@@ -112,9 +137,27 @@ UndertaleGameObject controller = new()
     Depth = -2000,
     Persistent = false
 };
+UndertaleGameObject saveController = new()
+{
+    Name = Data.Strings.MakeString("ag_save_controller"),
+    Visible = false,
+    Solid = false,
+    Depth = -2001,
+    Persistent = true
+};
+UndertaleGameObject saveFlowController = new()
+{
+    Name = Data.Strings.MakeString("ag_save_flow_controller"),
+    Visible = false,
+    Solid = false,
+    Depth = -2002,
+    Persistent = true
+};
 Data.GameObjects.Add(button);
 Data.GameObjects.Add(start);
 Data.GameObjects.Add(controller);
+Data.GameObjects.Add(saveController);
+Data.GameObjects.Add(saveFlowController);
 
 UndertaleModLib.Compiler.CodeImportGroup importGroup = new(Data)
 {
@@ -128,6 +171,27 @@ importGroup.QueueReplace(start.EventHandlerFor(EventType.Step, EventSubtypeStep.
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Create, Data), ReadSource("ag_bridge_controller_create.gml"));
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_bridge_controller_step.gml"));
 importGroup.QueueReplace(controller.EventHandlerFor(EventType.Other, (uint)62u, Data), ReadSource("ag_bridge_controller_http.gml"));
+importGroup.QueueReplace(saveController.EventHandlerFor(EventType.Create, Data), ReadSource("ag_save_controller_create.gml"));
+importGroup.QueueReplace(saveController.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_save_controller_step.gml"));
+importGroup.QueueReplace(saveController.EventHandlerFor(EventType.Other, (uint)62u, Data), ReadSource("ag_save_controller_http.gml"));
+importGroup.QueueReplace(saveFlowController.EventHandlerFor(EventType.Create, Data), ReadSource("ag_save_flow_controller_create.gml"));
+importGroup.QueueReplace(saveFlowController.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_save_flow_controller_step.gml"));
+
+for (int slot = 1; slot <= 24; slot++)
+{
+    UndertaleCode saveCreate = Data.Code.ByName($"gml_Object_save{slot}_Create_0")
+        ?? throw new Exception($"Save slot Create event was missing: {slot}");
+    UndertaleCode saveMouse = Data.Code.ByName($"gml_Object_save{slot}_Mouse_4")
+        ?? throw new Exception($"Save slot Mouse event was missing: {slot}");
+    importGroup.QueueAppend(saveCreate, $"\nag_save_slot = {slot};");
+    importGroup.QueueReplace(saveMouse, ReadSource("ag_save_slot_mouse.gml"));
+}
+
+UndertaleCode loadSlotScript = Data.Code.ByName("gml_Script_load_slot_script");
+importGroup.QueueReplace(loadSlotScript, ReadSource("ag_load_slot_script.gml"));
+
+UndertaleCode toWorkMouse = Data.Code.ByName("gml_Object_towork_button_Mouse_4");
+importGroup.QueueReplace(toWorkMouse, ReadSource("ag_towork_button_mouse.gml"));
 
 UndertaleCode entrypoint = Data.Code.ByName("gml_Object_prologuechapter_Step_0");
 importGroup.QueueAppend(entrypoint, @"
@@ -191,7 +255,12 @@ string[] expectedCode = new[]
     "gml_Object_ag_open_shift_start_Step_0",
     "gml_Object_ag_bridge_controller_Create_0",
     "gml_Object_ag_bridge_controller_Step_0",
-    "gml_Object_ag_bridge_controller_Other_62"
+    "gml_Object_ag_bridge_controller_Other_62",
+    "gml_Object_ag_save_controller_Create_0",
+    "gml_Object_ag_save_controller_Step_0",
+    "gml_Object_ag_save_controller_Other_62",
+    "gml_Object_ag_save_flow_controller_Create_0",
+    "gml_Object_ag_save_flow_controller_Step_0"
 };
 foreach (string name in expectedCode)
 {
@@ -199,4 +268,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 7 patch compiled successfully.");
+ScriptMessage("Open Shift Stage 8 patch compiled successfully.");
