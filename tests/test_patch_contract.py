@@ -96,7 +96,7 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 8)
+        self.assertEqual(len(sources), 16)
 
     def test_menu_entry_matches_reference_chapter_layout(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -118,6 +118,21 @@ class PatchContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         mixcontrol = (
             root / "game-patch" / "gml" / "ag_bridge_mixcontrol_append.gml"
+        ).read_text(encoding="utf-8")
+        save_http = (
+            root / "game-patch" / "gml" / "ag_save_controller_http.gml"
+        ).read_text(encoding="utf-8")
+        save_flow = (
+            root / "game-patch" / "gml" / "ag_save_flow_controller_step.gml"
+        ).read_text(encoding="utf-8")
+        save_flow_create = (
+            root / "game-patch" / "gml" / "ag_save_flow_controller_create.gml"
+        ).read_text(encoding="utf-8")
+        load_slot = (
+            root / "game-patch" / "gml" / "ag_load_slot_script.gml"
+        ).read_text(encoding="utf-8")
+        towork = (
+            root / "game-patch" / "gml" / "ag_towork_button_mouse.gml"
         ).read_text(encoding="utf-8")
 
         self.assertIn('Data.Sprites.ByName("blue_chapter")', patch)
@@ -163,6 +178,9 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("income_delta", controller_http)
         self.assertIn("global.cashcounter += ag_income_delta", controller_http)
         self.assertIn("global.barscore += ag_income_delta", controller_http)
+        self.assertIn("global.jillwallet += global.cashcounter", controller_http)
+        self.assertIn('global.datestring = "O.S. DAY "', controller_http)
+        self.assertIn('string_delete(ag_completed_day, 1, 4)', controller_http)
         self.assertNotIn("global.money", controller_http)
         self.assertNotIn('"ini_close", "is_undefined"', patch)
         self.assertIn("ag_was_order_response = (ag_state == 7)", controller_http)
@@ -173,6 +191,22 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("global.mod_aa", mixcontrol)
         self.assertIn("global.failed_a", mixcontrol)
         self.assertNotIn("claimed_result", mixcontrol)
+        self.assertIn('ag_expected_status = "paired"', save_http)
+        self.assertIn('ag_expected_status = "restored"', save_http)
+        self.assertNotIn('ag_operation + "ed"', save_http)
+        self.assertIn("jill_room", save_flow)
+        self.assertIn("out_of_apartment", save_flow)
+        self.assertNotIn("instance_create(room_width / 2, 165, save_home)", save_flow)
+        self.assertNotIn("global.cur_data = \"save\"", save_flow)
+        self.assertNotIn("global.block_click = 1", save_flow_create)
+        self.assertIn('ag_operation = "restore"', load_slot)
+        self.assertIn('Data.Code.ByName("gml_Script_load_slot_script")', patch)
+        self.assertIn('Name = Data.Strings.MakeString("ag_save_controller")', patch)
+        self.assertIn('Name = Data.Strings.MakeString("ag_save_flow_controller")', patch)
+        self.assertIn("for (int slot = 1; slot <= 24; slot++)", patch)
+        self.assertIn("data_icon.alarm[0] = 10", towork)
+        self.assertIn("data_icon.chosen = 1", towork)
+        self.assertIn('Data.Code.ByName("gml_Object_towork_button_Mouse_4")', patch)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
