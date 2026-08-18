@@ -31,14 +31,6 @@ class ServiceCategory(str, Enum):
     SPECIAL = "special"
 
 
-SERVICE_INCOME = {
-    ServiceCategory.EXACT: 200,
-    ServiceCategory.ACCEPTABLE: 100,
-    ServiceCategory.WRONG: 0,
-    ServiceCategory.SPECIAL: 300,
-}
-
-
 @dataclass(frozen=True, slots=True)
 class DrinkOrder:
     order_id: str
@@ -189,6 +181,7 @@ class DrinkRecipe:
     aged: bool
     flavor: str
     style: str
+    price: int
     base_size: str = "normal"
     scalable: bool = True
     optional_karmotrine: bool = False
@@ -203,6 +196,7 @@ class ClassifiedDrink:
     size: str
     alcoholic: bool
     doubled: bool
+    price: int
 
     @property
     def tags(self) -> frozenset[str]:
@@ -268,6 +262,7 @@ def _recipe(
     aged: bool = False,
     flavor: str,
     style: str,
+    price: int,
     base_size: str = "normal",
     scalable: bool = True,
     optional_karmotrine: bool = False,
@@ -281,6 +276,7 @@ def _recipe(
         aged,
         flavor,
         style,
+        price,
         base_size,
         scalable,
         optional_karmotrine,
@@ -290,31 +286,31 @@ def _recipe(
 # These are rule data transcribed from the original mixer predicates. Runtime
 # classification never trusts a model-provided drink name or success flag.
 DRINK_RECIPES: tuple[DrinkRecipe, ...] = (
-    _recipe("fmoai", "Flaming Moai", (1, 1, 2, 3, 5), "mixed", flavor="spicy", style="classy", base_size="big", scalable=False),
-    _recipe("srush", "Sugar Rush", (2, 0, 1, 0, 0), "mixed", flavor="sweet", style="girly", optional_karmotrine=True),
-    _recipe("sstar", "Sparkle Star", (2, 0, 1, 0, 0), "mixed", aged=True, flavor="sweet", style="girly", optional_karmotrine=True),
-    _recipe("bfairy", "Blue Fairy", (4, 0, 0, 1, 0), "mixed", aged=True, flavor="sweet", style="girly", optional_karmotrine=True),
-    _recipe("fdream", "Fluffy Dream", (3, 0, 3, 0, 0), "mixed", aged=True, flavor="sour", style="girly", optional_karmotrine=True),
-    _recipe("scloud", "Sun Cloud", (2, 2, 0, 0, 0), "blended", ice=True, flavor="bitter", style="girly", optional_karmotrine=True),
-    _recipe("moblast", "Moonblast", (6, 0, 1, 1, 2), "blended", ice=True, flavor="sweet", style="girly"),
-    _recipe("gpunch", "Gut Punch", (0, 5, 0, 1, 0), "mixed", aged=True, flavor="bitter", style="manly", optional_karmotrine=True),
-    _recipe("pdriver", "Piledriver", (0, 3, 0, 3, 4), "mixed", flavor="bitter", style="manly"),
-    _recipe("splex", "Suplex", (0, 4, 0, 3, 3), "mixed", ice=True, flavor="bitter", style="manly"),
-    _recipe("mablast", "Marsblast", (0, 6, 1, 4, 2), "blended", flavor="spicy", style="manly", base_size="big", scalable=False),
-    _recipe("cspike", "Crevice Spike", (0, 0, 2, 4, 0), "blended", flavor="sour", style="manly", optional_karmotrine=True),
-    _recipe("beer", "Beer", (1, 2, 1, 2, 4), "mixed", flavor="bubbly", style="classic"),
-    _recipe("bjane", "Bleeding Jane", (0, 1, 3, 3, 0), "blended", flavor="spicy", style="classic"),
-    _recipe("fwater", "Frothy Water", (1, 1, 1, 1, 0), "mixed", aged=True, flavor="bubbly", style="classic"),
-    _recipe("btouch", "Bad Touch", (0, 2, 2, 2, 4), "mixed", ice=True, flavor="sour", style="classy"),
-    _recipe("btini", "Brandtini", (6, 0, 3, 0, 1), "mixed", aged=True, flavor="sweet", style="classy"),
-    _recipe("cvelvet", "Cobalt Velvet", (2, 0, 0, 3, 5), "mixed", ice=True, flavor="bubbly", style="classy"),
-    _recipe("fweaver", "Fringe Weaver", (1, 0, 0, 0, 9), "mixed", aged=True, flavor="bubbly", style="classy"),
-    _recipe("meblast", "Mercuryblast", (1, 1, 3, 3, 2), "blended", ice=True, flavor="sour", style="classy"),
-    _recipe("gtemple", "Grizzly Temple", (3, 3, 3, 0, 1), "blended", flavor="bitter", style="promo"),
-    _recipe("blight", "Bloom Light", (4, 0, 1, 2, 3), "mixed", ice=True, aged=True, flavor="spicy", style="promo"),
-    _recipe("zstar", "Zen Star", (4, 4, 4, 4, 4), "mixed", ice=True, flavor="sour", style="promo", base_size="big", scalable=False),
-    _recipe("pman", "Piano Man", (2, 3, 5, 5, 3), "mixed", ice=True, flavor="bitter", style="promo", base_size="big", scalable=False),
-    _recipe("pwman", "Piano Woman", (5, 5, 2, 3, 3), "mixed", aged=True, flavor="sweet", style="promo", base_size="big", scalable=False),
+    _recipe("fmoai", "Flaming Moai", (1, 1, 2, 3, 5), "mixed", flavor="spicy", style="classy", price=150, base_size="big", scalable=False),
+    _recipe("srush", "Sugar Rush", (2, 0, 1, 0, 0), "mixed", flavor="sweet", style="girly", price=150, optional_karmotrine=True),
+    _recipe("sstar", "Sparkle Star", (2, 0, 1, 0, 0), "mixed", aged=True, flavor="sweet", style="girly", price=150, optional_karmotrine=True),
+    _recipe("bfairy", "Blue Fairy", (4, 0, 0, 1, 0), "mixed", aged=True, flavor="sweet", style="girly", price=170, optional_karmotrine=True),
+    _recipe("fdream", "Fluffy Dream", (3, 0, 3, 0, 0), "mixed", aged=True, flavor="sour", style="girly", price=170, optional_karmotrine=True),
+    _recipe("scloud", "Sun Cloud", (2, 2, 0, 0, 0), "blended", ice=True, flavor="bitter", style="girly", price=150, optional_karmotrine=True),
+    _recipe("moblast", "Moonblast", (6, 0, 1, 1, 2), "blended", ice=True, flavor="sweet", style="girly", price=180),
+    _recipe("gpunch", "Gut Punch", (0, 5, 0, 1, 0), "mixed", aged=True, flavor="bitter", style="manly", price=80, optional_karmotrine=True),
+    _recipe("pdriver", "Piledriver", (0, 3, 0, 3, 4), "mixed", flavor="bitter", style="manly", price=160),
+    _recipe("splex", "Suplex", (0, 4, 0, 3, 3), "mixed", ice=True, flavor="bitter", style="manly", price=160),
+    _recipe("mablast", "Marsblast", (0, 6, 1, 4, 2), "blended", flavor="spicy", style="manly", price=170, base_size="big", scalable=False),
+    _recipe("cspike", "Crevice Spike", (0, 0, 2, 4, 0), "blended", flavor="sour", style="manly", price=140, optional_karmotrine=True),
+    _recipe("beer", "Beer", (1, 2, 1, 2, 4), "mixed", flavor="bubbly", style="classic", price=200),
+    _recipe("bjane", "Bleeding Jane", (0, 1, 3, 3, 0), "blended", flavor="spicy", style="classic", price=200),
+    _recipe("fwater", "Frothy Water", (1, 1, 1, 1, 0), "mixed", aged=True, flavor="bubbly", style="classic", price=150),
+    _recipe("btouch", "Bad Touch", (0, 2, 2, 2, 4), "mixed", ice=True, flavor="sour", style="classy", price=250),
+    _recipe("btini", "Brandtini", (6, 0, 3, 0, 1), "mixed", aged=True, flavor="sweet", style="classy", price=250),
+    _recipe("cvelvet", "Cobalt Velvet", (2, 0, 0, 3, 5), "mixed", ice=True, flavor="bubbly", style="classy", price=280),
+    _recipe("fweaver", "Fringe Weaver", (1, 0, 0, 0, 9), "mixed", aged=True, flavor="bubbly", style="classy", price=260),
+    _recipe("meblast", "Mercuryblast", (1, 1, 3, 3, 2), "blended", ice=True, flavor="sour", style="classy", price=250),
+    _recipe("gtemple", "Grizzly Temple", (3, 3, 3, 0, 1), "blended", flavor="bitter", style="promo", price=220),
+    _recipe("blight", "Bloom Light", (4, 0, 1, 2, 3), "mixed", ice=True, aged=True, flavor="spicy", style="promo", price=230),
+    _recipe("zstar", "Zen Star", (4, 4, 4, 4, 4), "mixed", ice=True, flavor="sour", style="promo", price=210, base_size="big", scalable=False),
+    _recipe("pman", "Piano Man", (2, 3, 5, 5, 3), "mixed", ice=True, flavor="bitter", style="promo", price=320, base_size="big", scalable=False),
+    _recipe("pwman", "Piano Woman", (5, 5, 2, 3, 3), "mixed", aged=True, flavor="sweet", style="promo", price=320, base_size="big", scalable=False),
 )
 
 
@@ -347,6 +343,7 @@ def classify_drink(submission: DrinkSubmission) -> ClassifiedDrink | None:
                 size,
                 submission.karmotrine > 0,
                 scale == 2,
+                recipe.price,
             )
     return None
 
@@ -385,6 +382,22 @@ def evaluate_service(order: DrinkOrder, submission: DrinkSubmission) -> ServiceR
         drink.display_name,
         drink.alcoholic,
     )
+
+
+def service_income(result: ServiceResult, submission: DrinkSubmission) -> int:
+    """Return the original game's authoritative payout for a served drink.
+
+    The original mixer pays the classified drink's base price. A scalable
+    doubled drink earns the normal big-glass surcharge of 100 gil; recipes
+    that are inherently big are already represented by their base price.
+    Wrong or unrecognized drinks earn nothing regardless of their recipe.
+    """
+    if result.category is ServiceCategory.WRONG:
+        return 0
+    drink = classify_drink(submission)
+    if drink is None:
+        return 0
+    return drink.price + (100 if drink.doubled else 0)
 
 
 _ORDER_BLUEPRINTS: dict[str, tuple[str, tuple[str, ...], AlcoholRequirement, str]] = {

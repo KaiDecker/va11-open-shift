@@ -134,6 +134,65 @@ python -m open_shift inspect-game-data `
 
 命令只输出文件哈希、数据块尺寸和可识别资源名，不导出代码、贴图、音频或文本资源内容。
 
+阶段 9 的安装工具只允许把已验证的补丁输出写入隔离副本。它会先核对
+Steam 原版 `data.win` 的 manifest 哈希，再原子备份现有副本；卸载时如果
+安装后的文件被其他程序改动，会拒绝盲目恢复。Steam 安装目录不会作为目标
+路径被接受：
+
+```powershell
+python -m open_shift install-patch `
+  --original-data-win "E:\SteamLibrary\steamapps\common\VA-11 HALL-A\data.win" `
+  --patched-data-win "临时目录\stage-9-patched.data.win" `
+  --destination-data-win "reference-local\stage-4-game-copy\data.win" `
+  --backup-dir "reference-local\stage-9-backups" `
+  --record "reference-local\stage-9-install.json" `
+  --manifest "game-patch\manifest.json"
+
+python -m open_shift uninstall-patch `
+  --record "reference-local\stage-9-install.json"
+```
+
+本地运行配置使用不含密钥的 TOML；API Key 仍只从环境变量读取。配置校验只
+输出脱敏后的字段，并且最多允许预取一天：
+
+```powershell
+python -m open_shift validate-config `
+  --config "配置目录\open-shift.toml"
+```
+
+发布前检查项见仓库根目录的 `RELEASE_CHECKLIST.md`；它覆盖哈希、UTMT
+往返、安装备份、卸载恢复、配置脱敏、游戏验收和 30/365 日 soak。
+
+启动器也可以直接读取同一份配置：
+
+```powershell
+python -m open_shift launch `
+  --config "配置目录\open-shift.toml" `
+  --db "work\playable-world.sqlite3" `
+  --runtime-file "$env:LOCALAPPDATA\VA_11_Hall_A\open-shift-runtime.ini" `
+  --game-cwd "reference-local\stage-4-game-copy" `
+  --game-command "VA-11 Hall A.exe" `
+  --steam-root "C:\Program Files (x86)\Steam" `
+  --steam-app-id 447530
+```
+
+示例配置（保存为 `open-shift.toml`）：
+
+```toml
+[provider]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+protocol = "chat_completions"
+response_format = "json_object"
+api_key_env = "OPEN_SHIFT_API_KEY"
+timeout_seconds = 30
+max_calls = 100000
+thinking = "disabled"
+
+[world]
+prefetch_days = 1
+```
+
 ## 阶段 4-8 Launcher、Agent 对话、调酒、每日剧情图与配对存档
 
 Launcher 会为每次游戏会话生成随机桥接令牌、选择空闲回环端口、原子写入 GameMaker 运行时 INI、等待桥接健康检查、启动游戏，并在游戏退出后停止服务和删除 INI。API Key 只传给桥接子进程，不会传给游戏进程。
@@ -182,13 +241,13 @@ DeepSeek V4 Flash 应使用模型 `deepseek-v4-flash`，并显式传入 `--think
 
 最终场景和服务结果会完整序列化到 SQLite。重复请求和服务重启直接重放已保存内容，不会再次调用 API、重复推进世界或重复结算一杯酒。每句的 `speaker_id` 必须匹配白名单人物；Agent 立绘和表情只允许映射到已核对的原版状态。Python 与 SQLite 中 Jill 始终使用 `portrait_id: null`，只有发给旧版 GameMaker JSON 解码器的 HTTP 响应会将其转换为空字符串。场景看完后，服务端会幂等写入 `player_scene_ack`；真实生成的公开谈话会被压缩为情景记忆，分别写入参与 Agent 的私有记忆流。Jill 的对白可以被在场 Agent 记住，但 Jill 自己没有 Agent 私有记忆或自主行动循环。GameMaker 仍不能直接修改权威世界数据库。
 
-阶段 7 已将单次调酒扩展为可恢复的整日有限剧情图。每天最多三位顾客，每笔点单预生成 `exact`、`acceptable`、`wrong`、`special` 四条结果草稿并汇合；Python 规则层在出杯时选择唯一分支，未选择内容不会写入事件、关系、目标、金钱或记忆。准确、可接受、错误和特别服务分别产生 200、100、0、300 的权威收入增量，GameMaker 只把服务端返回值应用到原版 `cashcounter` 和 `barscore`。
+阶段 7 已将单次调酒扩展为可恢复的整日有限剧情图。每天最多三位顾客，每笔点单预生成 `exact`、`acceptable`、`wrong`、`special` 四条结果草稿并汇合；Python 规则层在出杯时选择唯一分支，未选择内容不会写入事件、关系、目标、金钱或记忆。收入使用原版 25 种配方价格（例如 Moonblast 为 180）；可放大的大杯沿用原版基础价加 100 的规则，原本固定大杯的配方不重复加价，错误饮品为 0。GameMaker 只把服务端返回值应用到原版 `cashcounter`、`barscore`，并同步原版短暂收入弹出数字。
 
 首次进入存档以及每个新营业日时，前台使用无姓名、无立绘的冰箱、雨声和酒杯环境文字；准备完成后以“门铃响了”接入第一位顾客。环境行的 `speaker_id` 和 `portrait_id` 在 Python 与 SQLite 中保持 `null`，仅在发给旧版 GameMaker 的 HTTP JSON 中转换为空字符串。生成失败会显示 `story_generation_failed` 安全诊断，重新进入触发同一批源事件的恢复重试。当天开始游玩后只预取下一营业日，不会无限生成或持续消耗 API。DeepSeek V4 Flash 在仅提供 DeepSeek 地址时默认使用 `deepseek-v4-flash`，并在未显式覆盖时关闭 thinking。
 
 阶段 8 复用原版 24 个 `Record of Waifu Wars[槽位].txt` 槽位。保存 Open Shift 时先完成原版保存，再通过 SQLite backup 建立不可变 Agent 世界快照并原子更新槽位指针；读取时先核对原版存档哈希、快照哈希、槽位和世界修订号，全部匹配后才进入原版加载流程。覆盖保存失败会恢复上一份成对的原版存档，恢复失败会回滚实时世界，配对/恢复请求即使桥接服务重启也不会重复执行。
 
-最后一位顾客离开后会显示打烊和按真实服务结果累计的收入结算，随后 Jill 回到原版房间；手机、新闻和房间功能保持正常，玩家通过平板的 Data 图标进入原版 Save/Load 首页，再选择 Save 打开 24 槽页面。如果尚未保存就点击“去酒吧上班”，游戏会沿同一条原版 Data 图标动画引导到存档入口，而不会跳过恢复点。当天状态先停在 `save_required`；只有原版槽位和 SQLite 快照都成功后，才通过原版上班过场进入下一营业日。当前日、开店前奏是否看过、已提交分支、预取状态、当日收入和恢复点都会随配对槽位恢复。
+最后一位顾客离开后会显示打烊和按真实服务结果累计的收入结算，随后 Jill 回到原版房间；手机、新闻和房间功能保持正常，玩家通过平板的 Data 图标进入原版 Save/Load 首页，再选择 Save 打开 24 槽页面。如果尚未保存就点击“去酒吧上班”，游戏会沿同一条原版 Data 图标动画引导到存档入口，而不会跳过恢复点。当天状态先停在 `save_required`；原版槽位和 SQLite 快照都成功后只关闭存档页面，Jill 仍留在房间，必须由玩家再次点击原版“去酒吧上班”按钮才进入下一营业日。当前日、开店前奏是否看过、已提交分支、预取状态、当日收入和恢复点都会随配对槽位恢复。
 
 ## 阶段 2 验收
 

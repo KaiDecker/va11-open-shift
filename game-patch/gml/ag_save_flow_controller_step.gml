@@ -20,10 +20,8 @@ if (ag_flow_state == 2 && !instance_exists(saveloadpage) && !instance_exists(sav
     global.cur_day = 1001;
     global.cur_client = 1;
     global.cur_stage = 1;
-    if (!instance_exists(out_of_apartment))
-        instance_create(x, y, out_of_apartment);
-    ag_flow_state = 3;
+    ag_flow_state = 4;
 }
 
-if (ag_flow_state == 3 && room == bar)
+if ((ag_flow_state == 3 || ag_flow_state == 4) && room == bar)
     instance_destroy();

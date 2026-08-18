@@ -12,7 +12,7 @@ from open_shift.dialogue import (
     PlayerDialogueTurnContext,
 )
 from open_shift.bridge import BridgeError
-from open_shift.drinks import DRINK_RECIPES, SERVICE_INCOME, ServiceCategory
+from open_shift.drinks import DRINK_RECIPES, ServiceCategory
 from open_shift.models import DecisionContext
 from open_shift.providers import MockProvider
 from open_shift.scenario import create_demo_world
@@ -328,7 +328,12 @@ class DailyStoryGraphTests(unittest.TestCase):
             }
             resolution = service.resolve_order(resolve_request)
             self.assertEqual(resolution.result.category, ServiceCategory.EXACT)
-            self.assertEqual(resolution.income_delta, SERVICE_INCOME[ServiceCategory.EXACT])
+            requested_recipe = next(
+                recipe
+                for recipe in DRINK_RECIPES
+                if recipe.drink_id == arrival.order.requested_drink_id
+            )
+            self.assertEqual(resolution.income_delta, requested_recipe.price)
             self.assertEqual(service.resolve_order(resolve_request), resolution)
 
             with WorldStore(db_path) as store:
@@ -337,7 +342,7 @@ class DailyStoryGraphTests(unittest.TestCase):
                 self.assertEqual(commits[0]["category"], "exact")
                 self.assertEqual(
                     store.get_meta("player_shift_income"),
-                    str(SERVICE_INCOME[ServiceCategory.EXACT]),
+                    str(requested_recipe.price),
                 )
                 progress = store.get_daily_story_progress(
                     1, DAILY_STORY_GRAPH_VERSION
