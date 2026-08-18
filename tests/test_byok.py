@@ -283,6 +283,10 @@ class BYOKProviderTests(unittest.TestCase):
         with self.assertRaises(BYOKBudgetExceeded):
             provider.decide(context())
         self.assertEqual(len(transport.calls), 1)
+        report = provider.budget_report()
+        self.assertEqual(report["calls_used"], 1)
+        self.assertEqual(report["calls_remaining"], 0)
+        self.assertTrue(report["exhausted"])
 
     def test_invalid_or_extra_model_fields_are_rejected(self) -> None:
         value = json.loads(action_json())

@@ -14,6 +14,13 @@ from .dialogue import (
     DialogueUtterance,
     PlayerDialogueTurnContext,
 )
+from .distribution import (
+    DistributionError,
+    InstallRecord,
+    install_patch,
+    uninstall_patch,
+    verify_patch_output,
+)
 from .drinks import (
     DrinkOrder,
     DrinkSubmission,
@@ -32,6 +39,7 @@ from .paired_saves import (
     PairedSaveRecord,
 )
 from .providers import MockProvider, ModelProvider
+from .runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
 from .scenario import create_demo_world
 from .store import WorldStore
 from .story_graph import (
@@ -58,6 +66,11 @@ __all__ = [
     "DialogueTurnContext",
     "DialogueUtterance",
     "PlayerDialogueTurnContext",
+    "DistributionError",
+    "InstallRecord",
+    "install_patch",
+    "uninstall_patch",
+    "verify_patch_output",
     "DrinkOrder",
     "DrinkSubmission",
     "ServiceCategory",
@@ -81,6 +94,9 @@ __all__ = [
     "DailyStoryGraph",
     "StoryGraphNode",
     "StoryNodeKind",
+    "RuntimeConfig",
+    "RuntimeConfigError",
+    "load_runtime_config",
 ]
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
