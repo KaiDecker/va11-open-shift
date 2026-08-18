@@ -360,6 +360,65 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 self.assertEqual(len(served), 1)
                 self.assertEqual(served[0]["payload"]["drink"]["adelhyde"], 0)
 
+    def test_menu_drink_that_does_not_match_order_resolves_as_wrong(self) -> None:
+        """A recognised recipe is served normally; only the requested drink differs."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            world = WorldSceneService(db_path, provider_factory=MockProvider, advance_minutes=0)
+            app = BridgeApplication(
+                BridgeConfig(token=TOKEN, port=0),
+                scene_provider=world.open_scene,
+                ack_handler=world.ack_scene,
+                order_handler=world.resolve_order,
+            )
+            headers = {"X-Open-Shift-Token": TOKEN}
+            opened = app.handle(
+                "POST", "/v1/scenes/open", headers,
+                json.dumps({
+                    "protocol_version": 1,
+                    "request_id": "menu-open-1",
+                    "client_session_id": "menu-session-1",
+                }).encode(),
+            )
+            self.assertEqual(opened.status, 200)
+            scene = opened.body["scene"]
+            self.assertEqual(scene["order"]["requested_drink_id"], "moblast")
+            acknowledged = app.handle(
+                "POST", "/v1/scenes/ack", headers,
+                json.dumps({
+                    "protocol_version": 1,
+                    "request_id": "menu-ack-1",
+                    "client_session_id": "menu-session-1",
+                    "scene_id": scene["scene_id"],
+                    "outcome": "order_started",
+                }).encode(),
+            )
+            self.assertEqual(acknowledged.status, 200)
+            result = app.handle(
+                "POST", "/v1/orders/resolve", headers,
+                json.dumps({
+                    "protocol_version": 1,
+                    "request_id": "menu-resolve-1",
+                    "client_session_id": "menu-session-1",
+                    "scene_id": scene["scene_id"],
+                    "order_id": scene["order"]["order_id"],
+                    "drink": {
+                        "adelhyde": 1,
+                        "bronson_extract": 2,
+                        "powdered_delta": 1,
+                        "flanergide": 2,
+                        "karmotrine": 4,
+                        "ice": 0,
+                        "aged": 0,
+                        "preparation": "mixed",
+                    },
+                }).encode(),
+            )
+            self.assertEqual(result.status, 200)
+            self.assertEqual(result.body["result"]["beverage_id"], "beer")
+            self.assertEqual(result.body["result"]["category"], "wrong")
+            self.assertEqual(result.body["income_delta"], 0)
+
 
 class Stage4LauncherTests(unittest.TestCase):
     def test_runtime_file_is_atomic_and_cleanup_removes_token(self) -> None:

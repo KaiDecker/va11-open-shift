@@ -29,11 +29,11 @@ from .drinks import (
     AlcoholRequirement,
     DrinkOrder,
     DrinkSubmission,
-    SERVICE_INCOME,
     ServiceCategory,
     ServiceResult,
     evaluate_service,
     order_for_customer,
+    service_income,
 )
 from .engine import SimulationEngine
 from .models import DAY_MINUTES
@@ -79,15 +79,19 @@ class WorldSceneService:
         seed: int = 7,
         advance_minutes: int = DAY_MINUTES,
         daily_story_mode: bool = False,
+        prefetch_days: int = 1,
     ) -> None:
         if advance_minutes < 0 or advance_minutes > 30 * DAY_MINUTES:
             raise ValueError("advance_minutes must be between 0 and 43200")
+        if prefetch_days not in {0, 1}:
+            raise ValueError("prefetch_days must be 0 or 1")
         self.db_path = Path(db_path)
         self.provider_factory = provider_factory or MockProvider
         self.error_reporter = error_reporter
         self.seed = seed
         self.advance_minutes = advance_minutes
         self.daily_story_mode = daily_story_mode
+        self.prefetch_days = prefetch_days
         self._lock = threading.RLock()
         self._generation_lock = threading.Lock()
         self._generation_threads: dict[int, threading.Thread] = {}
@@ -897,7 +901,8 @@ class WorldSceneService:
             if not isinstance(raw_graph, Mapping):
                 raise ValueError("ready daily story graph payload was invalid")
             graph = DailyStoryGraph.from_dict(raw_graph)
-            self._start_daily_story_generation(day_index + 1)
+            if self.prefetch_days == 1:
+                self._start_daily_story_generation(day_index + 1)
             doorbell = self._ambient_scene(day_index, "doorbell")
             if store.get_meta(f"bridge_ack:{doorbell.scene_id}") is None:
                 return self._persist_ambient_request(store, request, doorbell)
@@ -1190,7 +1195,7 @@ class WorldSceneService:
             result_node = self._story_node(graph, result_node_id)
             if result_node.scene is None:
                 raise ValueError("selected daily result branch had no scene")
-            income_delta = SERVICE_INCOME[result.category]
+            income_delta = service_income(result, submission)
             service_event_id = store.append_event(
                 store.current_tick,
                 "drink_served",

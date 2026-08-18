@@ -15,6 +15,13 @@ from .byok import (
 )
 from .bridge import BridgeApplication, BridgeConfig, BridgeError, serve_bridge
 from .dialogue import DialogueTurnContext
+from .distribution import (
+    DistributionError,
+    install_patch,
+    uninstall_patch,
+    verify_patch_output,
+)
+from .runtime_config import RuntimeConfigError, load_runtime_config
 from .world_bridge import WorldSceneService
 from .launcher import LauncherError, RuntimeSession, build_launch_config
 from .game_data import (
@@ -104,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--paired-save-dir", type=Path)
     bridge.add_argument("--seed", type=int, default=7)
     bridge.add_argument("--advance-minutes", type=int, default=1440)
+    bridge.add_argument("--prefetch-days", type=int, choices=(0, 1), default=1)
     bridge.add_argument("--provider-base-url")
     bridge.add_argument("--provider-model")
     bridge.add_argument("--provider-protocol", choices=[item.value for item in APIProtocol])
@@ -131,6 +139,8 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--seed", type=int, default=7)
     launch.add_argument("--port", type=int, default=0)
     launch.add_argument("--advance-minutes", type=int, default=1440)
+    launch.add_argument("--prefetch-days", type=int, choices=(0, 1), default=1)
+    launch.add_argument("--config", type=Path)
     launch.add_argument("--health-timeout", type=float, default=10.0)
     launch.add_argument("--provider-base-url")
     launch.add_argument("--provider-model")
@@ -156,6 +166,34 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     patch_target.add_argument("--data-win", type=Path, required=True)
     patch_target.add_argument("--manifest", type=Path, required=True)
+    install = subparsers.add_parser(
+        "install-patch",
+        help="install a verified patch into an isolated data.win copy",
+    )
+    install.add_argument("--original-data-win", type=Path, required=True)
+    install.add_argument("--patched-data-win", type=Path, required=True)
+    install.add_argument("--destination-data-win", type=Path, required=True)
+    install.add_argument("--backup-dir", type=Path, required=True)
+    install.add_argument("--record", type=Path, required=True)
+    install.add_argument("--manifest", type=Path, required=True)
+    uninstall = subparsers.add_parser(
+        "uninstall-patch",
+        help="restore the verified pre-install data.win backup",
+    )
+    uninstall.add_argument("--record", type=Path, required=True)
+    config = subparsers.add_parser(
+        "validate-config",
+        help="validate a local non-secret Open Shift TOML configuration",
+    )
+    config.add_argument("--config", type=Path, required=True)
+    verify = subparsers.add_parser(
+        "verify-patch-output",
+        help="verify a patched release candidate without installing it",
+    )
+    verify.add_argument("--original-data-win", type=Path, required=True)
+    verify.add_argument("--patched-data-win", type=Path, required=True)
+    verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--gml-source-dir", type=Path, required=True)
     return parser
 
 
@@ -334,6 +372,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 seed=args.seed,
                 advance_minutes=args.advance_minutes,
                 daily_story_mode=True,
+                prefetch_days=args.prefetch_days,
             )
             local_app_data = Path(
                 os.environ.get("LOCALAPPDATA", str(args.world_db.parent))
@@ -455,6 +494,17 @@ def _provider_factory(args: argparse.Namespace):
 
 def _launch(args: argparse.Namespace) -> int:
     try:
+        if args.config is not None:
+            runtime = load_runtime_config(args.config)
+            args.prefetch_days = runtime.prefetch_days
+            args.provider_base_url = runtime.provider_base_url
+            args.provider_model = runtime.provider_model
+            args.provider_protocol = runtime.provider_protocol.value
+            args.provider_response_format = runtime.provider_response_format.value
+            args.provider_api_key_env = runtime.provider_api_key_env
+            args.provider_timeout = runtime.provider_timeout_seconds
+            args.provider_max_calls = runtime.provider_max_calls
+            args.provider_thinking = runtime.provider_thinking.value
         config = build_launch_config(
             db_path=args.db,
             runtime_file=args.runtime_file,
@@ -477,6 +527,7 @@ def _launch(args: argparse.Namespace) -> int:
                     ("--provider-timeout", str(args.provider_timeout)),
                     ("--provider-max-calls", str(args.provider_max_calls)),
                     ("--provider-thinking", args.provider_thinking),
+                    ("--prefetch-days", str(args.prefetch_days)),
                     (
                         "--native-save-dir",
                         str(args.native_save_dir) if args.native_save_dir else None,
@@ -538,6 +589,58 @@ def _validate_patch_target(args: argparse.Namespace) -> int:
     return 0
 
 
+def _install_patch(args: argparse.Namespace) -> int:
+    try:
+        record = install_patch(
+            original_data_win=args.original_data_win,
+            patched_data_win=args.patched_data_win,
+            destination_data_win=args.destination_data_win,
+            backup_dir=args.backup_dir,
+            manifest=load_patch_manifest(args.manifest),
+            record_path=args.record,
+        )
+    except (OSError, json.JSONDecodeError, GameDataError, PatchContractError, DistributionError) as exc:
+        print(f"Patch installation failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(record.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _uninstall_patch(args: argparse.Namespace) -> int:
+    try:
+        record = uninstall_patch(record_path=args.record)
+    except (OSError, json.JSONDecodeError, GameDataError, DistributionError) as exc:
+        print(f"Patch uninstall failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(record.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _validate_config(args: argparse.Namespace) -> int:
+    try:
+        config = load_runtime_config(args.config)
+    except (OSError, RuntimeConfigError) as exc:
+        print(f"Runtime configuration failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(config.redacted_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _verify_patch_output(args: argparse.Namespace) -> int:
+    try:
+        result = verify_patch_output(
+            original_data_win=args.original_data_win,
+            patched_data_win=args.patched_data_win,
+            manifest=load_patch_manifest(args.manifest),
+            gml_source_dir=args.gml_source_dir,
+        )
+    except (OSError, json.JSONDecodeError, PatchContractError, DistributionError) as exc:
+        print(f"Patch output verification failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -555,5 +658,13 @@ def main(argv: list[str] | None = None) -> int:
         return _inspect_game_data(args)
     if args.command == "validate-patch-target":
         return _validate_patch_target(args)
+    if args.command == "install-patch":
+        return _install_patch(args)
+    if args.command == "uninstall-patch":
+        return _uninstall_patch(args)
+    if args.command == "validate-config":
+        return _validate_config(args)
+    if args.command == "verify-patch-output":
+        return _verify_patch_output(args)
     parser.error(f"unknown command: {args.command}")
     return 2

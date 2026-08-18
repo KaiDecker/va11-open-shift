@@ -48,14 +48,15 @@ if (!controllerStep.Contains("ag_current_speaker != \"jill\"")) throw new Except
 if (!controllerHttp.Contains("story_generation_failed")) throw new Exception("Safe story retry diagnostic was missing");
 if (!controllerHttp.Contains("ag_was_order_response") || !controllerHttp.Contains("ag_state == 7")) throw new Exception("HTTP order response state was not preserved");
 if (controllerHttp.Split("ag_was_order_response").Length < 3) throw new Exception("Order HTTP error branch was missing");
-if (!controllerHttp.Contains("income_delta") || !controllerHttp.Contains("global.cashcounter += ag_income_delta") || !controllerHttp.Contains("global.barscore += ag_income_delta")) throw new Exception("Authoritative shift income was missing");
+if (!controllerHttp.Contains("ag_error_code") || !controllerHttp.Contains("本轮调酒结果无法确认（")) throw new Exception("Order HTTP error diagnostics were missing");
+if (!controllerHttp.Contains("income_delta") || !controllerHttp.Contains("global.cashcounter += ag_income_delta") || !controllerHttp.Contains("global.barscore += ag_income_delta") || !controllerHttp.Contains("scorepop_obj") || !controllerHttp.Contains("ag_scorepop_instance")) throw new Exception("Authoritative shift income or original score popup was missing");
 if (!controllerHttp.Contains("global.jillwallet += global.cashcounter") || !controllerHttp.Contains("global.datestring = \"O.S. DAY \"")) throw new Exception("End-of-day wallet settlement was missing");
 if (controllerHttp.Contains("global.money")) throw new Exception("Nonexistent original money variable remained");
 if (!controllerStep.Contains("order_started")) throw new Exception("Order acknowledgement was missing");
 if (!mixControl.Contains("/v1/orders/resolve")) throw new Exception("Drink result request was missing");
 if (!mixControl.Contains("global.mod_aa")) throw new Exception("Raw mixer ingredients were missing");
 if (!saveHttp.Contains("paired") || !saveHttp.Contains("restored")) throw new Exception("Explicit paired-save statuses were missing");
-if (!saveFlow.Contains("jill_room") || !saveFlow.Contains("out_of_apartment")) throw new Exception("Endless day room loop was missing");
+if (!saveFlow.Contains("jill_room") || !saveFlow.Contains("ag_flow_state = 4") || saveFlow.Contains("instance_create(x, y, out_of_apartment)")) throw new Exception("Manual next-day room gate was missing");
 if (!loadSlot.Contains("ag_operation = \"restore\"")) throw new Exception("Paired restore boundary was missing");
 if (!toWorkMouse.Contains("data_icon.alarm[0] = 10") || !toWorkMouse.Contains("data_icon.chosen = 1")) throw new Exception("Original tablet save route was missing");
 for (int slot = 1; slot <= 24; slot++)

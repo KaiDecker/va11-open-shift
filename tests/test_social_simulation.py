@@ -187,6 +187,22 @@ class SocialSimulationTests(unittest.TestCase):
                 most_common = signatures.most_common(1)[0][1]
                 self.assertLess(most_common / total, 0.2)
 
+    def test_three_hundred_sixty_five_day_unattended_social_soak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            with WorldStore(db_path) as store:
+                report = create_demo_world(store, MockProvider(), seed=29).run_days(365)
+                self.assertEqual(report.current_tick, 365 * DAY_MINUTES)
+                self.assertEqual(report.rejected_actions, 0)
+                self.assertEqual(report.provider_errors, 0)
+                self.assertEqual(len(report.agents), 5)
+                self.assertGreater(report.memory_count, 3000)
+                for agent in store.list_agents():
+                    self.assertGreaterEqual(agent.money, 0)
+                    self.assertGreaterEqual(agent.fatigue, 0)
+                    self.assertLessEqual(agent.fatigue, 1)
+                self.assertLess(db_path.stat().st_size, 40 * 1024 * 1024)
+
 
 if __name__ == "__main__":
     unittest.main()

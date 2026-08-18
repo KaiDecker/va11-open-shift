@@ -658,6 +658,18 @@ class BYOKProvider:
         if not self._api_key or not self._api_key.strip():
             raise BYOKConfigurationError("API key was empty")
 
+    def budget_report(self) -> dict[str, object]:
+        """Return explainable call-budget counters without exposing credentials."""
+
+        return {
+            "model": self.config.model,
+            "protocol": self.config.protocol.value,
+            "max_calls": self.config.max_calls,
+            "calls_used": self.calls_used,
+            "calls_remaining": max(0, self.config.max_calls - self.calls_used),
+            "exhausted": self.calls_used >= self.config.max_calls,
+        }
+
     @classmethod
     def from_env(
         cls,

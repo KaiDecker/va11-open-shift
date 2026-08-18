@@ -173,9 +173,13 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "冰箱压缩机在吧台后低声运转。",
         "story_generation_failed",
         "ag_was_order_response",
+        "ag_error_code",
+        "本轮调酒结果无法确认（",
         '"income_delta"',
         "global.cashcounter += ag_income_delta",
         "global.barscore += ag_income_delta",
+        "scorepop_obj",
+        "ag_scorepop_instance",
         "/v1/saves/",
         'ag_expected_status = "paired"',
         'ag_expected_status = "restored"',
@@ -189,6 +193,7 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "data_icon.chosen = 1",
         "global.jillwallet += global.cashcounter",
         'global.datestring = "O.S. DAY "',
+        "ag_flow_state = 4",
     )
     if "global.money" in combined:
         raise PatchContractError("GML used a nonexistent original money variable")

@@ -4,10 +4,12 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     var ag_http_status;
     var ag_result;
     var ag_was_order_response;
+    var ag_error_code;
     ag_status = ds_map_find_value(async_load, "status");
     ag_http_status = ds_map_find_value(async_load, "http_status");
     ag_result = ds_map_find_value(async_load, "result");
     ag_was_order_response = (ag_state == 7);
+    ag_error_code = "";
 
     if ((ag_state == 1 || ag_state == 7) && instance_exists(ag_wait_box))
     {
@@ -17,6 +19,25 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
 
     if (ag_status != 0 || ag_http_status != 200)
     {
+        // Preserve the request kind before changing ag_state.  The legacy
+        // client otherwise loses the order context and reports a generic
+        // scene error for a perfectly valid menu drink that resolved as
+        // wrong.  Error JSON is diagnostic only; it never changes the
+        // original failed-recipe gate in mix_action.
+        if (ag_was_order_response && ag_status == 0 && string_length(ag_result) > 0)
+        {
+            var ag_error_root;
+            var ag_error_object;
+            ag_error_root = json_decode(ag_result);
+            if (ds_exists(ag_error_root, ds_type_map) && ds_map_exists(ag_error_root, "error"))
+            {
+                ag_error_object = ds_map_find_value(ag_error_root, "error");
+                if (ds_exists(ag_error_object, ds_type_map) && ds_map_exists(ag_error_object, "code"))
+                    ag_error_code = string(ds_map_find_value(ag_error_object, "code"));
+            }
+            if (ds_exists(ag_error_root, ds_type_map))
+                ds_map_destroy(ag_error_root);
+        }
         if (ag_state == 3)
         {
             ag_state = 4;
@@ -28,7 +49,12 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             if (ag_http_status == 429)
                 ag_error_message = "O.S.：API调用额度已用完，请用更高额度重新启动。";
             else if (ag_was_order_response)
-                ag_error_message = "O.S.：本轮调酒结果无法确认，请查看启动窗口。";
+            {
+                if (ag_error_code == "")
+                    ag_error_message = "O.S.：本轮调酒结果无法确认，请查看启动窗口。";
+                else
+                    ag_error_message = "O.S.：本轮调酒结果无法确认（" + ag_error_code + "），请查看启动窗口。";
+            }
             else if (ag_http_status == 503)
                 ag_error_message = "O.S.：剧情生成失败（story_generation_failed）。关闭本段后重新进入即可重试。";
             else if (ag_http_status <= 0)
@@ -264,6 +290,25 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             {
                 global.cashcounter += ag_income_delta;
                 global.barscore += ag_income_delta;
+                // The original mixer creates scorepop_obj before the async
+                // service response arrives, so its normal score calculation
+                // sees shouldpay == 0 and leaves add at zero. Update that
+                // short-lived original popup with the authoritative payout;
+                // create a late popup only if the first one already expired.
+                if (instance_exists(scorepop_obj))
+                {
+                    with (scorepop_obj) add = ag_income_delta;
+                }
+                else
+                {
+                    var ag_scorepop_shouldpay;
+                    var ag_scorepop_instance;
+                    ag_scorepop_shouldpay = global.shouldpay;
+                    global.shouldpay = 0;
+                    ag_scorepop_instance = instance_create(370, 85, scorepop_obj);
+                    global.shouldpay = ag_scorepop_shouldpay;
+                    with (ag_scorepop_instance) add = ag_income_delta;
+                }
             }
             ag_line_index = 0;
             if (ag_is_order_response)
