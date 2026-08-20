@@ -17,7 +17,7 @@ from .bridge import (
     SceneLine,
     ScenePackage,
 )
-from .byok import BYOKBudgetExceeded
+from .byok import BYOKBudgetExceeded, BYOKError
 from .dialogue import (
     DialogueTurnContext,
     DialogueUtterance,
@@ -40,6 +40,11 @@ from .models import DAY_MINUTES
 from .providers import ModelProvider, MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
+from .world_events import (
+    CODE_OWNED_DAY_ONE_EVENTS,
+    PublicWorldEvent,
+    tablet_feed_item,
+)
 from .story_graph import (
     DAILY_STORY_GRAPH_VERSION,
     MAX_DAILY_CUSTOMERS,
@@ -61,6 +66,33 @@ _NON_NARRATIVE_EVENTS = {
 _SHIFT_PHASE_PLAYING = "playing"
 _SHIFT_PHASE_SAVE_REQUIRED = "save_required"
 
+_SCHEDULED_PUBLIC_EVENTS: dict[int, tuple[PublicWorldEvent, ...]] = {
+    2: (PublicWorldEvent(
+        "city_transit_day_2",
+        "city",
+        "developing",
+        "市中心交通线路临时调整",
+        "施工封闭让两条常用线路绕开酒吧附近街区，预计几天内逐步恢复。",
+        ("alma", "stella"),
+    ),),
+    4: (PublicWorldEvent(
+        "apollo_trust_day_4",
+        "economy",
+        "active",
+        "Apollo Trust 发布新的账户审查通知",
+        "银行要求部分客户重新确认身份资料，街区里的小商户开始讨论影响。",
+        ("dana", "sei"),
+    ),),
+    7: (PublicWorldEvent(
+        "lilim_health_day_7",
+        "health",
+        "developing",
+        "诊所报告纳米机排斥反应增加",
+        "几家诊所同时提醒居民留意新一批症状，官方仍在核对原因。",
+        ("dorothy", "alma"),
+    ),),
+}
+
 
 class WorldSceneService:
     """Turn authoritative world events into bounded GameMaker scene packages.
@@ -80,6 +112,7 @@ class WorldSceneService:
         advance_minutes: int = DAY_MINUTES,
         daily_story_mode: bool = False,
         prefetch_days: int = 1,
+        allow_provider_fallback: bool = True,
     ) -> None:
         if advance_minutes < 0 or advance_minutes > 30 * DAY_MINUTES:
             raise ValueError("advance_minutes must be between 0 and 43200")
@@ -92,6 +125,7 @@ class WorldSceneService:
         self.advance_minutes = advance_minutes
         self.daily_story_mode = daily_story_mode
         self.prefetch_days = prefetch_days
+        self.allow_provider_fallback = allow_provider_fallback
         self._lock = threading.RLock()
         self._generation_lock = threading.Lock()
         self._generation_threads: dict[int, threading.Thread] = {}
@@ -128,6 +162,12 @@ class WorldSceneService:
         actor = display_names.get(actor_id, actor_id.title())
         target = display_names.get(target_id, target_id.title())
         event_type = str(event.get("event_type", "world_event"))
+        if event_type == "public_world_event":
+            payload = event.get("payload")
+            if isinstance(payload, Mapping):
+                headline = str(payload.get("headline", "城市里发生了一件新事件。"))
+                summary = str(payload.get("summary", ""))
+                return f"{headline} {summary}".strip()
         templates = {
             "worked": f"{actor}结束工作后在酒吧遇到了{target}。",
             "rested": f"{actor}休息后在酒吧遇到{target}，眼前正好有件具体小事可聊。",
@@ -149,6 +189,134 @@ class WorldSceneService:
             event_type,
             f"{actor}与{target}在酒吧碰见，谈起眼前发生的一件小事。",
         )
+
+    def publish_public_world_event(self, event: PublicWorldEvent) -> int:
+        """Persist one event idempotently for both dialogue and tablet use."""
+
+        payload_json = json.dumps(
+            event.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        with self._lock, WorldStore(self.db_path) as store:
+            meta_key = f"public_world_event:{event.event_key}"
+            prior = store.get_meta(meta_key)
+            if prior is not None:
+                record = json.loads(prior)
+                if record.get("payload") != payload_json:
+                    raise BridgeError(
+                        409,
+                        "world_event_conflict",
+                        "world event key was already used with different content",
+                    )
+                return int(record["event_id"])
+            with store.transaction():
+                event_id = store.append_event(
+                    store.current_tick,
+                    "public_world_event",
+                    event.affected_agents[0] if event.affected_agents else None,
+                    payload=event.to_dict(),
+                )
+                store.set_meta(
+                    meta_key,
+                    json.dumps(
+                        {"event_id": event_id, "payload": payload_json},
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+            return event_id
+
+    @staticmethod
+    def _ensure_scheduled_public_event(store: WorldStore) -> None:
+        """Commit only the bounded, deterministic public-event catalogue.
+
+        The catalogue is deliberately code-owned: model output can discuss an
+        event but cannot invent or persist one. A per-day receipt makes retries
+        and repeated scene opens idempotent.
+        """
+
+        day = int(store.get_meta("current_story_day", "1") or 1)
+        events = _SCHEDULED_PUBLIC_EVENTS.get(day, ())
+        if not events:
+            return
+        for event in events:
+            receipt_key = f"scheduled_public_event:{event.event_key}"
+            if store.get_meta(receipt_key) is not None:
+                continue
+            payload = event.to_dict()
+            with store.transaction():
+                event_id = store.append_event(
+                    store.current_tick,
+                    "public_world_event",
+                    event.affected_agents[0] if event.affected_agents else None,
+                    payload=payload,
+                )
+                store.set_meta(
+                    receipt_key,
+                    json.dumps({"event_id": event_id, "event_key": event.event_key}, separators=(",", ":"), sort_keys=True),
+                )
+
+    def tablet_feed(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        raw_limit = request.get("limit", 5)
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or not 1 <= raw_limit <= 8:
+            raise ValueError("tablet feed limit must be between 1 and 8")
+        with self._lock, WorldStore(self.db_path) as store:
+            day = int(store.get_meta("current_story_day", "1") or 1)
+            public_events = [
+                event
+                for event in store.list_events()
+                if event["event_type"] == "public_world_event"
+            ]
+            items = []
+            seen_keys: set[str] = set()
+            seen_content: set[tuple[str, str]] = set()
+            if day == 1 and not public_events:
+                for index, event in enumerate(CODE_OWNED_DAY_ONE_EVENTS, start=1):
+                    items.append(tablet_feed_item(1000000 + index, 0, event))
+                    seen_keys.add(event.event_key)
+                    seen_content.add((event.headline, event.summary))
+                    if len(items) == raw_limit:
+                        break
+            for record in reversed(public_events):
+                if len(items) >= raw_limit:
+                    break
+                payload = record["payload"]
+                if not isinstance(payload, Mapping):
+                    raise ValueError("persisted public world event was invalid")
+                event = PublicWorldEvent.from_dict(payload)
+                content_key = (event.headline, event.summary)
+                if event.event_key in seen_keys or content_key in seen_content:
+                    continue
+                items.append(tablet_feed_item(record["event_id"], record["tick"], event))
+                seen_keys.add(event.event_key)
+                seen_content.add(content_key)
+                if len(items) == raw_limit:
+                    break
+            return {
+                "world_day": day,
+                "items": items,
+            }
+
+    def prepare_story_day(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Synchronously make the current bounded day playable before bar entry."""
+
+        with self._lock, WorldStore(self.db_path) as store:
+            day_index = int(store.get_meta("current_story_day", "1") or 1)
+            self._ensure_scheduled_public_event(store)
+            shift_phase = store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
+            last_completed_story_day = int(
+                store.get_meta("last_completed_story_day", "0") or 0
+            )
+            opening_seen = (
+                store.get_meta(f"bridge_ack:opening_day_{day_index}") is not None
+            )
+        self.prepare_daily_story_graph(day_index)
+        return {
+            "world_day": day_index,
+            "status": "ready",
+            "opening_seen": opening_seen,
+            "shift_phase": shift_phase,
+            "last_completed_story_day": last_completed_story_day,
+        }
 
     @staticmethod
     def _customer(participants: tuple[str, str]) -> str:
@@ -446,7 +614,14 @@ class WorldSceneService:
     ) -> tuple[dict[str, Any], ...]:
         selected: list[dict[str, Any]] = []
         customers: set[str] = set()
-        for event in reversed(events):
+        # Public events are the shared world canon and must be eligible for
+        # the next graph even when ordinary simulation events happened later
+        # in the same tick. Fill remaining customer slots from recent events.
+        ordered = [
+            *[event for event in events if event["event_type"] == "public_world_event"],
+            *reversed(events),
+        ]
+        for event in ordered:
             if event["event_type"] in _NON_NARRATIVE_EVENTS:
                 continue
             customer = WorldSceneService._customer(
@@ -603,14 +778,33 @@ class WorldSceneService:
                 display_names = {
                     agent.agent_id: agent.display_name for agent in store.list_agents()
                 }
-                graph = self._build_daily_story_graph(
-                    day_index,
-                    source_tick,
-                    source_events,
-                    display_names,
-                    engine,
-                    provider,
-                )
+                try:
+                    graph = self._build_daily_story_graph(
+                        day_index,
+                        source_tick,
+                        source_events,
+                        display_names,
+                        engine,
+                        provider,
+                    )
+                except BYOKError as exc:
+                    if not self.allow_provider_fallback:
+                        raise
+                    # A remote provider is useful for richer drafts, but a
+                    # transient transport/response/budget error must not make
+                    # the player's first O.S. day unplayable. Regenerate the
+                    # bounded graph with deterministic local dialogue; no
+                    # provider text or failed draft is committed.
+                    self._report_error("daily story provider fallback", exc)
+                    fallback_provider = MockProvider()
+                    graph = self._build_daily_story_graph(
+                        day_index,
+                        source_tick,
+                        source_events,
+                        display_names,
+                        self._engine(store, fallback_provider),
+                        fallback_provider,
+                    )
                 store.complete_daily_story_graph(
                     day_index,
                     DAILY_STORY_GRAPH_VERSION,
@@ -856,6 +1050,7 @@ class WorldSceneService:
             dict(request), separators=(",", ":"), sort_keys=True
         )
         with self._lock, WorldStore(self.db_path) as store:
+            self._ensure_scheduled_public_event(store)
             if store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING) == _SHIFT_PHASE_SAVE_REQUIRED:
                 completed_day = int(
                     store.get_meta("last_completed_story_day", str(max(1, day_index - 1)))
@@ -1024,6 +1219,7 @@ class WorldSceneService:
                     target_tick = store.current_tick + self.advance_minutes
                     if target_tick > store.current_tick:
                         engine.run_until(target_tick)
+                    self._ensure_scheduled_public_event(store)
                     events = [
                         item
                         for item in store.list_events()

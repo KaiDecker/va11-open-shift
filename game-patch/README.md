@@ -12,8 +12,9 @@ and leave the installed original untouched until an explicit install step.
 `apply_mod.csx` is the executable UndertaleModTool 0.9.1.2 patch source. It
 adds an Extra Chapters entry using the original `blue_chapter` and
 `yellow_chapter` sprites. Its position, 14-pixel expansion, chapter-label
-fonts, transition through `towork_load`, and bar-room entry follow the
-reference mod's `reun` / `reunstart` flow. The authenticated loopback
+fonts and room layout follow the original game. `START` first opens Jill's
+apartment; only the original go-to-work control may later transition through
+`towork_load` into the bar. The authenticated loopback
 controller then drives the original `obj_textbox` and whitelisted character
 objects. Generated text remains plain data and never enters `execute_string`
 or the original command parser.
@@ -22,7 +23,16 @@ The controller accepts 1-8 validated lines per scene. It derives the line
 count from the decoded list instead of assuming exactly three lines, keeps the
 speaker/portrait/expression checks for every entry, and allows up to 120
 seconds for private per-Agent BYOK dialogue generation before failing closed.
-The first daily graph is generated in parallel with speakerless opening text.
+The first daily graph is generated while Jill remains in her apartment. The
+one-time fixed message is placed in the original `popup_room` / `room_text`
+black message shown on each apartment entry, so it uses the game's own
+click-to-dismiss animation. The O.S. entry click must be released before a new
+click can dismiss the popup. After that popup closes, the original lower-right
+Jill comment area displays preparation, ready, and retry status. The go-to-work control
+remains gated until `/v1/story/prepare` confirms that the entire bounded daily
+graph is ready; preparation failures remain visible in the room and can be
+retried. Speakerless opening text plays only after the player chooses to leave
+for work.
 Python and SQLite retain null speaker and portrait fields for those ambient
 lines; the HTTP transport converts both fields to empty strings for the legacy
 GameMaker JSON decoder. Cached scenes then play without per-line API waits.
@@ -89,6 +99,23 @@ next story day begins only after the player clicks the original go-to-work
 control and its work transition completes. `current_story_day`, opening
 acknowledgements, selected branches, graph generation state, income history,
 and the save-required recovery point all remain in the paired SQLite snapshot.
+
+When Jill opens the apartment tablet, the patch reuses the original
+`augmented_eye_icon`, `aa_home`, `aa_button_1..3`, and `aa_art1` chain. It asks
+the loopback bridge for `/v1/tablet/feed`; up to three validated public-world
+events become deduplicated Augmented Eye headlines and Jill's article comments.
+The first O.S. day also has three code-owned fixed articles, so the tablet is
+useful immediately and does not wait for an AI article-writing call. A feed
+failure does not overwrite those day-one articles.
+O.S. has explicit article-button branches because the original buttons reject
+days after day 18; original story-day branches remain unchanged. The
+same persisted event records are used by bar dialogue, so the tablet and bar
+cannot disagree. A bounded, code-owned catalogue schedules a few later-day
+city events; provider text cannot create authoritative events.
+
+Because this world starts after Jill's original story, the O.S.-only apartment
+initialization marks all original shop decorations, wallpapers, tables, and
+music as owned. It does not grant cash and does not alter ordinary story saves.
 
 Verified toolchain:
 

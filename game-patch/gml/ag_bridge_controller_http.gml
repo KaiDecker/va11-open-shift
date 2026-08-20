@@ -91,7 +91,8 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     global.jillwallet += global.cashcounter;
                     global.cashcounter = 0;
                 }
-                global.datestring = "O.S. DAY " + ag_completed_day;
+                global.ag_story_day = real(ag_completed_day) + 1;
+                global.datestring = "O.S. DAY " + string(global.ag_story_day);
                 if (!instance_exists(ag_save_flow_controller))
                     instance_create(x, y, ag_save_flow_controller);
                 instance_destroy();

@@ -309,6 +309,8 @@ class BridgeApplication:
         order_handler: Callable[[Mapping[str, Any]], OrderResolution] | None = None,
         save_pair_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         save_restore_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        tablet_feed_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        story_prepare_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         error_reporter: Callable[[str, Exception], None] | None = None,
     ) -> None:
         self.config = config
@@ -318,12 +320,16 @@ class BridgeApplication:
         self._order_handler = order_handler
         self._save_pair_handler = save_pair_handler
         self._save_restore_handler = save_restore_handler
+        self._tablet_feed_handler = tablet_feed_handler
+        self._story_prepare_handler = story_prepare_handler
         self._error_reporter = error_reporter
         self._open_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._ack_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._order_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._save_pair_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._save_restore_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._tablet_feed_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._story_prepare_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._cache_lock = threading.Lock()
 
     def _authenticate(self, headers: Mapping[str, str]) -> None:
@@ -434,6 +440,42 @@ class BridgeApplication:
                         503,
                         "paired_restore_unavailable",
                         "the world service could not restore the paired save",
+                    ) from None
+            if method == "POST" and route == "/v1/tablet/feed":
+                try:
+                    return BridgeResponse(200, self._tablet_feed(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("tablet feed", error)
+                    raise BridgeError(
+                        503,
+                        "tablet_feed_unavailable",
+                        "the world service could not produce the tablet feed",
+                    ) from None
+            if method == "POST" and route == "/v1/story/prepare":
+                try:
+                    return BridgeResponse(200, self._prepare_story(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("daily story preparation", error)
+                    error_codes = {
+                        "BYOKBudgetExceeded": (429, "provider_budget_exhausted"),
+                        "BYOKConfigurationError": (503, "provider_configuration_error"),
+                        "BYOKTransportError": (503, "provider_transport_error"),
+                        "BYOKResponseError": (503, "provider_response_error"),
+                        "BYOKValidationError": (503, "provider_validation_error"),
+                    }
+                    if type(error).__name__ in error_codes:
+                        status, code = error_codes[type(error).__name__]
+                        raise BridgeError(
+                            status, code, "the configured provider was unavailable"
+                        ) from None
+                    raise BridgeError(
+                        503,
+                        "story_preparation_unavailable",
+                        "the world service could not prepare the story day",
                     ) from None
             raise BridgeError(404, "not_found", "route was not found")
         except BridgeError as error:
@@ -642,6 +684,136 @@ class BridgeApplication:
             unavailable_code="paired_restore_disabled",
             expected_status="restored",
         )
+
+    def _tablet_feed(self, request: dict[str, Any]) -> dict[str, Any]:
+        _require_fields(
+            request,
+            {"protocol_version", "request_id", "client_session_id", "limit"},
+        )
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(
+                409, "protocol_mismatch", "client protocol version was not supported"
+            )
+        raw_limit = request["limit"]
+        if (
+            isinstance(raw_limit, bool)
+            or not isinstance(raw_limit, (int, float))
+            or not float(raw_limit).is_integer()
+            or not 1 <= raw_limit <= 8
+        ):
+            raise BridgeError(400, "invalid_feed_limit", "tablet feed limit was invalid")
+        if self._tablet_feed_handler is None:
+            raise BridgeError(404, "tablet_feed_disabled", "tablet feed was not enabled")
+        with self._cache_lock:
+            prior = self._tablet_feed_requests.get(request_id)
+            if prior is not None:
+                return self._idempotent(
+                    self._tablet_feed_requests, request_id, request, prior[1]
+                )
+            handler_request = dict(request)
+            handler_request["limit"] = int(raw_limit)
+            result = dict(self._tablet_feed_handler(handler_request))
+            if set(result) != {"world_day", "items"}:
+                raise BridgeError(503, "invalid_feed_response", "tablet feed response was invalid")
+            if (
+                isinstance(result["world_day"], bool)
+                or not isinstance(result["world_day"], int)
+                or result["world_day"] < 1
+                or not isinstance(result["items"], list)
+                or len(result["items"]) > int(raw_limit)
+            ):
+                raise BridgeError(503, "invalid_feed_response", "tablet feed response was invalid")
+            item_fields = {
+                "event_id",
+                "event_key",
+                "category",
+                "status",
+                "headline",
+                "summary",
+                "occurred_tick",
+                "affected_agents",
+            }
+            for item in result["items"]:
+                if not isinstance(item, dict) or set(item) != item_fields:
+                    raise BridgeError(503, "invalid_feed_response", "tablet feed response was invalid")
+                if (
+                    isinstance(item["event_id"], bool)
+                    or not isinstance(item["event_id"], int)
+                    or item["event_id"] < 1
+                    or isinstance(item["occurred_tick"], bool)
+                    or not isinstance(item["occurred_tick"], int)
+                    or item["occurred_tick"] < 0
+                    or not all(isinstance(item[key], str) for key in ("event_key", "category", "status", "headline", "summary"))
+                    or not isinstance(item["affected_agents"], list)
+                    or not all(isinstance(agent, str) for agent in item["affected_agents"])
+                ):
+                    raise BridgeError(503, "invalid_feed_response", "tablet feed response was invalid")
+            response = {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": request_id,
+                **result,
+            }
+            return self._idempotent(
+                self._tablet_feed_requests, request_id, request, response
+            )
+
+    def _prepare_story(self, request: dict[str, Any]) -> dict[str, Any]:
+        _require_fields(
+            request, {"protocol_version", "request_id", "client_session_id"}
+        )
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(
+                409, "protocol_mismatch", "client protocol version was not supported"
+            )
+        if self._story_prepare_handler is None:
+            raise BridgeError(
+                404, "story_preparation_disabled", "story preparation was not enabled"
+            )
+        with self._cache_lock:
+            prior = self._story_prepare_requests.get(request_id)
+            if prior is not None:
+                return self._idempotent(
+                    self._story_prepare_requests, request_id, request, prior[1]
+                )
+        result = dict(self._story_prepare_handler(dict(request)))
+        if set(result) != {
+            "world_day",
+            "status",
+            "opening_seen",
+            "shift_phase",
+            "last_completed_story_day",
+        }:
+            raise BridgeError(
+                503, "invalid_story_preparation", "story preparation response was invalid"
+            )
+        if (
+            isinstance(result["world_day"], bool)
+            or not isinstance(result["world_day"], int)
+            or result["world_day"] < 1
+            or result["status"] != "ready"
+            or not isinstance(result["opening_seen"], bool)
+            or result["shift_phase"] not in {"playing", "save_required"}
+            or isinstance(result["last_completed_story_day"], bool)
+            or not isinstance(result["last_completed_story_day"], int)
+            or result["last_completed_story_day"] < 0
+            or result["last_completed_story_day"] >= result["world_day"]
+        ):
+            raise BridgeError(
+                503, "invalid_story_preparation", "story preparation response was invalid"
+            )
+        response = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": request_id,
+            **result,
+        }
+        with self._cache_lock:
+            return self._idempotent(
+                self._story_prepare_requests, request_id, request, response
+            )
 
 
 class BridgeHTTPServer(ThreadingHTTPServer):
