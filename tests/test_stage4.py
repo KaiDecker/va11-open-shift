@@ -21,6 +21,7 @@ from open_shift.cli import _paired_save_response
 from open_shift.paired_saves import PairedSaveManager
 from open_shift.providers import MockProvider
 from open_shift.store import WorldStore
+from open_shift.story_graph import DAILY_STORY_GRAPH_VERSION
 from open_shift.world_bridge import WorldSceneService
 
 
@@ -28,6 +29,56 @@ TOKEN = "stage-four-runtime-token"
 
 
 class Stage4WorldBridgeTests(unittest.TestCase):
+    def test_real_http_story_prepare_waits_for_daily_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            world = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                prefetch_days=0,
+            )
+            config = BridgeConfig(token=TOKEN, port=0)
+            app = BridgeApplication(
+                config,
+                story_prepare_handler=world.prepare_story_day,
+            )
+            server = BridgeHTTPServer(config, app=app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/v1/story/prepare",
+                    data=json.dumps(
+                        {
+                            "protocol_version": 1,
+                            "request_id": "http-prepare-1",
+                            "client_session_id": "http-prepare-session-0001",
+                        }
+                    ).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Open-Shift-Token": TOKEN,
+                    },
+                    method="POST",
+                )
+                with urlopen(request, timeout=10) as response:
+                    prepared = json.loads(response.read().decode())
+                self.assertEqual(prepared["status"], "ready")
+                self.assertEqual(prepared["world_day"], 1)
+                self.assertFalse(prepared["opening_seen"])
+                self.assertEqual(prepared["shift_phase"], "playing")
+                self.assertEqual(prepared["last_completed_story_day"], 0)
+                with WorldStore(db_path) as store:
+                    graph = store.get_daily_story_graph(1, DAILY_STORY_GRAPH_VERSION)
+                    self.assertIsNotNone(graph)
+                    self.assertEqual(graph["status"], "ready")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_real_http_pairs_and_restores_original_slot_with_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -529,6 +580,41 @@ class Stage4LauncherTests(unittest.TestCase):
                 session.start_bridge()
                 with self.assertRaisesRegex(Exception, "code 3"):
                     session.wait_for_bridge(timeout_seconds=0.1)
+
+    def test_launcher_prepares_story_before_starting_game(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            session = RuntimeSession(
+                LaunchConfig(
+                    db_path=root / "world.sqlite3",
+                    runtime_file=root / "runtime.ini",
+                    game_command=("fake-game",),
+                    game_cwd=root,
+                    prepare_story_before_game=True,
+                )
+            )
+            calls: list[str] = []
+            fake_game = unittest.mock.Mock()
+            fake_game.wait.return_value = 0
+            with patch.object(RuntimeSession, "write_runtime_file"), patch.object(
+                RuntimeSession, "start_bridge", side_effect=lambda: calls.append("bridge")
+            ), patch.object(
+                RuntimeSession,
+                "wait_for_bridge",
+                side_effect=lambda timeout: calls.append("health"),
+            ), patch.object(
+                RuntimeSession,
+                "prepare_story",
+                side_effect=lambda: calls.append("prepare"),
+            ), patch.object(
+                RuntimeSession,
+                "start_game",
+                side_effect=lambda: (calls.append("game"), fake_game)[1],
+            ), patch.object(RuntimeSession, "stop_bridge"), patch.object(
+                RuntimeSession, "cleanup"
+            ):
+                self.assertEqual(session.run(), 0)
+            self.assertEqual(calls, ["bridge", "health", "prepare", "game"])
 
     def test_real_launcher_process_round_trip_and_cleanup(self) -> None:
         fake_game = r'''

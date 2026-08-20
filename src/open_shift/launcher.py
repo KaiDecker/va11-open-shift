@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import json
 import os
 import secrets
 import socket
@@ -41,6 +42,8 @@ class LaunchConfig:
     health_timeout_seconds: float = 10.0
     steam_root: Path | None = None
     steam_app_id: int | None = None
+    prepare_story_before_game: bool = False
+    story_prepare_timeout_seconds: float = 600.0
 
     def __post_init__(self) -> None:
         if not self.game_command:
@@ -55,6 +58,10 @@ class LaunchConfig:
             raise LauncherError("steam_root must contain Steam2.dll")
         if self.steam_app_id is not None and self.steam_app_id <= 0:
             raise LauncherError("steam_app_id must be positive")
+        if not 1.0 <= self.story_prepare_timeout_seconds <= 1800.0:
+            raise LauncherError(
+                "story_prepare_timeout_seconds must be between 1 and 1800"
+            )
 
 
 @dataclass(slots=True)
@@ -137,7 +144,11 @@ class RuntimeSession:
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            # Keep bridge startup diagnostics visible to the launcher user.
+            # Runtime errors are intentionally short and never contain the
+            # API key; hiding this stream turns a useful configuration error
+            # into the opaque "exited with code 2" message.
+            stderr=None,
         )
         return self._bridge_process
 
@@ -186,6 +197,56 @@ class RuntimeSession:
             stdin=subprocess.DEVNULL,
         )
 
+    def prepare_story(self) -> None:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/v1/story/prepare",
+            data=json.dumps(
+                {
+                    "protocol_version": 1,
+                    "request_id": f"launcher_prepare_{self.session_id}",
+                    "client_session_id": self.session_id,
+                }
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Open-Shift-Token": self.token,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.config.story_prepare_timeout_seconds
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            try:
+                payload = json.loads(error.read().decode("utf-8"))
+                code = payload["error"]["code"]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                code = f"http_{error.code}"
+            raise LauncherError(f"story preparation failed: {code}") from None
+        except (OSError, urllib.error.URLError) as error:
+            raise LauncherError(
+                f"story preparation request failed: {type(error).__name__}"
+            ) from None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise LauncherError("story preparation returned invalid JSON") from None
+        if (
+            response.status != 200
+            or payload.get("protocol_version") != 1
+            or payload.get("request_id") != f"launcher_prepare_{self.session_id}"
+            or payload.get("status") != "ready"
+            or payload.get("shift_phase") not in {"playing", "save_required"}
+            or isinstance(payload.get("last_completed_story_day"), bool)
+            or not isinstance(payload.get("last_completed_story_day"), int)
+            or payload["last_completed_story_day"] < 0
+            or isinstance(payload.get("world_day"), bool)
+            or not isinstance(payload.get("world_day"), int)
+            or payload["world_day"] < 1
+            or payload["last_completed_story_day"] >= payload["world_day"]
+        ):
+            raise LauncherError("story preparation returned an invalid response")
+
     def stop_bridge(self) -> None:
         process = self._bridge_process
         self._bridge_process = None
@@ -210,6 +271,13 @@ class RuntimeSession:
         try:
             self.start_bridge()
             self.wait_for_bridge(self.config.health_timeout_seconds)
+            if self.config.prepare_story_before_game:
+                print(
+                    "Preparing the first Open Shift day before starting the game...",
+                    flush=True,
+                )
+                self.prepare_story()
+                print("The first Open Shift day is ready.", flush=True)
             game = self.start_game()
             return int(game.wait())
         finally:
@@ -230,6 +298,8 @@ def build_launch_config(
     health_timeout_seconds: float = 10.0,
     steam_root: str | Path | None = None,
     steam_app_id: int | None = None,
+    prepare_story_before_game: bool = False,
+    story_prepare_timeout_seconds: float = 600.0,
 ) -> LaunchConfig:
     return LaunchConfig(
         db_path=Path(db_path),
@@ -243,4 +313,6 @@ def build_launch_config(
         health_timeout_seconds=health_timeout_seconds,
         steam_root=Path(steam_root) if steam_root is not None else None,
         steam_app_id=steam_app_id,
+        prepare_story_before_game=prepare_story_before_game,
+        story_prepare_timeout_seconds=story_prepare_timeout_seconds,
     )

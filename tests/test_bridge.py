@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from open_shift.byok import BYOKTransportError
 from open_shift.bridge import (
     MAX_REQUEST_BYTES,
     PROTOCOL_VERSION,
@@ -83,6 +84,59 @@ class BridgeApplicationTests(unittest.TestCase):
         self.assertEqual(response.body["error"]["code"], "scene_provider_unavailable")
         self.assertNotIn("private diagnostic", json.dumps(response.body))
         self.assertEqual(reports, [("scene generation", failure)])
+
+    def test_story_preparation_is_authenticated_strict_and_idempotent(self) -> None:
+        calls: list[str] = []
+
+        def prepare(request: dict[str, Any]) -> dict[str, Any]:
+            calls.append(str(request["request_id"]))
+            return {
+                "world_day": 1,
+                "status": "ready",
+                "opening_seen": False,
+                "shift_phase": "playing",
+                "last_completed_story_day": 0,
+            }
+
+        app = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0), story_prepare_handler=prepare
+        )
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "prepare-1",
+            "client_session_id": self.session_id,
+        }
+        first = app.handle(
+            "POST", "/v1/story/prepare", self.headers, encoded(request)
+        )
+        replay = app.handle(
+            "POST", "/v1/story/prepare", self.headers, encoded(request)
+        )
+        self.assertEqual(first.status, 200)
+        self.assertEqual(first.body, replay.body)
+        self.assertEqual(first.body["status"], "ready")
+        self.assertEqual(first.body["shift_phase"], "playing")
+        self.assertEqual(calls, ["prepare-1"])
+
+        invalid = dict(request)
+        invalid["request_id"] = "prepare-2"
+        invalid["extra"] = True
+        rejected = app.handle(
+            "POST", "/v1/story/prepare", self.headers, encoded(invalid)
+        )
+        self.assertEqual(rejected.status, 400)
+
+        failed = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0),
+            story_prepare_handler=lambda request: (_ for _ in ()).throw(
+                BYOKTransportError("private provider detail")
+            ),
+        ).handle(
+            "POST", "/v1/story/prepare", self.headers, encoded(request)
+        )
+        self.assertEqual(failed.status, 503)
+        self.assertEqual(failed.body["error"]["code"], "provider_transport_error")
+        self.assertNotIn("private provider detail", json.dumps(failed.body))
 
     def test_fixed_scene_has_three_whitelisted_lines_and_returns_to_bar(self) -> None:
         response = self.open_scene()

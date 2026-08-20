@@ -80,6 +80,22 @@ def action_json(**overrides: Any) -> str:
 
 
 class BYOKProviderTests(unittest.TestCase):
+    def test_missing_optional_key_keeps_local_bridge_playable(self) -> None:
+        args = Namespace(
+            provider_base_url="https://api.deepseek.com",
+            provider_model="deepseek-v4-flash",
+            provider_protocol=APIProtocol.CHAT_COMPLETIONS.value,
+            provider_response_format=ResponseFormat.JSON_OBJECT.value,
+            provider_timeout=30.0,
+            provider_api_key_env="OPEN_SHIFT_KEY_THAT_IS_NOT_SET",
+            provider_max_calls=100,
+            provider_thinking=ThinkingMode.DISABLED.value,
+            provider_required=False,
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            factory = _provider_factory(args)
+        self.assertIsInstance(factory(), MockProvider)
+
     def test_deepseek_v4_flash_defaults_disable_thinking(self) -> None:
         args = Namespace(
             provider_base_url="https://api.deepseek.com",
@@ -90,6 +106,7 @@ class BYOKProviderTests(unittest.TestCase):
             provider_api_key_env="OPEN_SHIFT_API_KEY",
             provider_max_calls=100,
             provider_thinking=ThinkingMode.DEFAULT.value,
+            provider_required=False,
         )
         sentinel = object()
         with patch.object(BYOKProvider, "from_env", return_value=sentinel) as from_env:
@@ -100,6 +117,22 @@ class BYOKProviderTests(unittest.TestCase):
         config = from_env.call_args.args[0]
         self.assertEqual(config.model, "deepseek-v4-flash")
         self.assertIs(config.thinking_mode, ThinkingMode.DISABLED)
+
+    def test_required_provider_rejects_a_missing_key(self) -> None:
+        args = Namespace(
+            provider_base_url="https://api.deepseek.com",
+            provider_model="deepseek-v4-flash",
+            provider_protocol=APIProtocol.CHAT_COMPLETIONS.value,
+            provider_response_format=ResponseFormat.JSON_OBJECT.value,
+            provider_timeout=30.0,
+            provider_api_key_env="OPEN_SHIFT_KEY_THAT_IS_NOT_SET",
+            provider_max_calls=100,
+            provider_thinking=ThinkingMode.DISABLED.value,
+            provider_required=True,
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(BYOKConfigurationError):
+                _provider_factory(args)
 
     def test_responses_protocol_builds_schema_request_and_parses_action(self) -> None:
         transport = FakeTransport(

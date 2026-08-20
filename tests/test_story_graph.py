@@ -12,6 +12,7 @@ from open_shift.dialogue import (
     PlayerDialogueTurnContext,
 )
 from open_shift.bridge import BridgeError
+from open_shift.byok import BYOKTransportError
 from open_shift.drinks import DRINK_RECIPES, ServiceCategory
 from open_shift.models import DecisionContext
 from open_shift.providers import MockProvider
@@ -200,6 +201,68 @@ class DailyStoryGraphTests(unittest.TestCase):
                 self.assertEqual(ready["status"], "ready")
                 self.assertEqual(ready["attempt_count"], 2)
                 self.assertIsNone(ready["error_code"])
+
+    def test_byok_failure_falls_back_to_a_playable_local_graph(self) -> None:
+        class FailingBYOKProvider:
+            @staticmethod
+            def decide(context):
+                return MockProvider().decide(context)
+
+            @staticmethod
+            def generate_dialogue_line(context):
+                raise BYOKTransportError("private transport detail")
+
+            @staticmethod
+            def generate_player_dialogue_line(context):
+                raise BYOKTransportError("private transport detail")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            graph = WorldSceneService(
+                db_path,
+                provider_factory=FailingBYOKProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            ).prepare_daily_story_graph(1)
+            self.assertEqual(graph.day_index, 1)
+            with WorldStore(db_path) as store:
+                record = store.get_daily_story_graph(1, DAILY_STORY_GRAPH_VERSION)
+                self.assertIsNotNone(record)
+                assert record is not None
+                self.assertEqual(record["status"], "ready")
+                self.assertIsNone(record["error_code"])
+
+    def test_required_provider_failure_does_not_use_local_dialogue(self) -> None:
+        class FailingBYOKProvider:
+            @staticmethod
+            def decide(context):
+                return MockProvider().decide(context)
+
+            @staticmethod
+            def generate_dialogue_line(context):
+                raise BYOKTransportError("private transport detail")
+
+            @staticmethod
+            def generate_player_dialogue_line(context):
+                raise BYOKTransportError("private transport detail")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=FailingBYOKProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                allow_provider_fallback=False,
+            )
+            with self.assertRaises(BYOKTransportError):
+                service.prepare_daily_story_graph(1)
+            with WorldStore(db_path) as store:
+                record = store.get_daily_story_graph(1, DAILY_STORY_GRAPH_VERSION)
+            self.assertIsNotNone(record)
+            assert record is not None
+            self.assertEqual(record["status"], "failed")
+            self.assertEqual(record["error_code"], "BYOKTransportError")
 
     def test_interrupted_generation_is_retried_with_the_same_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

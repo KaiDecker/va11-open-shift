@@ -53,6 +53,25 @@ $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
+## 构建可交付 Mod 包
+
+仓库可以生成一个不包含 VA-11 HALL-A 原版资源的 source-only Mod 压缩包。
+压缩包内含补丁源码、桥接程序、安装隔离副本脚本和 DeepSeek 配置模板；
+用户需要在自己的电脑上提供 Steam 游戏目录、UTMT CLI 和 API Key。
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m open_shift build-mod-package `
+  --project-root . `
+  --output "work\open-shift-mvp-0.1.0.zip" `
+  --version "0.1.0"
+```
+
+压缩包不会包含 `data.win`、游戏 EXE、`reference-local`、SQLite 数据库、
+运行时 INI 或 API Key。解压后先运行
+`packaging\install-isolated-copy.ps1`，再运行
+`packaging\launch-open-shift.ps1`；Steam 原版目录始终只作为输入和校验来源。
+
 ## 设计边界
 
 - Provider 只返回结构化行动提案。
@@ -112,7 +131,7 @@ $env:OPEN_SHIFT_BRIDGE_TOKEN = "至少16位的临时随机令牌"
 python -m open_shift serve-bridge --host 127.0.0.1 --port 8711
 ```
 
-HTTP 合同与 GameMaker GML 通过 UndertaleModTool 0.9.1.2 构建。补丁把 `OPEN SHIFT` 章节文字追加到原版 `extrachapter_text` 的绘制事件，使用原版 `dialogfont2` / `ch_small` 等小号字体；点击 `START` 后复用 `out_of_apartment`、`towork_load` 和 `bar` 的原版过渡链。在酒吧房间内，桥接控制器严格检查协议与人物白名单，再用原版 `obj_textbox`、逐字显示和人物对象呈现场景。模型文本不会进入原版命令解析器。
+HTTP 合同与 GameMaker GML 通过 UndertaleModTool 0.9.1.2 构建。补丁把 `OPEN SHIFT` 章节文字追加到原版 `extrachapter_text` 的绘制事件，使用原版 `dialogfont2` / `ch_small` 等小号字体；点击 `START` 后先进入 Jill 房间，玩家主动点击“去酒吧上班”时才复用 `out_of_apartment`、`towork_load` 和 `bar` 的原版过渡链。在酒吧房间内，桥接控制器严格检查协议与人物白名单，再用原版 `obj_textbox`、逐字显示和人物对象呈现场景。模型文本不会进入原版命令解析器。
 
 `game-patch/apply_mod.csx` 只接受 `manifest.json` 中记录的 Steam Windows 原版哈希，资源缺失或名称冲突会立即终止。构建时只对副本使用；不要直接把输出写到 Steam 安装目录。
 
@@ -222,7 +241,7 @@ python -m open_shift launch `
   --advance-minutes 1440
 ```
 
-进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`O.S.` 使用原版蓝色章节项和小号章节字体；点击后会向下展开黄色 `START` 项。再点击 `START` 会播放原版离场过渡、经过日期加载画面进入酒吧，然后由原版对白框和人物立绘显示 Agent 场景。Jill 仍是玩家视角：她可以像原作一样在对白框中说话，但没有人物立绘；Jill 发言时会保留上一位在场顾客的立绘。她不会作为自主 Agent 出门、消费或替玩家行动。
+进入游戏后，点击主菜单左上角的 `+` 展开 Extra Chapters。`O.S.` 使用原版蓝色章节项和小号章节字体；点击后会向下展开黄色 `START` 项。再点击 `START` 会先进入 Jill 房间，并复用原版每次进房间都会出现的 `popup_room` 黑框显示 O.S. 介绍；补丁会等这次 `START` 点击完全松开，下一次点击才按原版动画收起黑框，同时后台准备当天完整剧情图。黑框收起后，原版右下角 Jill 留言区域会显示准备状态；显示“今日营业已准备完成”前，“去酒吧上班”不会离开房间；准备完成后由玩家主动点击，再经过原版离场和日期过渡进入酒吧。Jill 仍是玩家视角：她可以像原作一样在对白框中说话，但没有人物立绘；Jill 发言时会保留上一位在场顾客的立绘。她不会作为自主 Agent 出门、消费或替玩家行动。O.S. 房间会把原版商店的装饰、墙纸、桌面和音乐标记为已拥有，但不会额外增加 Jill 的现金，也不会影响普通剧情存档。
 
 使用 DeepSeek BYOK 世界时，先只在当前 PowerShell 会话设置 `OPEN_SHIFT_API_KEY`，然后在上述命令后增加：
 
@@ -239,11 +258,17 @@ python -m open_shift launch `
 
 DeepSeek V4 Flash 应使用模型 `deepseek-v4-flash`，并显式传入 `--thinking disabled`（探针）或 `--provider-thinking disabled`（游戏启动器），避免默认思考占用对白输出预算和等待时间。思考开关默认不发送，因此不会改变其他兼容端点的既有请求。
 
+完整的真实 DeepSeek 游戏验收使用 `packaging\launch-deepseek-acceptance.ps1`。脚本会隐藏读取 Key、先执行真实探针、为本次验收创建带时间戳的新数据库，并在打开游戏前生成好第一天。该模式要求远端 Provider 成功，配置、网络、额度、响应 JSON 或本地校验失败都会停止启动并显示安全错误代码，不会静默换成本地对白；脚本结束时会从当前 PowerShell 进程移除 Key。
+
+脚本默认使用 `-Thinking disabled`。如需测试思考模式，可以传入 `-Thinking enabled`；仍然是在打开游戏前生成整日有限剧情图，不会退回游戏中逐句等待。思考模式会让每次角色台词调用额外生成推理内容，因此首日加载、次日后台预取、Token 消耗和失败概率都会增加，当前默认仍建议关闭。
+
+不传 `-Database` 时，脚本会建立新的带时间戳验收世界；继续已有营业日时传入原数据库，例如 `-Database "reference-local\stage-10-deepseek-real-acceptance-20260820-130133.sqlite3"`。脚本会重放已生成的当天内容，并只为尚未准备好的后续一天调用 Provider。
+
 最终场景和服务结果会完整序列化到 SQLite。重复请求和服务重启直接重放已保存内容，不会再次调用 API、重复推进世界或重复结算一杯酒。每句的 `speaker_id` 必须匹配白名单人物；Agent 立绘和表情只允许映射到已核对的原版状态。Python 与 SQLite 中 Jill 始终使用 `portrait_id: null`，只有发给旧版 GameMaker JSON 解码器的 HTTP 响应会将其转换为空字符串。场景看完后，服务端会幂等写入 `player_scene_ack`；真实生成的公开谈话会被压缩为情景记忆，分别写入参与 Agent 的私有记忆流。Jill 的对白可以被在场 Agent 记住，但 Jill 自己没有 Agent 私有记忆或自主行动循环。GameMaker 仍不能直接修改权威世界数据库。
 
 阶段 7 已将单次调酒扩展为可恢复的整日有限剧情图。每天最多三位顾客，每笔点单预生成 `exact`、`acceptable`、`wrong`、`special` 四条结果草稿并汇合；Python 规则层在出杯时选择唯一分支，未选择内容不会写入事件、关系、目标、金钱或记忆。收入使用原版 25 种配方价格（例如 Moonblast 为 180）；可放大的大杯沿用原版基础价加 100 的规则，原本固定大杯的配方不重复加价，错误饮品为 0。GameMaker 只把服务端返回值应用到原版 `cashcounter`、`barscore`，并同步原版短暂收入弹出数字。
 
-首次进入存档以及每个新营业日时，前台使用无姓名、无立绘的冰箱、雨声和酒杯环境文字；准备完成后以“门铃响了”接入第一位顾客。环境行的 `speaker_id` 和 `portrait_id` 在 Python 与 SQLite 中保持 `null`，仅在发给旧版 GameMaker 的 HTTP JSON 中转换为空字符串。生成失败会显示 `story_generation_failed` 安全诊断，重新进入触发同一批源事件的恢复重试。当天开始游玩后只预取下一营业日，不会无限生成或持续消耗 API。DeepSeek V4 Flash 在仅提供 DeepSeek 地址时默认使用 `deepseek-v4-flash`，并在未显式覆盖时关闭 thinking。
+首次进入以及每个新营业日时，Jill 留在房间内等待 `/v1/story/prepare` 确认当天完整剧情图已经可用；DeepSeek 的传输、响应或额度错误会自动为当天图切换到确定性的本地对白，保证营业仍可开始，错误不会写入 Agent 记忆。失败诊断不会被永久遮盖，并可在房间内重试。第一天 Augmented Eye 的三篇文章是代码内置的固定城市新闻，不依赖 AI 生成；之后的公共世界事件才会通过持久化事件源更新平板和对白。玩家点击去上班后，酒吧前台才使用无姓名、无立绘的冰箱、雨声和酒杯环境文字，并以“门铃响了”接入第一位顾客。环境行的 `speaker_id` 和 `portrait_id` 在 Python 与 SQLite 中保持 `null`，仅在发给旧版 GameMaker 的 HTTP JSON 中转换为空字符串。当天开始游玩后只预取下一营业日，不会无限生成或持续消耗 API。DeepSeek V4 Flash 在仅提供 DeepSeek 地址时默认使用 `deepseek-v4-flash`，并在未显式覆盖时关闭 thinking。
 
 阶段 8 复用原版 24 个 `Record of Waifu Wars[槽位].txt` 槽位。保存 Open Shift 时先完成原版保存，再通过 SQLite backup 建立不可变 Agent 世界快照并原子更新槽位指针；读取时先核对原版存档哈希、快照哈希、槽位和世界修订号，全部匹配后才进入原版加载流程。覆盖保存失败会恢复上一份成对的原版存档，恢复失败会回滚实时世界，配对/恢复请求即使桥接服务重启也不会重复执行。
 

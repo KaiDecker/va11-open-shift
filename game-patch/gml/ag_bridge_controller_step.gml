@@ -197,13 +197,39 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
 if (ag_state == 4 && !instance_exists(obj_textbox))
 {
     var ag_error_box;
+    var ag_error_wrapped;
+    var ag_error_buffer;
     ag_error_box = instance_create(0, 0, obj_textbox);
     ag_error_box.current_text = 0;
     ag_error_box.current_chr = 0;
     ag_error_box.current_line = 0;
     ag_error_box.total_boxes = 0;
-    ag_error_box.input_text[0] = ag_error_message;
-    ag_error_box.edited_text[0] = ag_error_message;
+    ag_error_wrapped = "";
+    ag_error_buffer = "";
+    draw_set_font(global.fnt_textbox);
+    for (var ag_error_i = 1; ag_error_i <= string_length(ag_error_message); ag_error_i += 1)
+    {
+        var ag_error_char;
+        var ag_error_candidate;
+        ag_error_char = string_char_at(ag_error_message, ag_error_i);
+        ag_error_candidate = ag_error_buffer + ag_error_char;
+        if (ag_error_char == "#" || (string_length(ag_error_buffer) > 0 && string_width(ag_error_candidate) > 380))
+        {
+            if (string_length(ag_error_wrapped) > 0) ag_error_wrapped += "#";
+            ag_error_wrapped += ag_error_buffer;
+            if (ag_error_char == "#") ag_error_buffer = "";
+            else ag_error_buffer = ag_error_char;
+        }
+        else
+            ag_error_buffer = ag_error_candidate;
+    }
+    if (string_length(ag_error_buffer) > 0)
+    {
+        if (string_length(ag_error_wrapped) > 0) ag_error_wrapped += "#";
+        ag_error_wrapped += ag_error_buffer;
+    }
+    ag_error_box.input_text[0] = ag_error_wrapped;
+    ag_error_box.edited_text[0] = ag_error_box.input_text[0];
     ag_error_box.cmd_data_queue = ds_queue_create();
     ag_error_box.cmd_pos_queue = ds_queue_create();
     ag_error_box.next_cmd_pos = -1;

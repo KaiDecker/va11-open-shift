@@ -1,0 +1,12 @@
+[provider]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+protocol = "chat_completions"
+response_format = "json_object"
+api_key_env = "OPEN_SHIFT_API_KEY"
+timeout_seconds = 30
+max_calls = 100000
+thinking = "disabled"
+
+[world]
+prefetch_days = 1

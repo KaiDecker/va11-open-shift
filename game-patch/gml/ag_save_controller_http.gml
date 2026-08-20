@@ -20,8 +20,10 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     {
         var ag_root;
         var ag_valid;
+        var ag_response_world_day;
         ag_root = json_decode(ag_result);
         ag_valid = true;
+        ag_response_world_day = 1;
         if (!ds_exists(ag_root, ds_type_map) || ds_map_size(ag_root) != 6)
             ag_valid = false;
         if (ag_valid && (!ds_map_exists(ag_root, "protocol_version") || ds_map_find_value(ag_root, "protocol_version") != 1))
@@ -34,6 +36,8 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_valid = false;
         if (ag_valid && (!ds_map_exists(ag_root, "world_day") || ds_map_find_value(ag_root, "world_day") < 1))
             ag_valid = false;
+        if (ag_valid)
+            ag_response_world_day = ds_map_find_value(ag_root, "world_day");
         var ag_expected_status;
         if (ag_operation == "pair")
             ag_expected_status = "paired";
@@ -59,6 +63,9 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         }
         else
         {
+            global.ag_story_day = ag_response_world_day;
+            global.datestring = "O.S. DAY " + string(global.ag_story_day);
+            global.jillcomment = "JILL: DAY " + string(global.ag_story_day) + " 已准备好。";
             if (instance_exists(ag_save_flow_controller))
                 ag_save_flow_controller.ag_pair_complete = 1;
             global.block_click = 0;

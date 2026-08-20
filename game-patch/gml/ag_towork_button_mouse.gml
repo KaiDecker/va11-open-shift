@@ -18,6 +18,11 @@ if (!instance_exists(config_obj))
             instance_create(x, y, save_home);
         }
     }
+    else if (global.cur_day == 1001 && global.ag_prefetch_ready != 1)
+    {
+        if (instance_exists(ag_preload_controller))
+            ag_preload_controller.ag_preload_timeout_at += 0;
+    }
     else if (!instance_exists(out_of_apartment))
     {
         instance_create(x, y, out_of_apartment);

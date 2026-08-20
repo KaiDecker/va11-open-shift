@@ -37,6 +37,21 @@ string[] requiredResources = new[]
     "save_home",
     "saveloadpage",
     "jill_room",
+    "tablet_control",
+    "gml_Object_tablet_control_Create_0",
+    "gml_Object_show_room_Create_0",
+    "room_text",
+    "gml_Object_room_text_Draw_0",
+    "popup_room",
+    "roompopup_spr",
+    "gml_Object_popup_room_Create_0",
+    "gml_Object_popup_room_Step_0",
+    "gml_Object_var_controller_Create_0",
+    "aa_home",
+    "aa_art1",
+    "aa_button_1",
+    "aa_button_2",
+    "aa_button_3",
     "out_of_loading",
     "gml_Object_towork_button_Mouse_4",
     "data_icon",
@@ -58,7 +73,9 @@ string[] newResources = new[]
     "ag_open_shift_start",
     "ag_bridge_controller",
     "ag_save_controller",
-    "ag_save_flow_controller"
+    "ag_save_flow_controller",
+    "ag_tablet_controller",
+    "ag_preload_controller"
 };
 
 for (int slot = 1; slot <= 24; slot++)
@@ -153,11 +170,29 @@ UndertaleGameObject saveFlowController = new()
     Depth = -2002,
     Persistent = true
 };
+UndertaleGameObject tabletController = new()
+{
+    Name = Data.Strings.MakeString("ag_tablet_controller"),
+    Visible = false,
+    Solid = false,
+    Depth = -2003,
+    Persistent = false
+};
+UndertaleGameObject preloadController = new()
+{
+    Name = Data.Strings.MakeString("ag_preload_controller"),
+    Visible = false,
+    Solid = false,
+    Depth = -2004,
+    Persistent = true
+};
 Data.GameObjects.Add(button);
 Data.GameObjects.Add(start);
 Data.GameObjects.Add(controller);
 Data.GameObjects.Add(saveController);
 Data.GameObjects.Add(saveFlowController);
+Data.GameObjects.Add(tabletController);
+Data.GameObjects.Add(preloadController);
 
 UndertaleModLib.Compiler.CodeImportGroup importGroup = new(Data)
 {
@@ -176,6 +211,28 @@ importGroup.QueueReplace(saveController.EventHandlerFor(EventType.Step, EventSub
 importGroup.QueueReplace(saveController.EventHandlerFor(EventType.Other, (uint)62u, Data), ReadSource("ag_save_controller_http.gml"));
 importGroup.QueueReplace(saveFlowController.EventHandlerFor(EventType.Create, Data), ReadSource("ag_save_flow_controller_create.gml"));
 importGroup.QueueReplace(saveFlowController.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_save_flow_controller_step.gml"));
+importGroup.QueueReplace(tabletController.EventHandlerFor(EventType.Create, Data), ReadSource("ag_tablet_controller_create.gml"));
+importGroup.QueueReplace(tabletController.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_tablet_controller_step.gml"));
+importGroup.QueueReplace(preloadController.EventHandlerFor(EventType.Create, Data), ReadSource("ag_preload_controller_create.gml"));
+importGroup.QueueReplace(preloadController.EventHandlerFor(EventType.Step, EventSubtypeStep.Step, Data), ReadSource("ag_preload_controller_step.gml"));
+importGroup.QueueReplace(preloadController.EventHandlerFor(EventType.Other, (uint)62u, Data), ReadSource("ag_preload_controller_http.gml"));
+importGroup.QueueReplace(preloadController.EventHandlerFor(EventType.Draw, Data), ReadSource("ag_preload_controller_draw.gml"));
+
+UndertaleCode showRoomCreate = Data.Code.ByName("gml_Object_show_room_Create_0");
+importGroup.QueueAppend(showRoomCreate, ReadSource("ag_show_room_create_append.gml"));
+
+UndertaleCode popupRoomCreate = Data.Code.ByName("gml_Object_popup_room_Create_0");
+UndertaleCode popupRoomStep = Data.Code.ByName("gml_Object_popup_room_Step_0");
+importGroup.QueueAppend(popupRoomCreate, ReadSource("ag_popup_room_create_append.gml"));
+importGroup.QueueReplace(popupRoomStep, ReadSource("ag_popup_room_step.gml"));
+
+UndertaleCode variableControllerCreate = Data.Code.ByName("gml_Object_var_controller_Create_0");
+importGroup.QueueAppend(variableControllerCreate, ReadSource("ag_var_controller_create_append.gml"));
+
+UndertaleCode tabletCreate = Data.Code.ByName("gml_Object_tablet_control_Create_0");
+importGroup.QueueAppend(tabletCreate, @"
+if (global.cur_day == 1001 && !instance_exists(ag_tablet_controller))
+    instance_create(x, y, ag_tablet_controller);");
 
 for (int slot = 1; slot <= 24; slot++)
 {
@@ -192,6 +249,13 @@ importGroup.QueueReplace(loadSlotScript, ReadSource("ag_load_slot_script.gml"));
 
 UndertaleCode toWorkMouse = Data.Code.ByName("gml_Object_towork_button_Mouse_4");
 importGroup.QueueReplace(toWorkMouse, ReadSource("ag_towork_button_mouse.gml"));
+
+UndertaleCode aaButton1Step = Data.Code.ByName("gml_Object_aa_button_1_Step_0");
+UndertaleCode aaButton2Step = Data.Code.ByName("gml_Object_aa_button_2_Step_0");
+UndertaleCode aaButton3Step = Data.Code.ByName("gml_Object_aa_button_3_Step_0");
+importGroup.QueueReplace(aaButton1Step, ReadSource("ag_aa_button_1_step.gml"));
+importGroup.QueueReplace(aaButton2Step, ReadSource("ag_aa_button_2_step.gml"));
+importGroup.QueueReplace(aaButton3Step, ReadSource("ag_aa_button_3_step.gml"));
 
 UndertaleCode entrypoint = Data.Code.ByName("gml_Object_prologuechapter_Step_0");
 importGroup.QueueAppend(entrypoint, @"
@@ -261,6 +325,12 @@ string[] expectedCode = new[]
     "gml_Object_ag_save_controller_Other_62",
     "gml_Object_ag_save_flow_controller_Create_0",
     "gml_Object_ag_save_flow_controller_Step_0"
+    ,"gml_Object_ag_tablet_controller_Create_0"
+    ,"gml_Object_ag_tablet_controller_Step_0"
+    ,"gml_Object_ag_preload_controller_Create_0"
+    ,"gml_Object_ag_preload_controller_Step_0"
+    ,"gml_Object_ag_preload_controller_Other_62"
+    ,"gml_Object_ag_preload_controller_Draw_0"
 };
 foreach (string name in expectedCode)
 {
@@ -268,4 +338,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 9 patch compiled successfully.");
+ScriptMessage("Open Shift Stage 10 MVP patch compiled successfully.");
