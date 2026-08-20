@@ -27,12 +27,13 @@ else
 
 if (place_meeting(x, y, cursor_hitbox) && mouse_check_button_pressed(mb_left) && ready)
 {
-    if (!instance_exists(out_of_apartment))
-    {
-        global.cur_day = 1001;
-        global.cur_client = 1;
-        global.cur_stage = 1;
-        global.block_click = 0;
-        instance_create(x, y, out_of_apartment);
-    }
+    global.cur_day = 1001;
+    global.cur_client = 1;
+    global.cur_stage = 1;
+    global.dayphase = "apt";
+    global.ag_prefetch_ready = 0;
+    global.ag_prefetch_failed = 0;
+    global.ag_open_shift_intro_pending = 1;
+    global.ag_open_shift_intro_seen = 0;
+    room_goto(jill_room);
 }

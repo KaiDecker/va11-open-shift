@@ -8,6 +8,7 @@ from pathlib import Path
 from .byok import (
     APIProtocol,
     BYOKConfig,
+    BYOKConfigurationError,
     BYOKError,
     BYOKProvider,
     ResponseFormat,
@@ -37,6 +38,7 @@ from .patch_contract import (
     validate_patch_target,
 )
 from .paired_saves import PairedSaveError, PairedSaveManager, PairedSaveMismatch
+from .package import PackageError, build_mod_package
 from .providers import MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
@@ -119,6 +121,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--provider-api-key-env", default="OPEN_SHIFT_API_KEY")
     bridge.add_argument("--provider-timeout", type=float, default=30.0)
     bridge.add_argument("--provider-max-calls", type=int, default=100000)
+    bridge.add_argument("--provider-required", action="store_true")
     bridge.add_argument(
         "--provider-thinking",
         choices=[mode.value for mode in ThinkingMode],
@@ -149,6 +152,9 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--provider-api-key-env", default="OPEN_SHIFT_API_KEY")
     launch.add_argument("--provider-timeout", type=float, default=30.0)
     launch.add_argument("--provider-max-calls", type=int, default=100000)
+    launch.add_argument("--provider-required", action="store_true")
+    launch.add_argument("--prepare-before-game", action="store_true")
+    launch.add_argument("--prepare-timeout", type=float, default=600.0)
     launch.add_argument(
         "--provider-thinking",
         choices=[mode.value for mode in ThinkingMode],
@@ -194,6 +200,13 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--patched-data-win", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
     verify.add_argument("--gml-source-dir", type=Path, required=True)
+    package = subparsers.add_parser(
+        "build-mod-package",
+        help="build a source-only Mod zip without original game files",
+    )
+    package.add_argument("--project-root", type=Path, default=Path("."))
+    package.add_argument("--output", type=Path, required=True)
+    package.add_argument("--version", default="0.1.0")
     return parser
 
 
@@ -373,6 +386,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 advance_minutes=args.advance_minutes,
                 daily_story_mode=True,
                 prefetch_days=args.prefetch_days,
+                allow_provider_fallback=not args.provider_required,
             )
             local_app_data = Path(
                 os.environ.get("LOCALAPPDATA", str(args.world_db.parent))
@@ -402,6 +416,8 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                     order_handler=world.resolve_order,
                     save_pair_handler=save_pair,
                     save_restore_handler=restore_pair,
+                    tablet_feed_handler=world.tablet_feed,
+                    story_prepare_handler=world.prepare_story_day,
                     error_reporter=_report_world_error,
                 ),
             )
@@ -476,18 +492,26 @@ def _provider_factory(args: argparse.Namespace):
     thinking_mode = ThinkingMode(args.provider_thinking)
     if provider_model == "deepseek-v4-flash" and thinking_mode is ThinkingMode.DEFAULT:
         thinking_mode = ThinkingMode.DISABLED
-    provider = BYOKProvider.from_env(
-        BYOKConfig(
-            base_url=args.provider_base_url,
-            model=provider_model,
-            protocol=protocol,
-            response_format=response_format,
-            timeout_seconds=args.provider_timeout,
-            api_key_env=args.provider_api_key_env,
-            max_calls=args.provider_max_calls,
-            thinking_mode=thinking_mode,
+    try:
+        provider = BYOKProvider.from_env(
+            BYOKConfig(
+                base_url=args.provider_base_url,
+                model=provider_model,
+                protocol=protocol,
+                response_format=response_format,
+                timeout_seconds=args.provider_timeout,
+                api_key_env=args.provider_api_key_env,
+                max_calls=args.provider_max_calls,
+                thinking_mode=thinking_mode,
+            )
         )
-    )
+    except BYOKConfigurationError:
+        if args.provider_required:
+            raise
+        # A missing optional key must not prevent the local bridge from
+        # starting. The world remains playable with deterministic dialogue;
+        # setting the key enables the configured DeepSeek provider.
+        return lambda: MockProvider()
 
     return lambda: provider
 
@@ -516,6 +540,8 @@ def _launch(args: argparse.Namespace) -> int:
             port=args.port,
             advance_minutes=args.advance_minutes,
             health_timeout_seconds=args.health_timeout,
+            prepare_story_before_game=args.prepare_before_game,
+            story_prepare_timeout_seconds=args.prepare_timeout,
             bridge_extra_args=tuple(
                 item
                 for pair in (
@@ -527,6 +553,10 @@ def _launch(args: argparse.Namespace) -> int:
                     ("--provider-timeout", str(args.provider_timeout)),
                     ("--provider-max-calls", str(args.provider_max_calls)),
                     ("--provider-thinking", args.provider_thinking),
+                    (
+                        "--provider-required",
+                        "" if args.provider_required else None,
+                    ),
                     ("--prefetch-days", str(args.prefetch_days)),
                     (
                         "--native-save-dir",
@@ -539,6 +569,7 @@ def _launch(args: argparse.Namespace) -> int:
                 )
                 if pair[1] is not None
                 for item in pair
+                if item != ""
             ),
         )
         return RuntimeSession(config).run()
@@ -641,6 +672,20 @@ def _verify_patch_output(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_mod_package(args: argparse.Namespace) -> int:
+    try:
+        result = build_mod_package(
+            project_root=args.project_root,
+            output=args.output,
+            version=args.version,
+        )
+    except (PackageError, OSError, ValueError) as exc:
+        print(f"Package build failed: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -666,5 +711,7 @@ def main(argv: list[str] | None = None) -> int:
         return _validate_config(args)
     if args.command == "verify-patch-output":
         return _verify_patch_output(args)
+    if args.command == "build-mod-package":
+        return _build_mod_package(args)
     parser.error(f"unknown command: {args.command}")
     return 2

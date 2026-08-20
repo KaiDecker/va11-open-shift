@@ -9,11 +9,11 @@ Underanalyzer.Decompiler.IDecompileSettings settings = Data.ToolInfo.DecompilerS
 string Decompile(string name) => new Underanalyzer.Decompiler.DecompileContext(
     context, Data.Code.ByName(name), settings
 ).DecompileToString();
-string[] names = new[] { "ag_open_shift_chapter", "ag_open_shift_start", "ag_bridge_controller", "ag_save_controller", "ag_save_flow_controller" };
+string[] names = new[] { "ag_open_shift_chapter", "ag_open_shift_start", "ag_bridge_controller", "ag_save_controller", "ag_save_flow_controller", "ag_tablet_controller", "ag_preload_controller" };
 foreach (string name in names) if (Data.GameObjects.ByName(name) is null) throw new Exception("Missing object: " + name);
 if (Data.GameObjects.ByName("ag_open_shift_chapter").Sprite?.Name?.Content != "blue_chapter") throw new Exception("Chapter sprite mismatch");
 if (Data.GameObjects.ByName("ag_open_shift_start").Sprite?.Name?.Content != "yellow_chapter") throw new Exception("Start sprite mismatch");
-string[] code = new[] { "gml_Object_ag_open_shift_chapter_Create_0", "gml_Object_ag_open_shift_chapter_Step_0", "gml_Object_ag_open_shift_start_Create_0", "gml_Object_ag_open_shift_start_Step_0", "gml_Object_ag_bridge_controller_Create_0", "gml_Object_ag_bridge_controller_Step_0", "gml_Object_ag_bridge_controller_Other_62", "gml_Object_ag_save_controller_Create_0", "gml_Object_ag_save_controller_Step_0", "gml_Object_ag_save_controller_Other_62", "gml_Object_ag_save_flow_controller_Create_0", "gml_Object_ag_save_flow_controller_Step_0" };
+string[] code = new[] { "gml_Object_ag_open_shift_chapter_Create_0", "gml_Object_ag_open_shift_chapter_Step_0", "gml_Object_ag_open_shift_start_Create_0", "gml_Object_ag_open_shift_start_Step_0", "gml_Object_ag_bridge_controller_Create_0", "gml_Object_ag_bridge_controller_Step_0", "gml_Object_ag_bridge_controller_Other_62", "gml_Object_ag_save_controller_Create_0", "gml_Object_ag_save_controller_Step_0", "gml_Object_ag_save_controller_Other_62", "gml_Object_ag_save_flow_controller_Create_0", "gml_Object_ag_save_flow_controller_Step_0", "gml_Object_ag_tablet_controller_Create_0", "gml_Object_ag_tablet_controller_Step_0", "gml_Object_ag_preload_controller_Create_0", "gml_Object_ag_preload_controller_Step_0", "gml_Object_ag_preload_controller_Other_62", "gml_Object_ag_preload_controller_Draw_0" };
 foreach (string name in code) if (Data.Code.ByName(name) is null) throw new Exception("Missing code: " + name);
 if (Data.Code.ByName("gml_Object_prologuechapter_Step_0") is null) throw new Exception("Missing chapter entrypoint");
 if (Data.Code.ByName("gml_Object_extrachapter_text_Draw_0") is null) throw new Exception("Missing chapter text draw entrypoint");
@@ -27,6 +27,20 @@ string saveHttp = Decompile("gml_Object_ag_save_controller_Other_62");
 string saveFlow = Decompile("gml_Object_ag_save_flow_controller_Step_0");
 string loadSlot = Decompile("gml_Script_load_slot_script");
 string toWorkMouse = Decompile("gml_Object_towork_button_Mouse_4");
+string tabletCreate = Decompile("gml_Object_tablet_control_Create_0");
+string tabletControllerCreate = Decompile("gml_Object_ag_tablet_controller_Create_0");
+string preloadCreate = Decompile("gml_Object_ag_preload_controller_Create_0");
+string preloadStep = Decompile("gml_Object_ag_preload_controller_Step_0");
+string preloadDraw = Decompile("gml_Object_ag_preload_controller_Draw_0");
+string preloadHttp = Decompile("gml_Object_ag_preload_controller_Other_62");
+string startStep = Decompile("gml_Object_ag_open_shift_start_Step_0");
+string showRoomCreate = Decompile("gml_Object_show_room_Create_0");
+string popupRoomCreate = Decompile("gml_Object_popup_room_Create_0");
+string popupRoomStep = Decompile("gml_Object_popup_room_Step_0");
+string variableControllerCreate = Decompile("gml_Object_var_controller_Create_0");
+string aaButton1Step = Decompile("gml_Object_aa_button_1_Step_0");
+string aaButton2Step = Decompile("gml_Object_aa_button_2_Step_0");
+string aaButton3Step = Decompile("gml_Object_aa_button_3_Step_0");
 if (!chapterDraw.Contains("O.S.")) throw new Exception("Short chapter label was missing");
 if (!controllerCreate.Contains("session_id")) throw new Exception("Unique runtime session was missing");
 if (!controllerStep.Contains("continued_in_bar")) throw new Exception("Continuous bar outcome was missing");
@@ -59,6 +73,20 @@ if (!saveHttp.Contains("paired") || !saveHttp.Contains("restored")) throw new Ex
 if (!saveFlow.Contains("jill_room") || !saveFlow.Contains("ag_flow_state = 4") || saveFlow.Contains("instance_create(x, y, out_of_apartment)")) throw new Exception("Manual next-day room gate was missing");
 if (!loadSlot.Contains("ag_operation = \"restore\"")) throw new Exception("Paired restore boundary was missing");
 if (!toWorkMouse.Contains("data_icon.alarm[0] = 10") || !toWorkMouse.Contains("data_icon.chosen = 1")) throw new Exception("Original tablet save route was missing");
+if (!tabletCreate.Contains("ag_tablet_controller")) throw new Exception("Original tablet controller hook was missing");
+if (!tabletControllerCreate.Contains("global.hl53") || !tabletControllerCreate.Contains("global.hl54") || !tabletControllerCreate.Contains("global.hl55") || !tabletControllerCreate.Contains("global.aacomment54") || !tabletControllerCreate.Contains("global.aacomment55") || !tabletControllerCreate.Contains("global.aacomment56")) throw new Exception("Last readable original tablet articles were missing");
+if (tabletControllerCreate.Contains("http_request") || tabletControllerCreate.Contains("/v1/tablet/feed")) throw new Exception("Fixed tablet articles unexpectedly used HTTP");
+if (!startStep.Contains("room_goto(jill_room)") || startStep.Contains("out_of_apartment")) throw new Exception("O.S. did not enter Jill's room first");
+if (!preloadCreate.Contains("/v1/story/prepare") || !preloadStep.Contains("ag_prefetch_ready") || !preloadHttp.Contains("今日营业已准备完成") || !preloadHttp.Contains("global.jillcomment")) throw new Exception("Apartment story preparation gate was missing");
+if (!preloadHttp.Contains("shift_phase") || !preloadHttp.Contains("global.ag_story_day") || showRoomCreate.Contains("global.datestring = \"O.S. DAY 1\"") || !showRoomCreate.Contains("global.ag_story_day")) throw new Exception("O.S. apartment day synchronization was missing");
+if (!preloadHttp.Contains("本地服务暂时不可用") || !preloadHttp.Contains("已切换本地剧情")) throw new Exception("Local story fallback was missing");
+if (!showRoomCreate.Contains("OPEN SHIFT") || !showRoomCreate.Contains("room_text") || !showRoomCreate.Contains("点击鼠标关闭") || preloadStep.Contains("instance_create(x, y, obj_textbox)") || preloadStep.Contains("instance_create(x, y, out_of_apartment)")) throw new Exception("Original room popup introduction or manual bar entry was missing");
+if (!popupRoomCreate.Contains("ag_open_shift_click_armed") || !popupRoomStep.Contains("global.cur_day == 1001") || !popupRoomStep.Contains("!mouse_check_button(mb_left)") || !popupRoomStep.Contains("mouse_check_button_pressed(mb_left)") || !popupRoomStep.Contains("else if (mouse_check_button(mb_left)")) throw new Exception("O.S. room popup click-release guard was missing");
+if (!toWorkMouse.Contains("global.ag_prefetch_ready != 1") || !toWorkMouse.Contains("instance_create(x, y, out_of_apartment)")) throw new Exception("Go-to-work readiness gate was missing");
+if (!showRoomCreate.Contains("global.shop_casitas = 1") || !showRoomCreate.Contains("global.gotmeshop = 1") || !showRoomCreate.Contains("ag_preload_controller")) throw new Exception("Post-story apartment inventory or preparation hook was missing");
+if (!variableControllerCreate.Contains("global.ag_open_shift_intro_pending = 0")) throw new Exception("O.S. apartment state initialization was missing");
+if (!aaButton1Step.Contains("global.cur_day == 1001") || !aaButton1Step.Contains("global.cur_news = 52") || !aaButton2Step.Contains("global.cur_news = 53") || !aaButton3Step.Contains("global.cur_news = 54")) throw new Exception("O.S. did not use the last readable original Augmented Eye articles");
+if (Data.Code.ByName("gml_Object_aa_art1_Draw_0") is not null) throw new Exception("Legacy article Draw overlay remained");
 for (int slot = 1; slot <= 24; slot++)
 {
     string create = Decompile($"gml_Object_save{slot}_Create_0");

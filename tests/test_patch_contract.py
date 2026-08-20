@@ -96,7 +96,7 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 16)
+        self.assertEqual(len(sources), 29)
 
     def test_menu_entry_matches_reference_chapter_layout(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -134,6 +134,33 @@ class PatchContractTests(unittest.TestCase):
         towork = (
             root / "game-patch" / "gml" / "ag_towork_button_mouse.gml"
         ).read_text(encoding="utf-8")
+        preload_create = (
+            root / "game-patch" / "gml" / "ag_preload_controller_create.gml"
+        ).read_text(encoding="utf-8")
+        preload_step = (
+            root / "game-patch" / "gml" / "ag_preload_controller_step.gml"
+        ).read_text(encoding="utf-8")
+        preload_draw = (
+            root / "game-patch" / "gml" / "ag_preload_controller_draw.gml"
+        ).read_text(encoding="utf-8")
+        popup_room_create = (
+            root / "game-patch" / "gml" / "ag_popup_room_create_append.gml"
+        ).read_text(encoding="utf-8")
+        popup_room_step = (
+            root / "game-patch" / "gml" / "ag_popup_room_step.gml"
+        ).read_text(encoding="utf-8")
+        preload_http = (
+            root / "game-patch" / "gml" / "ag_preload_controller_http.gml"
+        ).read_text(encoding="utf-8")
+        tablet_create = (
+            root / "game-patch" / "gml" / "ag_tablet_controller_create.gml"
+        ).read_text(encoding="utf-8")
+        show_room = (
+            root / "game-patch" / "gml" / "ag_show_room_create_append.gml"
+        ).read_text(encoding="utf-8")
+        aa_button_1 = (
+            root / "game-patch" / "gml" / "ag_aa_button_1_step.gml"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('Data.Sprites.ByName("blue_chapter")', patch)
         self.assertIn('Data.Sprites.ByName("yellow_chapter")', patch)
@@ -143,7 +170,9 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("ag_open_shift_chapter.y + 14", start)
         self.assertIn("cursor_hitbox", chapter)
         self.assertIn("cursor_hitbox", start)
-        self.assertIn("out_of_apartment", start)
+        self.assertIn("room_goto(jill_room)", start)
+        self.assertNotIn("ag_preload_controller", start)
+        self.assertNotIn("out_of_apartment", preload_step)
         self.assertIn('Data.Code.ByName("gml_Object_extrachapter_text_Draw_0")', patch)
         self.assertIn("dialogfont2", patch)
         self.assertIn("ch_small", patch)
@@ -213,6 +242,39 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("data_icon.alarm[0] = 10", towork)
         self.assertIn("data_icon.chosen = 1", towork)
         self.assertIn("instance_create(x, y, out_of_apartment)", towork)
+        self.assertIn("global.ag_prefetch_ready != 1", towork)
+        self.assertIn('"/v1/story/prepare"', preload_create)
+        self.assertNotIn("instance_create(x, y, obj_textbox)", preload_step)
+        self.assertIn("ag_open_shift_click_armed = 0", popup_room_create)
+        self.assertIn("!mouse_check_button(mb_left)", popup_room_step)
+        self.assertIn("mouse_check_button_pressed(mb_left)", popup_room_step)
+        self.assertIn("else if (mouse_check_button(mb_left)", popup_room_step)
+        self.assertIn("global.jillcomment", preload_step)
+        self.assertIn("今日营业已准备完成", preload_http)
+        self.assertIn("shift_phase", preload_http)
+        self.assertIn("global.ag_story_day", preload_http)
+        self.assertNotIn('global.datestring = "O.S. DAY 1"', show_room)
+        self.assertIn("global.ag_story_day", show_room)
+        self.assertIn("global.ag_story_day = ag_response_world_day", save_http)
+        self.assertIn("OPEN SHIFT", show_room)
+        self.assertIn("room_text", show_room)
+        self.assertIn("点击鼠标关闭", show_room)
+        self.assertNotIn("draw_rectangle", preload_draw)
+        self.assertIn("global.shop_casitas = 1", show_room)
+        self.assertIn("global.gotmeshop = 1", show_room)
+        self.assertIn("global.cur_day == 1001", aa_button_1)
+        self.assertIn("global.cur_news = 52", aa_button_1)
+        self.assertIn("global.hl53", tablet_create)
+        self.assertIn("global.hl54", tablet_create)
+        self.assertIn("global.hl55", tablet_create)
+        self.assertIn("global.artcomment1", tablet_create)
+        self.assertIn("本地服务暂时不可用", preload_http)
+        self.assertNotIn("ag_aa_art1_draw.gml", patch)
+        self.assertNotIn("InstallNewsFrame", patch)
+        self.assertIn('Data.Code.ByName("gml_Object_aa_button_1_Step_0")', patch)
+        self.assertIn('Data.Code.ByName("gml_Object_show_room_Create_0")', patch)
+        self.assertIn('Data.Code.ByName("gml_Object_popup_room_Create_0")', patch)
+        self.assertIn('Data.Code.ByName("gml_Object_popup_room_Step_0")', patch)
         self.assertIn('Data.Code.ByName("gml_Object_towork_button_Mouse_4")', patch)
 
     def test_incomplete_gml_source_tree_is_rejected(self) -> None:
