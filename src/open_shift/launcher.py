@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import hashlib
 import json
 import os
 import secrets
@@ -16,6 +17,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
+
+from .paired_saves import WorldSessionCheckpoint
 
 
 class LauncherError(RuntimeError):
@@ -71,6 +74,9 @@ class RuntimeSession:
     session_id: str = field(default_factory=lambda: secrets.token_hex(16))
     port: int = field(init=False)
     _bridge_process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
+    _world_checkpoint: WorldSessionCheckpoint | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.port = self.config.port or _free_loopback_port()
@@ -139,17 +145,36 @@ class RuntimeSession:
             raise LauncherError("bridge was already started")
         env = os.environ.copy()
         env["OPEN_SHIFT_BRIDGE_TOKEN"] = self.token
-        self._bridge_process = subprocess.Popen(
-            self._bridge_command(),
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            # Keep bridge startup diagnostics visible to the launcher user.
-            # Runtime errors are intentionally short and never contain the
-            # API key; hiding this stream turns a useful configuration error
-            # into the opaque "exited with code 2" message.
-            stderr=None,
+        database_key = hashlib.sha256(
+            str(self.config.db_path.resolve()).casefold().encode("utf-8")
+        ).hexdigest()[:16]
+        checkpoint_path = self.config.runtime_file.with_name(
+            f".open-shift-session-{database_key}.sqlite3"
         )
+        self._world_checkpoint = WorldSessionCheckpoint(
+            self.config.db_path, checkpoint_path
+        )
+        self._world_checkpoint.recover_abandoned_session()
+        self._world_checkpoint.begin()
+        env["OPEN_SHIFT_SESSION_CHECKPOINT"] = str(checkpoint_path)
+        try:
+            self._bridge_process = subprocess.Popen(
+                self._bridge_command(),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                # Keep bridge startup diagnostics visible to the launcher user.
+                # Runtime errors are intentionally short and never contain the
+                # API key; hiding this stream turns a useful configuration error
+                # into the opaque "exited with code 2" message.
+                stderr=None,
+            )
+        except BaseException:
+            checkpoint = self._world_checkpoint
+            self._world_checkpoint = None
+            if checkpoint is not None:
+                checkpoint.cleanup()
+            raise
         return self._bridge_process
 
     def wait_for_bridge(self, timeout_seconds: float = 10.0) -> None:
@@ -236,7 +261,7 @@ class RuntimeSession:
             or payload.get("protocol_version") != 1
             or payload.get("request_id") != f"launcher_prepare_{self.session_id}"
             or payload.get("status") != "ready"
-            or payload.get("shift_phase") not in {"playing", "save_required"}
+            or payload.get("shift_phase") != "playing"
             or isinstance(payload.get("last_completed_story_day"), bool)
             or not isinstance(payload.get("last_completed_story_day"), int)
             or payload["last_completed_story_day"] < 0
@@ -266,6 +291,16 @@ class RuntimeSession:
         except FileNotFoundError:
             pass
 
+    def rollback_unsaved_world(self) -> None:
+        checkpoint = self._world_checkpoint
+        self._world_checkpoint = None
+        if checkpoint is None:
+            return
+        try:
+            checkpoint.rollback()
+        finally:
+            checkpoint.cleanup()
+
     def run(self) -> int:
         self.write_runtime_file()
         try:
@@ -282,6 +317,7 @@ class RuntimeSession:
             return int(game.wait())
         finally:
             self.stop_bridge()
+            self.rollback_unsaved_world()
             self.cleanup()
 
 

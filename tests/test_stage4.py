@@ -18,7 +18,7 @@ from open_shift.bridge import (
 )
 from open_shift.launcher import LaunchConfig, RuntimeSession
 from open_shift.cli import _paired_save_response
-from open_shift.paired_saves import PairedSaveManager
+from open_shift.paired_saves import PairedSaveManager, WorldSessionCheckpoint
 from open_shift.providers import MockProvider
 from open_shift.store import WorldStore
 from open_shift.story_graph import DAILY_STORY_GRAPH_VERSION
@@ -90,7 +90,7 @@ class Stage4WorldBridgeTests(unittest.TestCase):
             with WorldStore(db_path) as store:
                 store.set_meta("current_story_day", 2)
                 store.set_meta("last_completed_story_day", 1)
-                store.set_meta("shift_phase", "save_required")
+                store.set_meta("shift_phase", "playing")
                 store.set_current_tick(1440)
             world = WorldSceneService(
                 db_path,
@@ -616,6 +616,44 @@ class Stage4LauncherTests(unittest.TestCase):
                 self.assertEqual(session.run(), 0)
             self.assertEqual(calls, ["bridge", "health", "prepare", "game"])
 
+    def test_launcher_rolls_back_unsaved_world_after_game_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = root / "world.sqlite3"
+            with WorldStore(db_path) as store:
+                store.set_meta("current_story_day", 1)
+            session = RuntimeSession(
+                LaunchConfig(
+                    db_path=db_path,
+                    runtime_file=root / "runtime.ini",
+                    game_command=("fake-game",),
+                    game_cwd=root,
+                )
+            )
+            fake_game = unittest.mock.Mock()
+            fake_game.wait.return_value = 0
+
+            def start_bridge():
+                checkpoint = root / "session.sqlite3"
+                session._world_checkpoint = WorldSessionCheckpoint(db_path, checkpoint)
+                session._world_checkpoint.begin()
+
+            def start_game():
+                with WorldStore(db_path) as store:
+                    store.set_meta("current_story_day", 3)
+                return fake_game
+
+            with patch.object(RuntimeSession, "write_runtime_file"), patch.object(
+                RuntimeSession, "start_bridge", side_effect=start_bridge
+            ), patch.object(RuntimeSession, "wait_for_bridge"), patch.object(
+                RuntimeSession, "start_game", side_effect=start_game
+            ), patch.object(RuntimeSession, "stop_bridge"), patch.object(
+                RuntimeSession, "cleanup"
+            ):
+                self.assertEqual(session.run(), 0)
+            with WorldStore(db_path) as store:
+                self.assertEqual(store.get_meta("current_story_day"), "1")
+
     def test_real_launcher_process_round_trip_and_cleanup(self) -> None:
         fake_game = r'''
 import configparser
@@ -668,9 +706,15 @@ result.write_text(json.dumps({"scene_id": scene["scene_id"], "lines": len(scene[
             self.assertEqual(payload["ack"], "accepted")
             with WorldStore(db_path) as store:
                 self.assertEqual(store.current_tick, 0)
-                self.assertGreaterEqual(
-                    len([event for event in store.list_events() if event["event_type"] == "player_scene_ack"]),
-                    3,
+                self.assertEqual(
+                    len(
+                        [
+                            event
+                            for event in store.list_events()
+                            if event["event_type"] == "player_scene_ack"
+                        ]
+                    ),
+                    0,
                 )
 
 

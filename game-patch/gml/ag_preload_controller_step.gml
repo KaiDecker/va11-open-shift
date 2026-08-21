@@ -15,6 +15,49 @@ if (ag_preload_state == 2)
 {
     global.ag_prefetch_ready = 1;
     global.ag_prefetch_failed = 0;
+    // room_text can be created after the HTTP callback on the legacy room
+    // transition. Keep the visible apartment banner synchronized with the
+    // authoritative world day on every frame until the player leaves.
+    global.datestring = "O.S. DAY " + string(global.ag_story_day);
+    if (room == jill_room && instance_exists(room_text))
+    {
+        with (room_text)
+        {
+            deadline = global.datestring;
+            distraction = "Glitch City 的日子仍在继续。#熟悉的客人也有了新的生活。";
+            unlocked = "今日营业已准备完成。点击‘去酒吧上班’开始。";
+            dismiss = "点击鼠标关闭";
+        }
+    }
+}
+
+// room_text is created after the room controller on some legacy transitions.
+// Keep the original popup's four text fields populated even when that order
+// changes, including the first-entry introduction and the loading state.
+if (room == jill_room && instance_exists(room_text))
+{
+    with (room_text)
+    {
+        if (global.ag_open_shift_intro_pending == 1 || global.ag_open_shift_intro_seen == 0)
+        {
+            deadline = "OPEN SHIFT";
+            distraction = "Glitch City 的日子仍在继续。#熟悉的客人也有了新的生活。";
+            unlocked = "先看看房间里的新闻，准备完成后再去酒吧上班。";
+        }
+        else if (other.ag_preload_state == 1)
+        {
+            deadline = global.datestring;
+            distraction = "今天的营业正在准备中。";
+            unlocked = "本地世界服务正在生成今日剧情，请稍候。";
+        }
+        else if (global.ag_prefetch_failed == 1)
+        {
+            deadline = global.datestring;
+            distraction = "本地世界服务暂时不可用。";
+            unlocked = "已切换本地剧情，仍可去酒吧上班。";
+        }
+        dismiss = "点击鼠标关闭";
+    }
 }
 
 if (ag_preload_state == 3 && mouse_check_button_pressed(mb_left) && mouse_x >= 235 && mouse_x <= 440 && mouse_y >= 185 && mouse_y <= 250)

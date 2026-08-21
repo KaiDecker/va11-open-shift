@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import tempfile
 import time
 import unittest
@@ -582,7 +583,7 @@ class DailyStoryGraphTests(unittest.TestCase):
             self.assertIsNone(waiting.lines[0].speaker_id)
             service.wait_for_background_generation()
 
-    def test_completed_shift_requires_save_then_opens_the_next_day(self) -> None:
+    def test_completed_shift_opens_next_day_without_requiring_save(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"
             service = WorldSceneService(
@@ -664,11 +665,11 @@ class DailyStoryGraphTests(unittest.TestCase):
                     "continued_in_bar",
                 )
             )
-            recovery = opened()
-            self.assertEqual(recovery.scene_id, "save_required_day_1")
+            next_opening = opened()
+            self.assertEqual(next_opening.scene_id, "opening_day_2")
             with WorldStore(db_path) as store:
                 self.assertEqual(store.get_meta("current_story_day"), "2")
-                self.assertEqual(store.get_meta("shift_phase"), "save_required")
+                self.assertEqual(store.get_meta("shift_phase"), "playing")
                 self.assertEqual(store.get_meta("player_shift_income"), "0")
                 self.assertEqual(
                     store.get_meta("player_shift_income_day_1"), str(expected_income)
@@ -680,10 +681,87 @@ class DailyStoryGraphTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(completed), 1)
 
-            service.complete_paired_save(2, 1)
-            next_opening = opened()
-            self.assertEqual(next_opening.scene_id, "opening_day_2")
             service.wait_for_background_generation()
+
+    def test_apartment_prepare_recovers_lost_settlement_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            service.prepare_daily_story_graph(1)
+            with WorldStore(db_path) as store:
+                with store.transaction():
+                    store._conn.execute(
+                        "UPDATE daily_story_progress SET status = 'completed', "
+                        "current_node_id = NULL "
+                        "WHERE day_index = 1 AND generation_version = ?",
+                        (DAILY_STORY_GRAPH_VERSION,),
+                    )
+                    store.set_meta("player_shift_income", "180")
+            prepared = service.prepare_story_day({"request_id": "recover-prepare"})
+            self.assertEqual(prepared["world_day"], 2)
+            with WorldStore(db_path) as store:
+                self.assertEqual(store.get_meta("current_story_day"), "2")
+                self.assertEqual(store.get_meta("last_completed_story_day"), "1")
+                self.assertEqual(store.get_meta("player_shift_income"), "0")
+                self.assertEqual(store.get_meta("player_shift_income_day_1"), "180")
+                self.assertEqual(
+                    len(
+                        [
+                            event
+                            for event in store.list_events()
+                            if event["event_type"] == "player_shift_completed"
+                        ]
+                    ),
+                    1,
+                )
+
+            # A late client acknowledgement for the recovered settlement is
+            # an idempotent success, not a false day-mismatch failure.
+            settlement = service._settlement_scene(1, 180)
+            with WorldStore(db_path) as store:
+                with store.transaction():
+                    store.set_meta("bridge_scene:settlement_day_1", "ambient")
+                    store.set_meta(
+                        "bridge_scene_payload:settlement_day_1",
+                        json.dumps(settlement.to_dict(), ensure_ascii=False),
+                    )
+            service.ack_scene(
+                self._ack(
+                    "settlement_day_1",
+                    "recover-late-settlement-ack",
+                    "continued_in_bar",
+                )
+            )
+
+    def test_stage_ten_save_gate_is_released_when_story_is_prepared(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            with WorldStore(db_path) as store:
+                store.set_meta("current_story_day", 2)
+                store.set_meta("last_completed_story_day", 1)
+                store.set_meta("shift_phase", "save_required")
+            service = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            prepared = service.prepare_story_day(
+                {
+                    "protocol_version": 1,
+                    "request_id": "legacy-gate-prepare",
+                    "client_session_id": "legacy-gate-session",
+                }
+            )
+            self.assertEqual(prepared["world_day"], 2)
+            self.assertEqual(prepared["shift_phase"], "playing")
+            with WorldStore(db_path) as store:
+                self.assertEqual(store.get_meta("shift_phase"), "playing")
 
 
 if __name__ == "__main__":

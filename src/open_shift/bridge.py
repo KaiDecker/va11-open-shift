@@ -796,7 +796,7 @@ class BridgeApplication:
             or result["world_day"] < 1
             or result["status"] != "ready"
             or not isinstance(result["opening_seen"], bool)
-            or result["shift_phase"] not in {"playing", "save_required"}
+            or result["shift_phase"] != "playing"
             or isinstance(result["last_completed_story_day"], bool)
             or not isinstance(result["last_completed_story_day"], int)
             or result["last_completed_story_day"] < 0
