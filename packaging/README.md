@@ -1,6 +1,6 @@
-# Open Shift Mod package
+# OPEN SHIFT 玩家发行包
 
-This package contains the Open Shift bridge, patch source and safe launcher
+This package contains the OPEN SHIFT bridge, patch source and safe launcher
 scripts. It does **not** contain VA-11 HALL-A's executable, `data.win`, Steam
 assets, saves, databases, runtime INI files or API keys.
 
@@ -21,6 +21,9 @@ detects the Steam library, validates the original hash, creates or repairs the
 patched isolated copy, stores the DeepSeek key with current-user DPAPI, and
 creates a desktop `Open Shift` shortcut. The same GUI prepares the next day,
 starts the game, opens diagnostics, and safely uninstalls the isolated copy.
+
+The public project name is **OPEN SHIFT**. Community-facing posts are maintained
+outside the player package and may be adapted for local community rules.
 
 The final package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the Open Shift icon,
 `OpenShift.ico`, and UTMT CLI. The lower-level

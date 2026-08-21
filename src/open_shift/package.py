@@ -34,6 +34,11 @@ class PackageResult:
 
 _REQUIRED_FILES = (
     "README.md",
+    "CONTRIBUTING.md",
+    "assets/open-shift-icon.svg",
+    "assets/screenshots/bar-stella-order.png",
+    "assets/screenshots/jill-room-day-2.png",
+    "assets/screenshots/chinese-installer.png",
     "pyproject.toml",
     "game-patch/README.md",
     "game-patch/manifest.json",
