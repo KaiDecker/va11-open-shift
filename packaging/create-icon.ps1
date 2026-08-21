@@ -1,65 +1,61 @@
 param(
-    [Parameter(Mandatory = $true)] [string] $Output
+    [Parameter(Mandatory = $true)] [string] $Output,
+    [string] $Source = ""
 )
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
-function New-RoundedPath([Drawing.RectangleF] $rectangle, [float] $radius) {
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $diameter = $radius * 2
-    $path.AddArc($rectangle.X, $rectangle.Y, $diameter, $diameter, 180, 90)
-    $path.AddArc($rectangle.Right - $diameter, $rectangle.Y, $diameter, $diameter, 270, 90)
-    $path.AddArc($rectangle.Right - $diameter, $rectangle.Bottom - $diameter, $diameter, $diameter, 0, 90)
-    $path.AddArc($rectangle.X, $rectangle.Bottom - $diameter, $diameter, $diameter, 90, 90)
-    $path.CloseFigure()
-    return $path
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $Source = Join-Path $PSScriptRoot "..\assets\open-shift-icon.svg"
+}
+if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
+    throw "Pixel SVG source not found: $Source"
 }
 
-$size = 256
-$bitmap = New-Object Drawing.Bitmap($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
-$graphics = [Drawing.Graphics]::FromImage($bitmap)
-$graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-$graphics.Clear([Drawing.Color]::Transparent)
+$svg = Get-Content -LiteralPath $Source -Raw
+$viewBoxMatch = [regex]::Match($svg, 'viewBox="0 0 (?<width>\d+) (?<height>\d+)"')
+if (-not $viewBoxMatch.Success) { throw "SVG viewBox is missing or invalid." }
+$pixelWidth = [int]$viewBoxMatch.Groups["width"].Value
+$pixelHeight = [int]$viewBoxMatch.Groups["height"].Value
 
-$outerPath = New-RoundedPath (New-Object Drawing.RectangleF(10, 10, 236, 236)) 48
-$outerBrush = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 19, 34, 53))
-$outerPen = New-Object Drawing.Pen([Drawing.Color]::FromArgb(255, 102, 224, 210), 7)
-$graphics.FillPath($outerBrush, $outerPath)
-$graphics.DrawPath($outerPen, $outerPath)
+$pixelBitmap = New-Object Drawing.Bitmap($pixelWidth, $pixelHeight, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$pixelGraphics = [Drawing.Graphics]::FromImage($pixelBitmap)
+$pixelGraphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::None
+$pixelGraphics.Clear([Drawing.Color]::Transparent)
 
-# The open door is the central mark; the coral arrow signals a shift into play.
-$doorBrush = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 102, 224, 210))
-$doorPoints = [Drawing.PointF[]]@(
-    (New-Object Drawing.PointF(74, 70)), (New-Object Drawing.PointF(145, 53)),
-    (New-Object Drawing.PointF(145, 203)), (New-Object Drawing.PointF(74, 186))
-)
-$graphics.FillPolygon($doorBrush, $doorPoints)
-
-$cutoutBrush = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 19, 34, 53))
-$cutoutPoints = [Drawing.PointF[]]@(
-    (New-Object Drawing.PointF(105, 86)), (New-Object Drawing.PointF(130, 80)),
-    (New-Object Drawing.PointF(130, 176)), (New-Object Drawing.PointF(105, 170))
-)
-$graphics.FillPolygon($cutoutBrush, $cutoutPoints)
-
-$arrowPen = New-Object Drawing.Pen([Drawing.Color]::FromArgb(255, 255, 126, 104), 17)
-$arrowPen.StartCap = [Drawing.Drawing2D.LineCap]::Round
-$arrowPen.EndCap = [Drawing.Drawing2D.LineCap]::Round
-$arrowPen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
-$graphics.DrawLine($arrowPen, 87, 128, 184, 128)
-$graphics.DrawLine($arrowPen, 153, 98, 184, 128)
-$graphics.DrawLine($arrowPen, 153, 158, 184, 128)
-
-$dotBrush = New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb(255, 255, 206, 111))
-$graphics.FillEllipse($dotBrush, 179, 64, 17, 17)
-$graphics.FillEllipse($dotBrush, 52, 198, 13, 13)
+# The SVG uses one horizontal pixel-run per path command. Rendering those runs
+# directly keeps the source vector and the ICO output visually identical.
+$pathMatches = [regex]::Matches($svg, '<path\s+fill="#(?<color>[0-9A-Fa-f]{6})"\s+d="(?<data>[^"]+)"\s*/>')
+if ($pathMatches.Count -eq 0) { throw "SVG contains no pixel paths." }
+foreach ($pathMatch in $pathMatches) {
+    $color = [Drawing.ColorTranslator]::FromHtml("#" + $pathMatch.Groups["color"].Value)
+    $brush = New-Object Drawing.SolidBrush($color)
+    try {
+        foreach ($run in ($pathMatch.Groups["data"].Value -split "M")) {
+            if ([string]::IsNullOrWhiteSpace($run)) { continue }
+            $runMatch = [regex]::Match($run.Trim(), '^(?<x>\d+)\s+(?<y>\d+)\s+h(?<width>\d+)\s+v1\s+h-\d+\s+z')
+            if (-not $runMatch.Success) { throw "Unsupported pixel path command: $run" }
+            $x = [int]$runMatch.Groups["x"].Value
+            $y = [int]$runMatch.Groups["y"].Value
+            $width = [int]$runMatch.Groups["width"].Value
+            $pixelGraphics.FillRectangle($brush, $x, $y, $width, 1)
+        }
+    } finally { $brush.Dispose() }
+}
 
 $outputPath = [IO.Path]::GetFullPath($Output)
 [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($outputPath)) | Out-Null
+$finalBitmap = New-Object Drawing.Bitmap(256, 256, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$finalGraphics = [Drawing.Graphics]::FromImage($finalBitmap)
+$finalGraphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::None
+$finalGraphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+$finalGraphics.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::Half
+$finalGraphics.Clear([Drawing.Color]::Transparent)
+$finalGraphics.DrawImage($pixelBitmap, 0, 0, 256, 256)
+
 $pngStream = New-Object IO.MemoryStream
-$bitmap.Save($pngStream, [Drawing.Imaging.ImageFormat]::Png)
+$finalBitmap.Save($pngStream, [Drawing.Imaging.ImageFormat]::Png)
 $pngBytes = $pngStream.ToArray()
 $pngStream.Dispose()
 $stream = [IO.File]::Open($outputPath, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -73,8 +69,9 @@ try {
     $writer.Write($pngBytes)
     $writer.Flush()
 } finally { $writer.Dispose(); $stream.Dispose() }
-$graphics.Dispose()
-$outerBrush.Dispose(); $outerPen.Dispose(); $outerPath.Dispose()
-$doorBrush.Dispose(); $cutoutBrush.Dispose(); $arrowPen.Dispose(); $dotBrush.Dispose()
-$bitmap.Dispose()
-Write-Host "Open Shift icon: $outputPath"
+
+$pixelGraphics.Dispose()
+$pixelBitmap.Dispose()
+$finalGraphics.Dispose()
+$finalBitmap.Dispose()
+Write-Host "Open Shift pixel icon: $outputPath"

@@ -27,6 +27,11 @@ class PackageTests(unittest.TestCase):
                 self.assertIn("packaging/launch-deepseek-acceptance.ps1", names)
                 self.assertIn("packaging/uninstall-open-shift.ps1", names)
                 self.assertIn("packaging/INSTALL.md", names)
+                self.assertIn("CONTRIBUTING.md", names)
+                self.assertIn("assets/open-shift-icon.svg", names)
+                self.assertIn("assets/screenshots/bar-stella-order.png", names)
+                self.assertIn("assets/screenshots/jill-room-day-2.png", names)
+                self.assertIn("assets/screenshots/chinese-installer.png", names)
                 self.assertIn("src/open_shift/package.py", names)
                 self.assertFalse(any(name.startswith("game-patch/assets/news/") for name in names))
                 self.assertFalse(any("reference-local" in name for name in names))
@@ -115,12 +120,29 @@ class PackageTests(unittest.TestCase):
         self.assertIn("$script:lastLog", gui)
         self.assertNotIn("Safe installer and launcher", gui)
         self.assertIn("$form.Icon", gui)
+        self.assertIn("OPEN SHIFT · 安装器", gui)
+        self.assertIn("Set-ButtonStyle", gui)
+        self.assertIn("FromArgb(8, 12, 29)", gui)
         self.assertIn("WaitForExit", gui)
         self.assertIn("Refresh()", gui)
         self.assertIn("$installCompleted", gui)
         self.assertIn("$script:launchConfirmed", gui)
         self.assertIn("Entering main loop", gui)
         self.assertIn("游戏已启动，可以关闭此窗口。", gui)
+
+    def test_public_project_docs_keep_community_boundaries(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        contributing = (root / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("# OPEN SHIFT", readme)
+        self.assertIn("欢迎参与", readme)
+        icon = (root / "assets" / "open-shift-icon.svg").read_text(encoding="utf-8")
+        self.assertIn("shape-rendering=\"crispEdges\"", icon)
+        self.assertIn("OPEN SHIFT pixel bar icon", icon)
+        self.assertIn("assets/screenshots/bar-stella-order.png", readme)
+        self.assertIn("assets/screenshots/jill-room-day-2.png", readme)
+        self.assertIn("assets/screenshots/chinese-installer.png", readme)
+        self.assertIn("不要提交什么", contributing)
 
     def test_optional_release_tools_use_fixed_non_original_names(self) -> None:
         root = Path(__file__).resolve().parents[1]
