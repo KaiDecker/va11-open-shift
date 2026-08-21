@@ -72,6 +72,24 @@ python -m open_shift build-mod-package `
 `packaging\install-isolated-copy.ps1`，再运行
 `packaging\launch-open-shift.ps1`；Steam 原版目录始终只作为输入和校验来源。
 
+阶段 12 的玩家发布候选包会把本地构建的 `OpenShift.exe`、带 Open Shift 原创图标的无
+控制台 `OpenShiftSetup.exe` 和 UTMT CLI 压缩包一起嵌入。这样玩家不需要安装 Python；包仍不会
+包含原版 `data.win` 或游戏资源：
+
+```powershell
+powershell -ExecutionPolicy Bypass `
+  -File ".\packaging\build-player-release.ps1" `
+  -Python "C:\Python312\python.exe" `
+  -UtmtCliZip "C:\path\UTMT_CLI_v0.9.1.2-Windows.zip" `
+  -Output "work\open-shift-player-0.12.0.zip"
+```
+
+解压后双击 `OpenShiftSetup.exe`。图形界面会自动检测 Steam 目录，首次安装或 Repair
+时验证用户自己的 `data.win`、生成隔离副本并创建桌面快捷方式；输入的 API Key 使用
+Windows DPAPI 保存，不进入 TOML、日志、数据库或发布包。GUI 还能准备当天剧情、启动
+游戏、打开诊断日志和安全卸载；玩家存档默认保留。Steam 原版目录始终只作为输入和
+校验来源，所有补丁写入隔离副本。
+
 ## 设计边界
 
 - Provider 只返回结构化行动提案。

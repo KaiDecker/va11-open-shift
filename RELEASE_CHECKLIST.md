@@ -59,3 +59,10 @@
       troubleshooting commands are current.
 - [ ] Package contains source, metadata, and scripts only; it contains no
       copyrighted game data or generated `data.win`.
+- [ ] Player release package contains `OpenShift.exe`, `OpenShiftSetup.exe`, and
+      bundled UTMT CLI, and its
+      manifest has no `data.win`, game executable, SQLite, `reference-local`,
+      or API key.
+- [ ] A fresh Windows user can install from the package without Python, enter a
+      DPAPI-protected DeepSeek key, launch from the desktop shortcut, complete
+      two business days, and uninstall without changing Steam `data.win`.

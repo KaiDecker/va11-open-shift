@@ -8,7 +8,7 @@ The installer takes a user-owned Steam game directory, verifies its original
 `data.win` hash, creates an isolated game copy, and applies the patch there.
 The Steam installation is never used as the installation destination.
 
-Requirements:
+Requirements for the source/maintainer workflow:
 
 - Windows PowerShell 5+;
 - Python 3.11+;
@@ -16,8 +16,16 @@ Requirements:
 - a user-owned VA-11 HALL-A installation;
 - a DeepSeek API key supplied only through `OPEN_SHIFT_API_KEY`.
 
-Run `install-isolated-copy.ps1` first, then use `launch-open-shift.ps1` to
-start the copied game and local bridge.
+For the final player package, double-click `OpenShiftSetup.exe`. Its Windows GUI
+detects the Steam library, validates the original hash, creates or repairs the
+patched isolated copy, stores the DeepSeek key with current-user DPAPI, and
+creates a desktop `Open Shift` shortcut. The same GUI prepares the next day,
+starts the game, opens diagnostics, and safely uninstalls the isolated copy.
+
+The final package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the Open Shift icon,
+`OpenShift.ico`, and UTMT CLI. The lower-level
+`install-isolated-copy.ps1` and `launch-open-shift.ps1` scripts remain available
+for maintainer and acceptance workflows.
 
 For a strict real-DeepSeek acceptance run, use
 `launch-deepseek-acceptance.ps1`. It reads the API key with hidden input,
