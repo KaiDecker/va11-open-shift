@@ -28,7 +28,7 @@ internal static class OpenShiftGuiLauncher
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "Open Shift 安装器", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, "OPEN SHIFT 安装器", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 }
