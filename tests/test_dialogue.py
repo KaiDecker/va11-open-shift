@@ -122,6 +122,29 @@ class FakeTransport:
         return self.response
 
 
+class SequenceTransport(FakeTransport):
+    def __init__(self, responses: list[dict[str, Any]]) -> None:
+        super().__init__(responses[0])
+        self.responses = list(responses)
+
+    def post_json(
+        self,
+        *,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, Any],
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        response = super().post_json(
+            url=url,
+            headers=headers,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        self.response = self.responses[min(len(self.calls), len(self.responses) - 1)]
+        return response
+
+
 class RecordingDialogueProvider:
     def __init__(self, *, fail: bool = False) -> None:
         self.policy = MockProvider()
@@ -325,7 +348,7 @@ class DialogueContractTests(unittest.TestCase):
         self.assertEqual(provider.calls_used, 1)
         call = transport.calls[0]
         self.assertEqual(call["payload"]["response_format"], {"type": "json_object"})
-        self.assertEqual(call["payload"]["max_tokens"], 160)
+        self.assertEqual(call["payload"]["max_tokens"], 256)
         self.assertEqual(call["payload"]["thinking"], {"type": "disabled"})
         user_input = call["payload"]["messages"][1]["content"]
         self.assertIn("private_relevant_memories", user_input)
@@ -373,6 +396,90 @@ class DialogueContractTests(unittest.TestCase):
         self.assertNotIn("private_relevant_memories", call["messages"][1]["content"])
         with self.assertRaises(BYOKBudgetExceeded):
             provider.generate_player_dialogue_line(player_turn_context())
+
+    def test_byok_dialogue_retries_one_malformed_json_response(self) -> None:
+        transport = SequenceTransport(
+            [
+                {"choices": [{"message": {"content": "not json"}}]},
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "expression_id": "neutral",
+                                        "text": "先把今天的事情说清楚。",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+            ]
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                max_calls=2,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+
+        result = provider.generate_dialogue_line(turn_context())
+
+        self.assertEqual(result.text, "先把今天的事情说清楚。")
+        self.assertEqual(provider.calls_used, 2)
+        self.assertEqual(len(transport.calls), 2)
+
+    def test_byok_player_dialogue_retries_one_invalid_contract_response(self) -> None:
+        transport = SequenceTransport(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {"expression_id": "happy", "text": "知道了。"},
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "expression_id": "neutral",
+                                        "text": "知道了。范围还挺宽。",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+            ]
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                max_calls=2,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+
+        result = provider.generate_player_dialogue_line(player_turn_context())
+
+        self.assertEqual(result.expression_id, "neutral")
+        self.assertEqual(provider.calls_used, 2)
 
 
 class DialogueWorldBridgeTests(unittest.TestCase):

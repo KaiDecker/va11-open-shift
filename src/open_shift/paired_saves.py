@@ -34,6 +34,209 @@ class PairedSaveMismatch(PairedSaveError):
     pass
 
 
+class WorldSessionCheckpoint:
+    """Roll the live SQLite world back to the latest in-session save point."""
+
+    def __init__(self, live_db_path: str | Path, checkpoint_path: str | Path) -> None:
+        self.live_db_path = Path(live_db_path).resolve()
+        self.checkpoint_path = Path(checkpoint_path).resolve()
+        self.state_path = self.checkpoint_path.with_suffix(
+            f"{self.checkpoint_path.suffix}.json"
+        )
+        self._lock = threading.RLock()
+
+    def _write_state(self, had_live_database: bool) -> None:
+        temporary = self.state_path.with_name(
+            f".{self.state_path.name}.{uuid4().hex}.tmp"
+        )
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            temporary.write_text(
+                json.dumps(
+                    {"format_version": 1, "had_live_database": had_live_database},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, self.state_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _read_state(self) -> bool:
+        try:
+            value = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PairedSaveError(
+                "invalid_session_checkpoint",
+                "session_checkpoint",
+                "the session checkpoint state was invalid",
+            ) from exc
+        if set(value) != {"format_version", "had_live_database"} or (
+            value["format_version"] != 1
+            or not isinstance(value["had_live_database"], bool)
+        ):
+            raise PairedSaveError(
+                "invalid_session_checkpoint",
+                "session_checkpoint",
+                "the session checkpoint state was invalid",
+            )
+        return bool(value["had_live_database"])
+
+    @staticmethod
+    def _backup(source_path: Path, destination_path: Path) -> None:
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination_path.with_name(
+            f".{destination_path.name}.{uuid4().hex}.tmp"
+        )
+        try:
+            with closing(
+                sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+            ) as source:
+                with closing(sqlite3.connect(temporary)) as target:
+                    source.backup(target)
+                    _integrity_check(target)
+            os.replace(temporary, destination_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _remove_database_files(path: Path) -> None:
+        path.unlink(missing_ok=True)
+        path.with_name(f"{path.name}-wal").unlink(missing_ok=True)
+        path.with_name(f"{path.name}-shm").unlink(missing_ok=True)
+
+    @staticmethod
+    def _merge_safe_story_drafts(source_path: Path, target_path: Path) -> None:
+        """Keep unplayed graphs whose source state still exists after rollback."""
+
+        if not source_path.is_file() or not target_path.is_file():
+            return
+        with closing(
+            sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        ) as source, closing(sqlite3.connect(target_path)) as target:
+            source.row_factory = sqlite3.Row
+            target_tick_row = target.execute(
+                "SELECT value FROM world_meta WHERE key = 'current_tick'"
+            ).fetchone()
+            target_tick = int(target_tick_row[0]) if target_tick_row else 0
+            target_event_ids = {
+                int(row[0]) for row in target.execute("SELECT event_id FROM events")
+            }
+            rows = source.execute(
+                "SELECT * FROM daily_story_graphs WHERE status = 'ready'"
+            ).fetchall()
+            for row in rows:
+                source_ids = tuple(json.loads(row["source_event_ids_json"]))
+                if (
+                    int(row["source_tick"]) > target_tick
+                    or not set(source_ids).issubset(target_event_ids)
+                ):
+                    continue
+                graph = json.loads(row["graph_json"])
+                target.execute(
+                    """
+                    INSERT INTO daily_story_graphs(
+                        day_index, generation_version, status, source_tick,
+                        source_event_ids_json, graph_json, error_code, attempt_count
+                    ) VALUES(?, ?, 'ready', ?, ?, ?, NULL, ?)
+                    ON CONFLICT(day_index, generation_version) DO NOTHING
+                    """,
+                    (
+                        row["day_index"],
+                        row["generation_version"],
+                        row["source_tick"],
+                        row["source_event_ids_json"],
+                        row["graph_json"],
+                        row["attempt_count"],
+                    ),
+                )
+                target.execute(
+                    """
+                    INSERT INTO daily_story_progress(
+                        day_index, generation_version, status, current_node_id,
+                        committed_branch_count
+                    ) VALUES(?, ?, 'active', ?, 0)
+                    ON CONFLICT(day_index, generation_version) DO NOTHING
+                    """,
+                    (
+                        row["day_index"],
+                        row["generation_version"],
+                        graph["entry_node_id"],
+                    ),
+                )
+            target.commit()
+            _integrity_check(target)
+
+    def begin(self) -> None:
+        """Capture the state that should survive if the player does not save."""
+
+        with self._lock:
+            self.checkpoint_path.unlink(missing_ok=True)
+            if self.live_db_path.is_file():
+                self._backup(self.live_db_path, self.checkpoint_path)
+                self._write_state(True)
+            else:
+                self._write_state(False)
+
+    def recover_abandoned_session(self) -> bool:
+        """Restore a checkpoint left by a launcher or game process crash."""
+
+        with self._lock:
+            if not self.state_path.is_file():
+                self.checkpoint_path.unlink(missing_ok=True)
+                return False
+            self.rollback()
+            self.cleanup()
+            return True
+
+    def capture(self) -> None:
+        """Advance the session recovery point after a paired save or restore."""
+
+        with self._lock:
+            if not self.live_db_path.is_file():
+                raise PairedSaveError(
+                    "world_database_missing",
+                    "session_checkpoint",
+                    "the live world database was missing",
+                )
+            self._backup(self.live_db_path, self.checkpoint_path)
+            self._write_state(True)
+
+    def rollback(self) -> None:
+        """Discard progress made after the latest captured recovery point."""
+
+        with self._lock:
+            if not self.state_path.is_file():
+                return
+            had_live_database = self._read_state()
+            if had_live_database:
+                if not self.checkpoint_path.is_file():
+                    raise PairedSaveError(
+                        "session_checkpoint_missing",
+                        "session_checkpoint",
+                        "the session recovery database was missing",
+                    )
+                temporary = self.live_db_path.with_name(
+                    f".{self.live_db_path.name}.{uuid4().hex}.session.tmp"
+                )
+                try:
+                    self._backup(self.checkpoint_path, temporary)
+                    self._merge_safe_story_drafts(self.live_db_path, temporary)
+                    self._remove_database_files(self.live_db_path)
+                    os.replace(temporary, self.live_db_path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            else:
+                self._remove_database_files(self.live_db_path)
+
+    def cleanup(self) -> None:
+        with self._lock:
+            self.checkpoint_path.unlink(missing_ok=True)
+            self.state_path.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True, slots=True)
 class PairedSaveRecord:
     slot: int

@@ -300,6 +300,8 @@ class WorldSceneService:
         """Synchronously make the current bounded day playable before bar entry."""
 
         with self._lock, WorldStore(self.db_path) as store:
+            self._release_legacy_save_gate(store)
+            self._recover_unacknowledged_settlement(store)
             day_index = int(store.get_meta("current_story_day", "1") or 1)
             self._ensure_scheduled_public_event(store)
             shift_phase = store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
@@ -317,6 +319,51 @@ class WorldSceneService:
             "shift_phase": shift_phase,
             "last_completed_story_day": last_completed_story_day,
         }
+
+    def _recover_unacknowledged_settlement(self, store: WorldStore) -> None:
+        """Commit a settlement whose final client acknowledgement was lost.
+
+        The legacy room can transition home as soon as the final result text is
+        dismissed, destroying the temporary bridge controller before the
+        settlement request or its HTTP callback runs. A completed daily-story
+        cursor is already authoritative, so a subsequent apartment
+        preparation request is a safe recovery point.
+        """
+
+        day_index = int(store.get_meta("current_story_day", "1") or 1)
+        progress = store.get_daily_story_progress(
+            day_index, DAILY_STORY_GRAPH_VERSION
+        )
+        if progress is None or progress.get("status") != "completed":
+            return
+        income = int(store.get_meta("player_shift_income", "0") or 0)
+        store.set_meta(f"player_shift_income_day_{day_index}", income)
+        store.set_meta("player_shift_income", 0)
+        store.set_meta("last_completed_story_day", day_index)
+        store.set_meta("current_story_day", day_index + 1)
+        store.set_meta("shift_phase", _SHIFT_PHASE_PLAYING)
+        store.set_current_tick(store.current_tick + DAY_MINUTES)
+        store.append_event(
+            store.current_tick,
+            "player_shift_completed",
+            None,
+            payload={
+                "story_day": day_index,
+                "income": income,
+                "next_story_day": day_index + 1,
+                "recovered": True,
+            },
+        )
+
+    @staticmethod
+    def _release_legacy_save_gate(store: WorldStore) -> None:
+        """Make Stage 10 worlds playable without requiring a new paired save."""
+
+        if (
+            store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
+            == _SHIFT_PHASE_SAVE_REQUIRED
+        ):
+            store.set_meta("shift_phase", _SHIFT_PHASE_PLAYING)
 
     @staticmethod
     def _customer(participants: tuple[str, str]) -> str:
@@ -946,22 +993,7 @@ class WorldSceneService:
                     None,
                     None,
                     "neutral",
-                    "准备好后，在平板中存档；新的营业日会在保存成功后开始。",
-                ),
-            ),
-        )
-
-    @staticmethod
-    def _save_required_scene(completed_day: int) -> ScenePackage:
-        return ScenePackage(
-            f"save_required_day_{completed_day}",
-            (
-                SceneLine(
-                    "save_required",
-                    None,
-                    None,
-                    "neutral",
-                    "这一天已经结束。Jill 需要先保存记录，再开始新的营业日。",
+                    "需要时可以在平板中存档；准备好后就能开始新的营业日。",
                 ),
             ),
         )
@@ -1050,15 +1082,8 @@ class WorldSceneService:
             dict(request), separators=(",", ":"), sort_keys=True
         )
         with self._lock, WorldStore(self.db_path) as store:
+            self._release_legacy_save_gate(store)
             self._ensure_scheduled_public_event(store)
-            if store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING) == _SHIFT_PHASE_SAVE_REQUIRED:
-                completed_day = int(
-                    store.get_meta("last_completed_story_day", str(max(1, day_index - 1)))
-                    or max(1, day_index - 1)
-                )
-                return self._persist_ambient_request(
-                    store, request, self._save_required_scene(completed_day)
-                )
             graph_record = store.get_daily_story_graph(
                 day_index, DAILY_STORY_GRAPH_VERSION
             )
@@ -1717,6 +1742,34 @@ class WorldSceneService:
                         raise ValueError("settlement scene day was invalid") from None
                     current_day = int(store.get_meta("current_story_day", "1") or 1)
                     if completed_day != current_day:
+                        # A room transition can destroy the GameMaker bridge
+                        # immediately after the settlement text.  On the next
+                        # prepare request the completed cursor is recovered
+                        # and current_story_day is advanced before this stale
+                        # acknowledgement arrives.  Treat that exact
+                        # already-completed settlement as idempotent success;
+                        # unrelated day mismatches remain hard failures.
+                        recovered_day = int(
+                            store.get_meta("last_completed_story_day", "0") or 0
+                        )
+                        if (
+                            completed_day + 1 == current_day
+                            and recovered_day == completed_day
+                        ):
+                            ack_event_id = store.append_event(
+                                store.current_tick,
+                                "player_scene_ack",
+                                None,
+                                payload={
+                                    "scene_id": scene_id,
+                                    "client_session_id": request["client_session_id"],
+                                    "outcome": request["outcome"],
+                                    "recovered": True,
+                                },
+                            )
+                            store.set_meta(ack_key, ack_event_id)
+                            store.set_meta(request_key, request_json)
+                            return
                         raise BridgeError(
                             409,
                             "story_day_mismatch",
@@ -1727,7 +1780,7 @@ class WorldSceneService:
                     store.set_meta("player_shift_income", 0)
                     store.set_meta("last_completed_story_day", completed_day)
                     store.set_meta("current_story_day", completed_day + 1)
-                    store.set_meta("shift_phase", _SHIFT_PHASE_SAVE_REQUIRED)
+                    store.set_meta("shift_phase", _SHIFT_PHASE_PLAYING)
                     store.set_current_tick(store.current_tick + DAY_MINUTES)
                     store.append_event(
                         store.current_tick,
@@ -1757,15 +1810,10 @@ class WorldSceneService:
     def complete_paired_save(
         self, world_day: int, last_completed_story_day: int
     ) -> None:
-        """Release an end-of-day checkpoint after its paired snapshot is durable."""
+        """Accept Stage 10 save callbacks without making saving a day gate."""
 
         with self._lock, WorldStore(self.db_path) as store, store.transaction():
             current_day = int(store.get_meta("current_story_day", "1") or 1)
             completed_day = int(store.get_meta("last_completed_story_day", "0") or 0)
-            if (
-                store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
-                == _SHIFT_PHASE_SAVE_REQUIRED
-                and current_day == world_day
-                and completed_day == last_completed_story_day
-            ):
-                store.set_meta("shift_phase", _SHIFT_PHASE_PLAYING)
+            if current_day == world_day and completed_day == last_completed_story_day:
+                self._release_legacy_save_gate(store)

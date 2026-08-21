@@ -408,7 +408,7 @@ def _dialogue_chat_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": 160,
+        "max_tokens": 256,
         "messages": [
             {"role": "system", "content": DIALOGUE_SYSTEM_INSTRUCTION},
             {"role": "user", "content": dialogue_input_json(context)},
@@ -455,7 +455,7 @@ def _player_dialogue_chat_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": 160,
+        "max_tokens": 256,
         "messages": [
             {"role": "system", "content": PLAYER_DIALOGUE_SYSTEM_INSTRUCTION},
             {"role": "user", "content": player_dialogue_input_json(context)},
@@ -517,13 +517,31 @@ def _extract_chat_output(response: Mapping[str, Any]) -> str | dict[str, Any]:
 def _as_action_object(raw: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        raise BYOKResponseError("model output was not a JSON object") from None
-    if not isinstance(value, dict):
+    text = raw.strip()
+    candidates = [text]
+    if text.startswith("```") and text.endswith("```"):
+        fenced = text[3:-3].strip()
+        if fenced.lower().startswith("json"):
+            fenced = fenced[4:].lstrip()
+        candidates.insert(0, fenced)
+    # Some JSON-compatible endpoints still add a short explanation around
+    # the object. Extract only a bounded outer object; semantic validation
+    # below remains authoritative and rejects unknown or missing fields.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value:
+            return value
+        if isinstance(value, dict):
+            raise BYOKResponseError("model output was not a usable JSON object")
         raise BYOKResponseError("model output must be a JSON object")
-    return value
+    raise BYOKResponseError("model output was not a JSON object")
 
 
 def normalize_json_object_output(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -722,47 +740,61 @@ class BYOKProvider:
     def generate_dialogue_line(
         self, context: DialogueTurnContext
     ) -> DialogueLineDraft:
-        response = self._request(
+        payload = (
             _dialogue_responses_payload(self.config, context)
             if self.config.protocol is APIProtocol.RESPONSES
             else _dialogue_chat_payload(self.config, context)
         )
-        raw = (
-            _extract_responses_output(response)
-            if self.config.protocol is APIProtocol.RESPONSES
-            else _extract_chat_output(response)
-        )
-        value = _as_action_object(raw)
-        if self.config.response_format is ResponseFormat.JSON_OBJECT:
+        for attempt in range(2):
             try:
-                value = normalize_dialogue_output(value)
-            except ValueError as exc:
-                raise BYOKValidationError(str(exc)) from None
-        try:
-            return validate_dialogue_output(value, context)
-        except ValueError as exc:
-            raise BYOKValidationError(str(exc)) from None
+                response = self._request(payload)
+                raw = (
+                    _extract_responses_output(response)
+                    if self.config.protocol is APIProtocol.RESPONSES
+                    else _extract_chat_output(response)
+                )
+                value = _as_action_object(raw)
+                if self.config.response_format is ResponseFormat.JSON_OBJECT:
+                    try:
+                        value = normalize_dialogue_output(value)
+                    except ValueError as exc:
+                        raise BYOKValidationError(str(exc)) from None
+                try:
+                    return validate_dialogue_output(value, context)
+                except ValueError as exc:
+                    raise BYOKValidationError(str(exc)) from None
+            except (BYOKResponseError, BYOKValidationError):
+                if attempt == 1 or self.calls_used >= self.config.max_calls:
+                    raise
+        raise AssertionError("unreachable dialogue retry state")
 
     def generate_player_dialogue_line(
         self, context: PlayerDialogueTurnContext
     ) -> DialogueLineDraft:
-        response = self._request(
+        payload = (
             _player_dialogue_responses_payload(self.config, context)
             if self.config.protocol is APIProtocol.RESPONSES
             else _player_dialogue_chat_payload(self.config, context)
         )
-        raw = (
-            _extract_responses_output(response)
-            if self.config.protocol is APIProtocol.RESPONSES
-            else _extract_chat_output(response)
-        )
-        value = _as_action_object(raw)
-        if self.config.response_format is ResponseFormat.JSON_OBJECT:
+        for attempt in range(2):
             try:
-                value = normalize_dialogue_output(value)
-            except ValueError as exc:
-                raise BYOKValidationError(str(exc)) from None
-        try:
-            return validate_player_dialogue_output(value, context)
-        except ValueError as exc:
-            raise BYOKValidationError(str(exc)) from None
+                response = self._request(payload)
+                raw = (
+                    _extract_responses_output(response)
+                    if self.config.protocol is APIProtocol.RESPONSES
+                    else _extract_chat_output(response)
+                )
+                value = _as_action_object(raw)
+                if self.config.response_format is ResponseFormat.JSON_OBJECT:
+                    try:
+                        value = normalize_dialogue_output(value)
+                    except ValueError as exc:
+                        raise BYOKValidationError(str(exc)) from None
+                try:
+                    return validate_player_dialogue_output(value, context)
+                except ValueError as exc:
+                    raise BYOKValidationError(str(exc)) from None
+            except (BYOKResponseError, BYOKValidationError):
+                if attempt == 1 or self.calls_used >= self.config.max_calls:
+                    raise
+        raise AssertionError("unreachable player dialogue retry state")

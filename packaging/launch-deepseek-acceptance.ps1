@@ -29,7 +29,7 @@ else {
 [System.IO.Directory]::CreateDirectory($databaseRoot) | Out-Null
 $databasePath = if ([string]::IsNullOrWhiteSpace($Database)) {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    Join-Path $databaseRoot "stage-10-deepseek-real-acceptance-$timestamp.sqlite3"
+    Join-Path $databaseRoot "stage-11-deepseek-real-acceptance-$timestamp.sqlite3"
 }
 elseif ([System.IO.Path]::IsPathRooted($Database)) {
     [System.IO.Path]::GetFullPath($Database)

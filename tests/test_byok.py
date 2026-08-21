@@ -299,6 +299,22 @@ class BYOKProviderTests(unittest.TestCase):
                 }
             )
 
+    def test_model_output_accepts_bounded_markdown_json_wrapper(self) -> None:
+        from open_shift.byok import _as_action_object
+
+        value = _as_action_object(
+            "Here is the requested object:\n```json\n"
+            '{"action_type":"work","target_id":null,"location":null,'
+            '"duration_minutes":480,"reason_code":"earn_money"}\n```'
+        )
+        self.assertEqual(value["action_type"], "work")
+
+    def test_model_output_still_rejects_json_arrays(self) -> None:
+        from open_shift.byok import BYOKResponseError, _as_action_object
+
+        with self.assertRaises(BYOKResponseError):
+            _as_action_object("[{}]")
+
     def test_budget_stops_before_a_second_transport_call(self) -> None:
         transport = FakeTransport({"output_text": action_json()})
         provider = BYOKProvider(

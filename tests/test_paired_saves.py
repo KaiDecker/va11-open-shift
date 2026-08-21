@@ -13,6 +13,7 @@ from open_shift.paired_saves import (
     PairedSaveError,
     PairedSaveManager,
     PairedSaveMismatch,
+    WorldSessionCheckpoint,
 )
 from open_shift.store import WorldStore
 
@@ -98,6 +99,75 @@ class PairedSaveTests(unittest.TestCase):
             self.assertEqual(store.get_meta("shift_phase"), "playing")
         with WorldStore(self.live_db) as store:
             self.assertEqual(store.get_meta("shift_phase"), "save_required")
+
+    def test_session_checkpoint_rolls_back_unsaved_progress_and_advances_on_save(self) -> None:
+        checkpoint_path = self.root / "session-checkpoint.sqlite3"
+        checkpoint = WorldSessionCheckpoint(self.live_db, checkpoint_path)
+        checkpoint.begin()
+        with WorldStore(self.live_db) as store:
+            store.set_meta("current_story_day", 2)
+        checkpoint.capture()
+        with WorldStore(self.live_db) as store:
+            store.set_meta("current_story_day", 4)
+        checkpoint.rollback()
+        with WorldStore(self.live_db) as store:
+            self.assertEqual(store.get_meta("current_story_day"), "2")
+        checkpoint.cleanup()
+        self.assertFalse(checkpoint_path.exists())
+
+    def test_new_session_database_is_removed_when_never_saved(self) -> None:
+        new_db = self.root / "new-session.sqlite3"
+        checkpoint = WorldSessionCheckpoint(
+            new_db, self.root / "new-session-checkpoint.sqlite3"
+        )
+        checkpoint.begin()
+        with WorldStore(new_db) as store:
+            store.set_meta("current_story_day", 3)
+        checkpoint.rollback()
+        self.assertFalse(new_db.exists())
+
+    def test_abandoned_session_is_recovered_before_next_launch(self) -> None:
+        checkpoint_path = self.root / "abandoned.sqlite3"
+        first = WorldSessionCheckpoint(self.live_db, checkpoint_path)
+        first.begin()
+        with WorldStore(self.live_db) as store:
+            store.set_meta("current_story_day", 5)
+        restarted = WorldSessionCheckpoint(self.live_db, checkpoint_path)
+        self.assertTrue(restarted.recover_abandoned_session())
+        with WorldStore(self.live_db) as store:
+            self.assertEqual(store.get_meta("current_story_day"), "1")
+        self.assertFalse(checkpoint_path.exists())
+        self.assertFalse(restarted.state_path.exists())
+
+    def test_rollback_keeps_safe_unplayed_story_draft(self) -> None:
+        checkpoint_path = self.root / "draft-checkpoint.sqlite3"
+        checkpoint = WorldSessionCheckpoint(self.live_db, checkpoint_path)
+        checkpoint.begin()
+        with WorldStore(self.live_db) as store:
+            source_event = store.append_event(
+                store.current_tick,
+                "public_world_event",
+                None,
+                payload={"headline": "A quiet test event"},
+            )
+        checkpoint.capture()
+        with WorldStore(self.live_db) as store:
+            store._conn.execute(
+                """
+                INSERT INTO daily_story_graphs(
+                    day_index, generation_version, status, source_tick,
+                    source_event_ids_json, graph_json, error_code, attempt_count
+                ) VALUES(2, 'test-v1', 'ready', 1440, ?, ?, NULL, 1)
+                """,
+                (json.dumps([source_event]), json.dumps({"entry_node_id": "opening"})),
+            )
+            store.set_meta("current_story_day", 3)
+        checkpoint.rollback()
+        with WorldStore(self.live_db) as store:
+            self.assertEqual(store.get_meta("current_story_day"), "1")
+            graph = store.get_daily_story_graph(2, "test-v1")
+            self.assertIsNotNone(graph)
+            self.assertEqual(graph["status"], "ready")
 
     def test_operation_receipts_survive_restart_and_reject_conflicts(self) -> None:
         self.native_save(9)
