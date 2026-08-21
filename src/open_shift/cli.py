@@ -150,6 +150,7 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--prefetch-days", type=int, choices=(0, 1), default=1)
     launch.add_argument("--config", type=Path)
     launch.add_argument("--health-timeout", type=float, default=10.0)
+    launch.add_argument("--bridge-command", nargs="+")
     launch.add_argument("--provider-base-url")
     launch.add_argument("--provider-model")
     launch.add_argument("--provider-protocol", choices=[item.value for item in APIProtocol])
@@ -212,6 +213,10 @@ def _build_parser() -> argparse.ArgumentParser:
     package.add_argument("--project-root", type=Path, default=Path("."))
     package.add_argument("--output", type=Path, required=True)
     package.add_argument("--version", default="0.1.0")
+    package.add_argument("--runtime-exe", type=Path)
+    package.add_argument("--gui-exe", type=Path)
+    package.add_argument("--icon", type=Path)
+    package.add_argument("--utmt-cli-zip", type=Path)
     return parser
 
 
@@ -569,6 +574,7 @@ def _launch(args: argparse.Namespace) -> int:
             health_timeout_seconds=args.health_timeout,
             prepare_story_before_game=args.prepare_before_game,
             story_prepare_timeout_seconds=args.prepare_timeout,
+            bridge_command=tuple(args.bridge_command or ()),
             bridge_extra_args=tuple(
                 item
                 for pair in (
@@ -705,6 +711,10 @@ def _build_mod_package(args: argparse.Namespace) -> int:
             project_root=args.project_root,
             output=args.output,
             version=args.version,
+            runtime_exe=args.runtime_exe,
+            gui_exe=args.gui_exe,
+            icon=args.icon,
+            utmt_cli=args.utmt_cli_zip,
         )
     except (PackageError, OSError, ValueError) as exc:
         print(f"Package build failed: {exc}", file=sys.stderr)

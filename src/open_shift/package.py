@@ -1,4 +1,4 @@
-"""Build a safe, source-only Open Shift Mod distribution archive."""
+"""Build a safe Open Shift Mod distribution archive."""
 
 from __future__ import annotations
 
@@ -41,9 +41,18 @@ _REQUIRED_FILES = (
     "game-patch/analysis/verify_patch.csx",
     "packaging/README.md",
     "packaging/install-isolated-copy.ps1",
+    "packaging/install-open-shift.ps1",
+    "packaging/configure-api-key.ps1",
+    "packaging/build-player-release.ps1",
     "packaging/launch-open-shift.ps1",
     "packaging/launch-deepseek-acceptance.ps1",
+    "packaging/uninstall-open-shift.ps1",
     "packaging/open-shift.toml.example",
+    "packaging/INSTALL.md",
+    "packaging/runtime_entry.py",
+    "packaging/gui_launcher.cs",
+    "packaging/open-shift-gui.ps1",
+    "packaging/create-icon.ps1",
 )
 _FORBIDDEN_PARTS = (
     "reference-local/",
@@ -77,6 +86,15 @@ def _relative_files(root: Path) -> tuple[Path, ...]:
     return tuple(sorted(files))
 
 
+def _optional_file(path: str | Path | None, *, name: str, files: set[Path]) -> None:
+    if path is None:
+        return
+    candidate = Path(path).expanduser().resolve()
+    if not candidate.is_file():
+        raise PackageError(f"optional {name} was not a file: {candidate}")
+    files.add(candidate)
+
+
 def _zip_name(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
@@ -92,9 +110,16 @@ def _forbidden(entries: list[str]) -> tuple[str, ...]:
 
 
 def build_mod_package(
-    *, project_root: str | Path, output: str | Path, version: str = "0.1.0"
+    *,
+    project_root: str | Path,
+    output: str | Path,
+    version: str = "0.1.0",
+    runtime_exe: str | Path | None = None,
+    gui_exe: str | Path | None = None,
+    icon: str | Path | None = None,
+    utmt_cli: str | Path | None = None,
 ) -> PackageResult:
-    """Create a source-only zip that can patch a user's own game copy.
+    """Create a source-only or bundled-runtime zip for a user's own game copy.
 
     The archive deliberately contains no original executable, data.win,
     reference-local files, database, runtime INI, or API credentials.
@@ -108,8 +133,25 @@ def build_mod_package(
         relative_output = output_path.relative_to(root)
         if not relative_output.parts or relative_output.parts[0] not in {"dist", "work"}:
             raise PackageError("package output must not be inside the project source tree")
-    files = _relative_files(root)
-    names = [_zip_name(path, root) for path in files]
+    files = tuple(sorted(_relative_files(root)))
+    extras: list[tuple[Path, str]] = []
+    if runtime_exe is not None:
+        runtime_path = Path(runtime_exe).expanduser().resolve()
+        _optional_file(runtime_path, name="runtime executable", files=set())
+        extras.append((runtime_path, "OpenShift.exe"))
+    if gui_exe is not None:
+        gui_path = Path(gui_exe).expanduser().resolve()
+        _optional_file(gui_path, name="GUI executable", files=set())
+        extras.append((gui_path, "OpenShiftSetup.exe"))
+    if icon is not None:
+        icon_path = Path(icon).expanduser().resolve()
+        _optional_file(icon_path, name="application icon", files=set())
+        extras.append((icon_path, "OpenShift.ico"))
+    if utmt_cli is not None:
+        utmt_path = Path(utmt_cli).expanduser().resolve()
+        _optional_file(utmt_path, name="UTMT CLI", files=set())
+        extras.append((utmt_path, "tools/utmt/UndertaleModCli.zip"))
+    names = [_zip_name(path, root) for path in files] + [name for _, name in extras]
     forbidden = _forbidden(names)
     if forbidden:
         raise PackageError("forbidden files would enter package: " + ", ".join(forbidden))
@@ -117,7 +159,12 @@ def build_mod_package(
     manifest = {
         "package_id": "open_shift",
         "package_version": version,
-        "source_only": True,
+        "source_only": runtime_exe is None,
+        "contains_runtime_exe": runtime_exe is not None,
+        "contains_gui_exe": gui_exe is not None,
+        "contains_icon": icon is not None,
+        "contains_utmt_cli": utmt_cli is not None,
+        "requires_python": runtime_exe is None,
         "requires_user_owned_game_copy": True,
         "contains_original_data_win": False,
         "contains_api_key": False,
@@ -131,6 +178,8 @@ def build_mod_package(
     try:
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for path, name in zip(files, names):
+                archive.write(path, name)
+            for path, name in extras:
                 archive.write(path, name)
             archive.writestr(
                 "PACKAGE_MANIFEST.json",
