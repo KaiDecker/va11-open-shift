@@ -41,7 +41,23 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         if (ag_state == 3)
         {
             ag_state = 4;
-            ag_error_message = "O.S.：本地世界服务拒绝了场景确认。";
+            if (ag_http_status == 409 && string_length(ag_result) > 0)
+            {
+                var ag_ack_error_root;
+                var ag_ack_error_object;
+                ag_ack_error_root = json_decode(ag_result);
+                ag_ack_error_object = noone;
+                if (ds_exists(ag_ack_error_root, ds_type_map))
+                    ag_ack_error_object = ds_map_find_value(ag_ack_error_root, "error");
+                if (ds_exists(ag_ack_error_object, ds_type_map) && ds_map_exists(ag_ack_error_object, "code"))
+                    ag_error_message = "O.S.：场景确认被拒绝（" + string(ds_map_find_value(ag_ack_error_object, "code")) + "）。";
+                else
+                    ag_error_message = "O.S.：本地世界服务拒绝了场景确认。";
+                if (ds_exists(ag_ack_error_root, ds_type_map))
+                    ds_map_destroy(ag_ack_error_root);
+            }
+            else
+                ag_error_message = "O.S.：本地世界服务拒绝了场景确认。";
         }
         else
         {
@@ -77,13 +93,10 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         }
         else
         {
-            if (string_copy(ag_scene_id, 1, 11) == "settlement_" || string_copy(ag_scene_id, 1, 14) == "save_required_")
+            if (string_copy(ag_scene_id, 1, 11) == "settlement_")
             {
                 var ag_completed_day;
-                if (string_copy(ag_scene_id, 1, 11) == "settlement_")
-                    ag_completed_day = string_copy(ag_scene_id, 12, string_length(ag_scene_id) - 11);
-                else
-                    ag_completed_day = string_copy(ag_scene_id, 15, string_length(ag_scene_id) - 14);
+                ag_completed_day = string_copy(ag_scene_id, 12, string_length(ag_scene_id) - 11);
                 if (string_copy(ag_completed_day, 1, 4) == "day_")
                     ag_completed_day = string_delete(ag_completed_day, 1, 4);
                 if (global.cashcounter > 0)
@@ -91,10 +104,12 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     global.jillwallet += global.cashcounter;
                     global.cashcounter = 0;
                 }
-                global.ag_story_day = real(ag_completed_day) + 1;
-                global.datestring = "O.S. DAY " + string(global.ag_story_day);
-                if (!instance_exists(ag_save_flow_controller))
-                    instance_create(x, y, ag_save_flow_controller);
+                // The original new_day transition below is the single
+                // authoritative in-session date increment. Do not advance
+                // ag_story_day here or the day would be counted twice.
+                global.datestring = "O.S. DAY " + string(real(ag_completed_day) + 1);
+                if (!instance_exists(new_day))
+                    instance_create(x, y, new_day);
                 instance_destroy();
             }
             else
@@ -184,7 +199,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_scene_id = ds_map_find_value(ag_scene, "scene_id");
             ag_return_to = ds_map_find_value(ag_scene, "return_to");
             ag_lines = ds_map_find_value(ag_scene, "lines");
-            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_" && string_copy(ag_scene_id, 1, 4) != "day_" && string_copy(ag_scene_id, 1, 8) != "opening_" && string_copy(ag_scene_id, 1, 8) != "waiting_" && string_copy(ag_scene_id, 1, 9) != "doorbell_" && string_copy(ag_scene_id, 1, 8) != "closing_" && string_copy(ag_scene_id, 1, 11) != "settlement_" && string_copy(ag_scene_id, 1, 14) != "save_required_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
+            if ((ag_scene_id != "stage_3_connection_test" && string_copy(ag_scene_id, 1, 12) != "world_event_" && string_copy(ag_scene_id, 1, 13) != "order_result_" && string_copy(ag_scene_id, 1, 4) != "day_" && string_copy(ag_scene_id, 1, 8) != "opening_" && string_copy(ag_scene_id, 1, 8) != "waiting_" && string_copy(ag_scene_id, 1, 9) != "doorbell_" && string_copy(ag_scene_id, 1, 8) != "closing_" && string_copy(ag_scene_id, 1, 11) != "settlement_") || ag_return_to != "bar" || !ds_exists(ag_lines, ds_type_list) || ds_list_size(ag_lines) < 1 || ds_list_size(ag_lines) > 8)
                 ag_valid = false;
         }
 

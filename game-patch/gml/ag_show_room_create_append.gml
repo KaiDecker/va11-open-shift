@@ -83,3 +83,17 @@ if (global.cur_day == 1001)
         instance_create(x, y, ag_preload_controller);
     }
 }
+
+// The original room setup is gated to cur_day 1001. Open Shift keeps its
+// story day separately, so later O.S. days still need the apartment popup
+// text initialized when the room is recreated.
+if (global.cur_day >= 1001 && instance_exists(room_text))
+{
+    with (room_text)
+    {
+        deadline = global.datestring;
+        distraction = "Glitch City 的日子仍在继续。#熟悉的客人也有了新的生活。";
+        unlocked = "今日营业已准备完成。点击‘去酒吧上班’开始。";
+        dismiss = "点击鼠标关闭";
+    }
+}

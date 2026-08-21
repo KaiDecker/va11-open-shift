@@ -96,7 +96,7 @@ class PatchContractTests(unittest.TestCase):
     def test_committed_gml_source_tree_has_all_safety_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         sources = validate_patch_source_tree(root / "game-patch" / "gml")
-        self.assertEqual(len(sources), 29)
+        self.assertEqual(len(sources), 30)
 
     def test_menu_entry_matches_reference_chapter_layout(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -158,6 +158,12 @@ class PatchContractTests(unittest.TestCase):
         show_room = (
             root / "game-patch" / "gml" / "ag_show_room_create_append.gml"
         ).read_text(encoding="utf-8")
+        variable_create = (
+            root / "game-patch" / "gml" / "ag_var_controller_create_append.gml"
+        ).read_text(encoding="utf-8")
+        new_day = (
+            root / "game-patch" / "gml" / "ag_new_day_step_append.gml"
+        ).read_text(encoding="utf-8")
         aa_button_1 = (
             root / "game-patch" / "gml" / "ag_aa_button_1_step.gml"
         ).read_text(encoding="utf-8")
@@ -210,11 +216,16 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("scorepop_obj", controller_http)
         self.assertIn("ag_scorepop_instance", controller_http)
         self.assertIn("global.jillwallet += global.cashcounter", controller_http)
+        self.assertIn("instance_exists(new_day)", controller_http)
+        self.assertIn("instance_create(x, y, new_day)", controller_http)
         self.assertIn('global.datestring = "O.S. DAY "', controller_http)
         self.assertIn('string_delete(ag_completed_day, 1, 4)', controller_http)
+        self.assertNotIn('global.ag_story_day = real(ag_completed_day) + 1', controller_http)
         self.assertNotIn("global.money", controller_http)
         self.assertNotIn('"ini_close", "is_undefined"', patch)
         self.assertIn("ag_was_order_response = (ag_state == 7)", controller_http)
+        self.assertIn("ag_ack_error_root", controller_http)
+        self.assertIn("场景确认被拒绝（", controller_http)
         self.assertIn("else if (ag_was_order_response)", controller_http)
         self.assertIn("ag_error_code", controller_http)
         self.assertIn("json_decode(ag_result)", controller_http)
@@ -229,6 +240,8 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn('ag_expected_status = "restored"', save_http)
         self.assertNotIn('ag_operation + "ed"', save_http)
         self.assertIn("jill_room", save_flow)
+        self.assertIn("ag_preload_controller", save_flow)
+        self.assertIn('global.datestring = "O.S. DAY "', save_flow)
         self.assertNotIn("instance_create(x, y, out_of_apartment)", save_flow)
         self.assertIn("ag_flow_state = 4", save_flow)
         self.assertNotIn("instance_create(room_width / 2, 165, save_home)", save_flow)
@@ -239,9 +252,12 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn('Name = Data.Strings.MakeString("ag_save_controller")', patch)
         self.assertIn('Name = Data.Strings.MakeString("ag_save_flow_controller")', patch)
         self.assertIn("for (int slot = 1; slot <= 24; slot++)", patch)
-        self.assertIn("data_icon.alarm[0] = 10", towork)
-        self.assertIn("data_icon.chosen = 1", towork)
+        self.assertNotIn("data_icon.alarm[0] = 10", towork)
+        self.assertNotIn("data_icon.chosen = 1", towork)
+        self.assertNotIn("save_required_", controller_http)
+        self.assertNotIn("ag_pair_complete", save_flow)
         self.assertIn("instance_create(x, y, out_of_apartment)", towork)
+        self.assertIn("global.ag_story_day_advance_applied = 0", towork)
         self.assertIn("global.ag_prefetch_ready != 1", towork)
         self.assertIn('"/v1/story/prepare"', preload_create)
         self.assertNotIn("instance_create(x, y, obj_textbox)", preload_step)
@@ -253,8 +269,21 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("今日营业已准备完成", preload_http)
         self.assertIn("shift_phase", preload_http)
         self.assertIn("global.ag_story_day", preload_http)
+        self.assertIn('global.datestring = "O.S. DAY " + string(global.ag_story_day)', preload_step)
+        self.assertIn("deadline = global.datestring", preload_step)
+        self.assertIn("distraction = \"Glitch City 的日子仍在继续", preload_step)
+        self.assertIn("unlocked = \"今日营业已准备完成", preload_step)
+        self.assertIn("dismiss = \"点击鼠标关闭\"", preload_step)
+        self.assertIn("other.ag_preload_state == 1", preload_step)
+        self.assertNotIn("else if (ag_preload_state == 1)", preload_step)
         self.assertNotIn('global.datestring = "O.S. DAY 1"', show_room)
         self.assertIn("global.ag_story_day", show_room)
+        self.assertIn("with (ag_preload_controller) instance_destroy()", save_flow)
+        self.assertIn("instance_create(x, y, ag_preload_controller)", save_flow)
+        self.assertIn("global.ag_story_day = 1", variable_create)
+        self.assertIn("global.ag_story_day_advance_applied = 0", variable_create)
+        self.assertIn("global.ag_story_day += 1", new_day)
+        self.assertIn("global.cur_day >= 1001", new_day)
         self.assertIn("global.ag_story_day = ag_response_world_day", save_http)
         self.assertIn("OPEN SHIFT", show_room)
         self.assertIn("room_text", show_room)
@@ -262,6 +291,8 @@ class PatchContractTests(unittest.TestCase):
         self.assertNotIn("draw_rectangle", preload_draw)
         self.assertIn("global.shop_casitas = 1", show_room)
         self.assertIn("global.gotmeshop = 1", show_room)
+        self.assertIn("global.cur_day >= 1001", show_room)
+        self.assertIn("今日营业已准备完成", show_room)
         self.assertIn("global.cur_day == 1001", aa_button_1)
         self.assertIn("global.cur_news = 52", aa_button_1)
         self.assertIn("global.hl53", tablet_create)

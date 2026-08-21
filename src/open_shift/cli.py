@@ -37,7 +37,12 @@ from .patch_contract import (
     load_patch_manifest,
     validate_patch_target,
 )
-from .paired_saves import PairedSaveError, PairedSaveManager, PairedSaveMismatch
+from .paired_saves import (
+    PairedSaveError,
+    PairedSaveManager,
+    PairedSaveMismatch,
+    WorldSessionCheckpoint,
+)
 from .package import PackageError, build_mod_package
 from .providers import MockProvider
 from .scenario import create_demo_world
@@ -400,12 +405,30 @@ def _serve_bridge(args: argparse.Namespace) -> int:
             paired_saves = PairedSaveManager(
                 args.world_db, native_save_dir, paired_save_dir
             )
+            checkpoint_path = os.environ.get("OPEN_SHIFT_SESSION_CHECKPOINT")
+            session_checkpoint = (
+                WorldSessionCheckpoint(args.world_db, checkpoint_path)
+                if checkpoint_path
+                else None
+            )
 
             def save_pair(request: dict[str, object]) -> dict[str, object]:
-                return _paired_save_response(world, paired_saves, request, "paired")
+                return _paired_save_response(
+                    world,
+                    paired_saves,
+                    request,
+                    "paired",
+                    session_checkpoint=session_checkpoint,
+                )
 
             def restore_pair(request: dict[str, object]) -> dict[str, object]:
-                return _paired_save_response(world, paired_saves, request, "restored")
+                return _paired_save_response(
+                    world,
+                    paired_saves,
+                    request,
+                    "restored",
+                    session_checkpoint=session_checkpoint,
+                )
 
             serve_bridge(
                 config,
@@ -434,6 +457,8 @@ def _paired_save_response(
     manager: PairedSaveManager,
     request: dict[str, object],
     status: str,
+    *,
+    session_checkpoint: WorldSessionCheckpoint | None = None,
 ) -> dict[str, object]:
     world.wait_for_background_generation()
     try:
@@ -454,6 +479,8 @@ def _paired_save_response(
             world.complete_paired_save(
                 record.world_day, record.last_completed_story_day
             )
+        if session_checkpoint is not None:
+            session_checkpoint.capture()
     except PairedSaveMismatch as exc:
         raise BridgeError(409, exc.code, "paired save did not match") from None
     except PairedSaveError as exc:

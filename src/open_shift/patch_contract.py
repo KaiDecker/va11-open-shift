@@ -157,6 +157,7 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_popup_room_create_append.gml",
         "ag_popup_room_step.gml",
         "ag_var_controller_create_append.gml",
+        "ag_new_day_step_append.gml",
         "ag_aa_button_1_step.gml",
         "ag_aa_button_2_step.gml",
         "ag_aa_button_3_step.gml",
@@ -201,15 +202,11 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_save_slot",
         "jill_room",
         "out_of_apartment",
-        "save_required_",
-        "data_icon.alarm[0] = 10",
-        "data_icon.chosen = 1",
         "global.jillwallet += global.cashcounter",
         'global.datestring = "O.S. DAY "',
         "ag_flow_state = 4",
         "global.headline1",
         "global.artcomment1",
-        "augmented_eye_icon",
         "ag_preload_controller",
         "正在准备今天的营业",
         "ag_prefetch_ready",
@@ -223,6 +220,8 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_open_shift_click_armed",
         "mouse_check_button_pressed(mb_left)",
         "global.jillcomment",
+        "global.ag_story_day_advance_applied",
+        "global.ag_story_day += 1",
         "global.shop_casitas = 1",
         "global.gotmeshop = 1",
         "global.cur_day == 1001",
@@ -232,6 +231,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         raise PatchContractError("GML used a nonexistent original money variable")
     if "is_undefined(ag_portrait_id)" in combined:
         raise PatchContractError("GML used the incompatible JSON null portrait check")
+    if "save_required_" in combined or "ag_pair_complete" in combined:
+        raise PatchContractError("GML still required a paired save before the next day")
+    if combined.count("global.ag_story_day = 1") != 1:
+        raise PatchContractError("O.S. story day initialization was missing")
     missing = [item for item in required_boundaries if item not in combined]
     if missing:
         raise PatchContractError(

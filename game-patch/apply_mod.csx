@@ -296,6 +296,9 @@ if (global.cur_day == 1001 && !instance_exists(ag_bridge_controller))
 UndertaleCode mixControl = Data.Code.ByName("gml_Script_mixcontrol");
 importGroup.QueueAppend(mixControl, ReadSource("ag_bridge_mixcontrol_append.gml"));
 
+UndertaleCode newDayStep = Data.Code.ByName("gml_Object_new_day_Step_0");
+importGroup.QueueAppend(newDayStep, ReadSource("ag_new_day_step_append.gml"));
+
 importGroup.Import();
 
 string[] requiredFunctions = new[]
@@ -338,4 +341,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 10 MVP patch compiled successfully.");
+ScriptMessage("Open Shift Stage 11 original day loop patch compiled successfully.");

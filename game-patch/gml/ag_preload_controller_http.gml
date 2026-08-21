@@ -15,19 +15,13 @@ if (ds_map_find_value(async_load, "id") == ag_preload_http_request)
             ag_preload_state = 2;
             global.ag_story_day = ds_map_find_value(ag_preload_root, "world_day");
             global.datestring = "O.S. DAY " + string(global.ag_story_day);
-            if (ds_map_find_value(ag_preload_root, "shift_phase") == "save_required")
-                global.jillcomment = "JILL: 上一天已结束。先存档，再开始 DAY " + string(global.ag_story_day) + "。";
-            else
-                global.jillcomment = "JILL: 今日营业已准备完成。";
+            global.jillcomment = "JILL: 今日营业已准备完成。";
             if (instance_exists(room_text))
             {
                 with (room_text)
                 {
                     deadline = global.datestring;
-                    if (ds_map_find_value(ag_preload_root, "shift_phase") == "save_required")
-                        unlocked = "请先在 Data 中存档；保存成功后可以开始下一天。";
-                    else
-                        unlocked = "今日营业已准备完成。";
+                    unlocked = "今日营业已准备完成。";
                 }
             }
         }
