@@ -120,7 +120,11 @@ class RuntimeSession:
         if self.config.bridge_command:
             command = list(self.config.bridge_command)
         else:
-            command = [sys.executable, "-m", "open_shift", "serve-bridge"]
+            command = (
+                [sys.executable, "serve-bridge"]
+                if getattr(sys, "frozen", False)
+                else [sys.executable, "-m", "open_shift", "serve-bridge"]
+            )
         command.extend(
             [
                 "--host",
@@ -331,6 +335,7 @@ def build_launch_config(
     port: int = 0,
     advance_minutes: int = 1440,
     bridge_extra_args: Sequence[str] = (),
+    bridge_command: Sequence[str] = (),
     health_timeout_seconds: float = 10.0,
     steam_root: str | Path | None = None,
     steam_app_id: int | None = None,
@@ -346,6 +351,7 @@ def build_launch_config(
         port=port,
         advance_minutes=advance_minutes,
         bridge_extra_args=tuple(bridge_extra_args),
+        bridge_command=tuple(bridge_command),
         health_timeout_seconds=health_timeout_seconds,
         steam_root=Path(steam_root) if steam_root is not None else None,
         steam_app_id=steam_app_id,
