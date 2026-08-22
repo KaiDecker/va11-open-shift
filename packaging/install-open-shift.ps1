@@ -104,8 +104,17 @@ if (-not $sameRoot) {
     if (Test-Path -LiteralPath $bundledIcon -PathType Leaf) {
         Copy-Item -LiteralPath $bundledIcon -Destination (Join-Path $installRoot "OpenShift.ico") -Force
     }
+    foreach ($webViewName in @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")) {
+        $webViewPath = Join-Path $packageRoot $webViewName
+        if (Test-Path -LiteralPath $webViewPath -PathType Leaf) {
+            Copy-Item -LiteralPath $webViewPath -Destination (Join-Path $installRoot $webViewName) -Force
+        }
+    }
     Copy-Item -LiteralPath (Join-Path $packageRoot "game-patch") -Destination $installRoot -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $packageRoot "packaging") -Destination $installRoot -Recurse -Force
+    if (Test-Path -LiteralPath (Join-Path $packageRoot "assets")) {
+        Copy-Item -LiteralPath (Join-Path $packageRoot "assets") -Destination $installRoot -Recurse -Force
+    }
     if (Test-Path -LiteralPath (Join-Path $packageRoot "tools")) {
         Copy-Item -LiteralPath (Join-Path $packageRoot "tools") -Destination $installRoot -Recurse -Force
     }

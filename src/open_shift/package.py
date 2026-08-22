@@ -56,7 +56,9 @@ _REQUIRED_FILES = (
     "packaging/INSTALL.md",
     "packaging/runtime_entry.py",
     "packaging/gui_launcher.cs",
+    "packaging/OpenShiftSetup.csproj",
     "packaging/open-shift-gui.ps1",
+    "packaging/webview/index.html",
     "packaging/create-icon.ps1",
 )
 _FORBIDDEN_PARTS = (
@@ -123,6 +125,7 @@ def build_mod_package(
     gui_exe: str | Path | None = None,
     icon: str | Path | None = None,
     utmt_cli: str | Path | None = None,
+    webview_dlls: tuple[str | Path, ...] = (),
 ) -> PackageResult:
     """Create a source-only or bundled-runtime zip for a user's own game copy.
 
@@ -156,6 +159,10 @@ def build_mod_package(
         utmt_path = Path(utmt_cli).expanduser().resolve()
         _optional_file(utmt_path, name="UTMT CLI", files=set())
         extras.append((utmt_path, "tools/utmt/UndertaleModCli.zip"))
+    for webview in webview_dlls:
+        webview_path = Path(webview).expanduser().resolve()
+        _optional_file(webview_path, name="WebView2 runtime library", files=set())
+        extras.append((webview_path, webview_path.name))
     names = [_zip_name(path, root) for path in files] + [name for _, name in extras]
     forbidden = _forbidden(names)
     if forbidden:
@@ -169,6 +176,7 @@ def build_mod_package(
         "contains_gui_exe": gui_exe is not None,
         "contains_icon": icon is not None,
         "contains_utmt_cli": utmt_cli is not None,
+        "contains_webview2": bool(webview_dlls),
         "requires_python": runtime_exe is None,
         "requires_user_owned_game_copy": True,
         "contains_original_data_win": False,

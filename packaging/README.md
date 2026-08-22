@@ -16,8 +16,8 @@ Requirements for the source/maintainer workflow:
 - a user-owned VA-11 HALL-A installation;
 - a DeepSeek API key supplied only through `OPEN_SHIFT_API_KEY`.
 
-For the final player package, double-click `OpenShiftSetup.exe`. Its Windows GUI
-detects the Steam library, validates the original hash, creates or repairs the
+For the final player package, double-click `OpenShiftSetup.exe`. Its WebView2-based
+Windows GUI detects the Steam library, validates the original hash, creates or repairs the
 patched isolated copy, stores the DeepSeek key with current-user DPAPI, and
 creates a desktop `Open Shift` shortcut. The same GUI prepares the next day,
 starts the game, opens diagnostics, and safely uninstalls the isolated copy.
@@ -26,7 +26,7 @@ The public project name is **OPEN SHIFT**. Community-facing posts are maintained
 outside the player package and may be adapted for local community rules.
 
 The final package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the Open Shift icon,
-`OpenShift.ico`, and UTMT CLI. The lower-level
+the WebView2 host libraries, `OpenShift.ico`, and UTMT CLI. The lower-level
 `install-isolated-copy.ps1` and `launch-open-shift.ps1` scripts remain available
 for maintainer and acceptance workflows.
 

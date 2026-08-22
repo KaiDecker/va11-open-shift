@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OPEN SHIFT</title>
+  <style>
+    :root { --ink:#252b38; --muted:#7c879b; --line:#e4e8f0; --card:#ffffffd9; --blue:#1687ff; --pink:#e72f87; --green:#31bf79; }
+    * { box-sizing:border-box; }
+    html,body { width:100%; height:100%; margin:0; overflow:hidden; }
+    body { background:linear-gradient(135deg,#edf1f8 0%,#f8f7f5 52%,#f1ebea 100%); color:var(--ink); font-family:Segoe UI,system-ui,sans-serif; }
+    button,input { font:inherit; }
+    .window { height:100%; display:flex; flex-direction:column; padding:16px 16px 14px; }
+    .hero,.card { background:var(--card); border:1px solid #fff; box-shadow:0 10px 28px #aab4c522, inset 0 1px #ffffffcc; border-radius:24px; }
+    .hero { min-height:112px; padding:22px 24px; display:flex; align-items:center; gap:16px; }
+    .brand-icon { width:62px; height:62px; object-fit:contain; image-rendering:pixelated; background:#f1f3f8; border-radius:9px; padding:7px; }
+    h1 { margin:0; font-size:25px; letter-spacing:.02em; } .tagline { margin-top:3px; color:#7e8aa0; font-size:12px; }
+    .hero-side { margin-left:auto; text-align:right; } .badge { display:inline-flex; align-items:center; gap:7px; padding:8px 14px; border-radius:10px; background:#e5f8ed; color:#13a863; font-weight:700; font-size:12px; }
+    .dot { width:6px; height:6px; border-radius:50%; background:#24bb72; } .version { margin-top:7px; color:#8d96a6; font:10px Consolas,monospace; }
+    .card { margin-top:16px; padding:20px; } .field { margin-bottom:17px; } .field:last-child { margin-bottom:0; }
+    label { display:block; font-weight:700; font-size:13px; margin-bottom:7px; } .row { display:flex; gap:12px; align-items:center; }
+    input { min-width:0; flex:1; height:36px; border:0; outline:0; border-radius:10px; padding:0 11px; color:#273348; background:#edf0f6; box-shadow:inset 0 1px 2px #b6bfd033; }
+    input:focus { box-shadow:0 0 0 2px #1687ff44; } .small { flex:0 0 74px; }
+    .hint,.copy { color:#8490a2; font:10px Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:7px; }
+    .hint { font:11px Segoe UI,sans-serif; }
+    .safe { margin-top:16px; padding:15px; border-radius:16px; background:#f0f3f9; color:#54627b; font:11px Consolas,monospace; line-height:1.45; }
+    .safe strong { color:#3b465b; font-family:Segoe UI,sans-serif; font-size:12px; }
+    .actions { margin-top:16px; padding:16px 20px 18px; } .actions .primary { display:flex; gap:14px; }
+    button.action { border:0; height:43px; border-radius:22px; cursor:pointer; font-weight:700; flex:1; color:#fff; box-shadow:0 5px 12px #8b99ad33; transition:transform .12s,filter .12s; }
+    button.action:hover { filter:brightness(1.06); transform:translateY(-1px); } button.action:active { transform:translateY(0); } button:disabled { opacity:.48; cursor:default; transform:none!important; }
+    .install { background:var(--blue); } .start { background:var(--pink); } .secondary { margin-top:14px; display:flex; gap:14px; }
+    button.sub { flex:0 0 145px; height:36px; border-radius:18px; border:1px solid #d9e0ed; background:#edf2fb; color:#52627b; cursor:pointer; } button.danger { background:#f8e7f0; color:#a34a78; border-color:#efd0e0; }
+    .status { margin:17px 11px 0; min-height:20px; color:#19a9ad; font-size:12px; } .progress { height:3px; background:#d5d9e0; margin:7px 11px 0; overflow:hidden; } .progress span { display:block; height:100%; width:28%; background:#29b8c0; animation:slide 1.4s linear infinite; opacity:0; } .busy .progress span { opacity:1; }
+    @keyframes slide { from{transform:translateX(-110%)} to{transform:translateX(380%)} }
+  </style>
+</head>
+<body>
+  <main class="window" id="app">
+    <section class="hero">
+      <img class="brand-icon" id="brand" src="../../assets/open-shift-icon.svg" alt="OPEN SHIFT">
+      <div><h1>OPEN SHIFT</h1><div class="tagline">VA-11 HALL-A · 结局之后的本地世界</div></div>
+      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.14</div></div>
+    </section>
+    <section class="card">
+      <div class="field"><label>Steam 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="sub small" data-action="browse">选择</button></div><div class="copy" id="copy"></div></div>
+      <div class="field"><label>DeepSeek API Key</label><div class="row"><input id="key" type="password" spellcheck="false"><button class="sub small" data-action="saveKey">保存</button></div><div class="hint">使用 Windows DPAPI 加密保存，不写入 TOML、日志或存档。</div></div>
+      <div class="safe"><strong>安全状态</strong><br>Steam 原版 data.win：只读输入<br>补丁 data.win：仅写入隔离副本<br>世界数据库和配对存档：%LOCALAPPDATA%\VA_11_Hall_A</div>
+    </section>
+    <section class="card actions"><div class="primary"><button class="action install" data-action="install">安装 / 修复</button><button class="action start" data-action="start">准备并启动</button></div><div class="secondary"><button class="sub" data-action="logs">打开日志</button><button class="sub danger" data-action="uninstall">卸载</button></div></section>
+    <div class="status" id="status">就绪。Steam 原版文件保持只读。</div><div class="progress"><span></span></div>
+  </main>
+  <script>
+    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status');
+    function send(action, data={}) { if (window.chrome?.webview) window.chrome.webview.postMessage(JSON.stringify({action,...data})); }
+    function setState(s) { if(s.steam!==undefined) steam.value=s.steam; if(s.copy!==undefined) copy.textContent='隔离副本 · '+s.copy; if(s.status) status.textContent=s.status; if(s.busy!==undefined) app.classList.toggle('busy',s.busy); document.querySelector('[data-action="start"]').disabled=!!s.startDisabled; }
+    window.setState=setState;
+    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});key.value='';} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else send(a); }));
+    steam.addEventListener('change',()=>send('steamChanged',{value:steam.value}));
+  </script>
+</body>
+</html>

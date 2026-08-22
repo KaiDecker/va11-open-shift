@@ -217,6 +217,7 @@ def _build_parser() -> argparse.ArgumentParser:
     package.add_argument("--gui-exe", type=Path)
     package.add_argument("--icon", type=Path)
     package.add_argument("--utmt-cli-zip", type=Path)
+    package.add_argument("--webview-dll", type=Path, action="append", default=[])
     return parser
 
 
@@ -715,6 +716,7 @@ def _build_mod_package(args: argparse.Namespace) -> int:
             gui_exe=args.gui_exe,
             icon=args.icon,
             utmt_cli=args.utmt_cli_zip,
+            webview_dlls=tuple(args.webview_dll),
         )
     except (PackageError, OSError, ValueError) as exc:
         print(f"Package build failed: {exc}", file=sys.stderr)
