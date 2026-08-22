@@ -7,6 +7,8 @@
 - [ ] Steam `data.win` and executable hashes match the manifest.
 - [ ] No `data.win`, original assets, SQLite databases, API keys, archives, or
       `reference-local` files are staged.
+- [ ] Windows x64 RC ZIP has an explicit prerelease version and SHA-256.
+- [ ] WebView2 SDK build inputs are resolved explicitly or by supported discovery.
 
 ## Automated verification
 
@@ -29,6 +31,15 @@
 - [ ] A mismatched native/SQLite pair is rejected without changing live state.
 - [ ] `uninstall-patch` restores the backup when the installed output matches.
 - [ ] Uninstall refuses a file modified after installation.
+- [ ] A clean extraction installs without Python or a separately downloaded UTMT.
+- [ ] A previous Open Shift install upgrades by patch fingerprint and keeps its
+      database, paired saves, API credential, and native save directory.
+- [ ] Re-running the same RC recognizes the verified isolated patch without rebuilding.
+- [ ] WebView2 Runtime absence produces a Chinese actionable diagnostic.
+- [ ] Steam libraries outside the system drive are discovered from `libraryfolders.vdf`.
+- [ ] All mutating GUI controls are disabled while install or launch is active.
+- [ ] GUI uninstall requires confirmation and preserves saves by default.
+- [ ] Window, taskbar, executable, and desktop shortcut use the current OPEN SHIFT icon.
 
 ## Secrets and configuration
 
@@ -66,3 +77,5 @@
 - [ ] A fresh Windows user can install from the package without Python, enter a
       DPAPI-protected DeepSeek key, launch from the desktop shortcut, complete
       two business days, and uninstall without changing Steam `data.win`.
+- [ ] The Steam original SHA-256 before install, after upgrade, after a complete
+      DeepSeek-backed shift, and after uninstall is identical.
