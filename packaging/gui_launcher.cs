@@ -1,12 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -20,6 +23,9 @@ internal sealed class OpenShiftLauncherForm : Form
     private string activeMode = "";
     private string activeLog = "";
     private string pendingKey = "";
+    private string selectedSteamGame = "";
+    private string completionMarker = "";
+    private bool launchConfirmed;
     private StreamWriter activeLogWriter;
 
     public OpenShiftLauncherForm()
@@ -27,6 +33,7 @@ internal sealed class OpenShiftLauncherForm : Form
         root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenShift");
         gameCopyDir = Path.Combine(installDir, "game");
+        selectedSteamGame = FindSteamGame();
         Text = "OPEN SHIFT";
         ClientSize = new Size(540, 790);
         MinimumSize = ClientSize;
@@ -62,7 +69,10 @@ internal sealed class OpenShiftLauncherForm : Form
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "OPEN SHIFT", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            string message = error is WebView2RuntimeNotFoundException
+                ? "没有检测到 Microsoft Edge WebView2 Runtime。请先安装 WebView2 Evergreen Runtime，再重新打开 OPEN SHIFT。\r\n\r\n" + error.Message
+                : "OPEN SHIFT 图形界面无法启动。请确认发行包已完整解压。\r\n\r\n" + error.Message;
+            MessageBox.Show(message, "OPEN SHIFT", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Close();
         }
     }
@@ -70,7 +80,7 @@ internal sealed class OpenShiftLauncherForm : Form
     private void SendState(string message, bool busy)
     {
         if (browser.CoreWebView2 == null) return;
-        string json = "{\"steam\":" + Json(FindSteamGame()) + ",\"copy\":" + Json(gameCopyDir) + ",\"status\":" + Json(message) + ",\"busy\":" + (busy ? "true" : "false") + ",\"startDisabled\":" + (!File.Exists(Path.Combine(installDir, "Start-Open-Shift.ps1")) ? "true" : "false") + "}";
+        string json = "{\"steam\":" + Json(selectedSteamGame) + ",\"copy\":" + Json(gameCopyDir) + ",\"status\":" + Json(message) + ",\"busy\":" + (busy ? "true" : "false") + ",\"startDisabled\":" + (!File.Exists(Path.Combine(installDir, "Start-Open-Shift.ps1")) ? "true" : "false") + "}";
         browser.CoreWebView2.ExecuteScriptAsync("window.setState(" + json + ");");
     }
 
@@ -82,14 +92,77 @@ internal sealed class OpenShiftLauncherForm : Form
 
     private string FindSteamGame()
     {
-        string[] roots = { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "C:\\Steam" };
-        foreach (string rootPath in roots)
+        string installed = ReadInstalledSteamGame();
+        if (IsGameDirectory(installed)) return installed;
+
+        foreach (string rootPath in FindSteamRoots())
         {
-            if (String.IsNullOrEmpty(rootPath)) continue;
-            string candidate = Path.Combine(rootPath, "Steam", "steamapps", "common", "VA-11 HALL-A");
-            if (File.Exists(Path.Combine(candidate, "data.win"))) return candidate;
+            string candidate = Path.Combine(rootPath, "steamapps", "common", "VA-11 HALL-A");
+            if (IsGameDirectory(candidate)) return Path.GetFullPath(candidate);
         }
         return "";
+    }
+
+    private string ReadInstalledSteamGame()
+    {
+        string statePath = Path.Combine(installDir, "install.json");
+        if (!File.Exists(statePath)) return "";
+        try
+        {
+            using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath, Encoding.UTF8)))
+            {
+                JsonElement value;
+                return document.RootElement.TryGetProperty("steam_game_dir", out value) ? value.GetString() ?? "" : "";
+            }
+        }
+        catch { return ""; }
+    }
+
+    private static IEnumerable<string> FindSteamRoots()
+    {
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AddSteamRoot(roots, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam"));
+        AddSteamRoot(roots, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Steam"));
+        AddSteamRoot(roots, "C:\\Steam");
+        AddSteamRoot(roots, ReadSteamRegistryPath(Registry.CurrentUser, @"Software\Valve\Steam", "SteamPath"));
+        AddSteamRoot(roots, ReadSteamRegistryPath(Registry.LocalMachine, @"Software\WOW6432Node\Valve\Steam", "InstallPath"));
+
+        foreach (string steamRoot in new List<string>(roots))
+        {
+            string libraries = Path.Combine(steamRoot, "steamapps", "libraryfolders.vdf");
+            if (!File.Exists(libraries)) continue;
+            try
+            {
+                string content = File.ReadAllText(libraries);
+                foreach (Match match in Regex.Matches(content, "\\\"path\\\"\\s+\\\"(?<path>[^\\\"]+)\\\"", RegexOptions.IgnoreCase))
+                    AddSteamRoot(roots, match.Groups["path"].Value.Replace("\\\\", "\\"));
+                foreach (Match match in Regex.Matches(content, "\\\"\\d+\\\"\\s+\\\"(?<path>[^\\\"]+)\\\""))
+                    AddSteamRoot(roots, match.Groups["path"].Value.Replace("\\\\", "\\"));
+            }
+            catch { }
+        }
+        return roots;
+    }
+
+    private static void AddSteamRoot(HashSet<string> roots, string value)
+    {
+        if (String.IsNullOrWhiteSpace(value)) return;
+        try { roots.Add(Path.GetFullPath(value.Trim().TrimEnd(Path.DirectorySeparatorChar))); } catch { }
+    }
+
+    private static string ReadSteamRegistryPath(RegistryKey hive, string keyName, string valueName)
+    {
+        try
+        {
+            using (RegistryKey key = hive.OpenSubKey(keyName))
+                return key == null ? "" : Convert.ToString(key.GetValue(valueName)) ?? "";
+        }
+        catch { return ""; }
+    }
+
+    private static bool IsGameDirectory(string path)
+    {
+        return !String.IsNullOrWhiteSpace(path) && File.Exists(Path.Combine(path, "data.win"));
     }
 
     private void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs args)
@@ -98,14 +171,18 @@ internal sealed class OpenShiftLauncherForm : Form
         {
             string message = args.TryGetWebMessageAsString();
             string action = Match(message, "action");
+            if (activeProcess != null && !activeProcess.HasExited && action != "logs")
+            {
+                SendState("当前操作仍在进行，请稍候。", true);
+                return;
+            }
             if (action == "browse") Browse();
             else if (action == "saveKey") SaveApiKey(Match(message, "value"));
             else if (action == "install") Install(Match(message, "steam"), Match(message, "key"));
             else if (action == "start") StartGame();
             else if (action == "logs") OpenLogs();
             else if (action == "uninstall") Uninstall();
-            else if (action == "close") Close();
-            else if (action == "minimize") WindowState = FormWindowState.Minimized;
+            else if (action == "steamChanged") selectedSteamGame = Match(message, "value").Trim();
         }
         catch (Exception error) { SendState(error.Message, false); }
     }
@@ -119,12 +196,16 @@ internal sealed class OpenShiftLauncherForm : Form
     private void Browse()
     {
         using (var dialog = new FolderBrowserDialog { Description = "选择包含 data.win 的 VA-11 HALL-A Steam 游戏目录" })
-            if (dialog.ShowDialog(this) == DialogResult.OK) browser.CoreWebView2.ExecuteScriptAsync("window.setState({steam:" + Json(dialog.SelectedPath) + "});");
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+            {
+                selectedSteamGame = dialog.SelectedPath;
+                browser.CoreWebView2.ExecuteScriptAsync("window.setState({steam:" + Json(selectedSteamGame) + "});");
+            }
     }
 
     private void SaveApiKey(string value)
     {
-        if (String.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("API key cannot be empty.");
+        if (String.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("DeepSeek API Key 不能为空。");
         Directory.CreateDirectory(installDir);
         byte[] bytes = Encoding.UTF8.GetBytes(value.Trim());
         try { File.WriteAllBytes(Path.Combine(installDir, "api-key.dpapi"), ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser)); }
@@ -134,11 +215,12 @@ internal sealed class OpenShiftLauncherForm : Form
 
     private void Install(string steam, string key)
     {
-        if (!File.Exists(Path.Combine(steam, "data.win"))) throw new InvalidOperationException("请选择包含 data.win 的 VA-11 HALL-A Steam 游戏目录。");
+        selectedSteamGame = (steam ?? "").Trim();
+        if (!IsGameDirectory(selectedSteamGame)) throw new InvalidOperationException("请选择包含 data.win 的 VA-11 HALL-A Steam 游戏目录。");
         pendingKey = key;
         string log = Path.Combine(Path.GetTempPath(), "open-shift-install.log");
-        string marker = Path.Combine(Path.GetTempPath(), "open-shift-install-" + Guid.NewGuid().ToString("N") + ".complete");
-        StartPowerShell(Path.Combine(root, "packaging", "install-open-shift.ps1"), "-SteamGameDir " + Quote(steam) + " -InstallDir " + Quote(installDir) + " -GameCopyDir " + Quote(gameCopyDir) + " -CompletionMarker " + Quote(marker) + " -SkipCredential", log);
+        completionMarker = Path.Combine(Path.GetTempPath(), "open-shift-install-" + Guid.NewGuid().ToString("N") + ".complete");
+        StartPowerShell(Path.Combine(root, "packaging", "install-open-shift.ps1"), "-SteamGameDir " + Quote(selectedSteamGame) + " -InstallDir " + Quote(installDir) + " -GameCopyDir " + Quote(gameCopyDir) + " -CompletionMarker " + Quote(completionMarker) + " -SkipCredential", log);
         SendState("正在校验 Steam 文件并生成隔离副本...", true);
     }
 
@@ -152,32 +234,66 @@ internal sealed class OpenShiftLauncherForm : Form
 
     private void StartPowerShell(string script, string arguments, string log)
     {
+        if (activeProcess != null && !activeProcess.HasExited) throw new InvalidOperationException("当前操作仍在进行，请稍候。");
         activeMode = script.EndsWith("install-open-shift.ps1", StringComparison.OrdinalIgnoreCase) ? "install" : "launch";
         activeLog = log;
-        if (activeProcess != null && !activeProcess.HasExited) return;
+        launchConfirmed = false;
         string logDirectory = Path.GetDirectoryName(log);
         if (!String.IsNullOrEmpty(logDirectory)) Directory.CreateDirectory(logDirectory);
         activeLogWriter = new StreamWriter(log, false, new UTF8Encoding(false)) { AutoFlush = true };
         var info = new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(script) + " " + arguments)
         { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        activeProcess = Process.Start(info);
+        activeProcess = Process.Start(info) ?? throw new InvalidOperationException("无法启动 PowerShell 子进程。");
         activeProcess.EnableRaisingEvents = true;
         StreamWriter writer = activeLogWriter;
-        activeProcess.OutputDataReceived += (sender, args) => { if (args.Data != null) lock (writer) writer.WriteLine(args.Data); };
-        activeProcess.ErrorDataReceived += (sender, args) => { if (args.Data != null) lock (writer) writer.WriteLine(args.Data); };
+        activeProcess.OutputDataReceived += (sender, args) => HandleProcessOutput(writer, args.Data);
+        activeProcess.ErrorDataReceived += (sender, args) => HandleProcessOutput(writer, args.Data);
         activeProcess.BeginOutputReadLine();
         activeProcess.BeginErrorReadLine();
         activeProcess.Exited += (sender, args) => BeginInvoke((Action)ProcessFinished);
+    }
+
+    private void HandleProcessOutput(StreamWriter writer, string line)
+    {
+        if (line == null) return;
+        lock (writer) writer.WriteLine(line);
+        if (activeMode != "launch") return;
+        if (line.IndexOf("day is ready", StringComparison.OrdinalIgnoreCase) >= 0)
+            BeginInvoke((Action)(() => SendState("OPEN SHIFT 已准备完成，正在启动 VA-11 HALL-A...", true)));
+        if (line.IndexOf("Run_Start", StringComparison.OrdinalIgnoreCase) >= 0 || line.IndexOf("Entering main loop", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            launchConfirmed = true;
+            BeginInvoke((Action)(() => SendState("游戏已启动，可以关闭此窗口。", true)));
+        }
     }
 
     private void ProcessFinished()
     {
         activeProcess.WaitForExit();
         int code = activeProcess.ExitCode;
-        if (activeMode == "install" && !String.IsNullOrWhiteSpace(pendingKey)) { try { SaveApiKey(pendingKey); } catch { } pendingKey = ""; }
-        SendState(code == 0 ? (activeMode == "install" ? "安装完成。Steam 原版文件未被修改。" : "游戏会话已启动。") : "操作失败，请打开日志查看诊断信息。", false);
+        bool markerExists = activeMode == "install" && !String.IsNullOrWhiteSpace(completionMarker) && File.Exists(completionMarker);
+        bool installSucceeded = activeMode == "install" && (code == 0 || markerExists) && File.Exists(Path.Combine(installDir, "Start-Open-Shift.ps1"));
+        bool launchSucceeded = activeMode == "launch" && (code == 0 || launchConfirmed);
+        string result;
+        if (installSucceeded)
+        {
+            if (!String.IsNullOrWhiteSpace(pendingKey))
+            {
+                try { SaveApiKey(pendingKey); }
+                catch (Exception error) { result = "安装完成，但 API Key 保存失败：" + error.Message; goto Finished; }
+            }
+            result = "安装完成。Steam 原版文件未被修改。";
+        }
+        else if (launchSucceeded) result = "游戏会话已结束。";
+        else result = (activeMode == "install" ? "安装" : "启动") + "失败，请打开日志查看诊断信息。";
+Finished:
+        pendingKey = "";
+        if (markerExists) try { File.Delete(completionMarker); } catch { }
+        completionMarker = "";
         if (activeLogWriter != null) { activeLogWriter.Dispose(); activeLogWriter = null; }
         activeProcess.Dispose(); activeProcess = null;
+        activeMode = "";
+        SendState(result, false);
     }
 
     private void OpenLogs()
@@ -190,6 +306,13 @@ internal sealed class OpenShiftLauncherForm : Form
     {
         string script = Path.Combine(installDir, "packaging", "uninstall-open-shift.ps1");
         if (!File.Exists(script)) throw new InvalidOperationException("没有找到卸载脚本。");
+        DialogResult choice = MessageBox.Show(
+            "确定删除 OPEN SHIFT 的隔离副本吗？\r\n\r\n玩家存档会保留，Steam 原版 data.win 不会改变。",
+            "OPEN SHIFT",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2);
+        if (choice != DialogResult.Yes) return;
         Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(script) + " -InstallDir " + Quote(installDir) + " -WaitForProcessId " + Process.GetCurrentProcess().Id) { UseShellExecute = false, CreateNoWindow = true });
         Close();
     }

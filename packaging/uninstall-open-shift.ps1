@@ -29,7 +29,23 @@ if ($RemoveSaves) {
     $saveRoot = Join-Path $env:LOCALAPPDATA "VA_11_Hall_A\open-shift-paired-saves"
     if (Test-Path -LiteralPath $saveRoot) { Remove-Item -LiteralPath $saveRoot -Recurse -Force }
 }
-$shortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Open Shift.lnk"
-if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut -Force }
+$shortcut = if ($state.PSObject.Properties.Name -contains "shortcut_path") {
+    [string] $state.shortcut_path
+} else {
+    Join-Path ([Environment]::GetFolderPath("Desktop")) "Open Shift.lnk"
+}
+if (-not [string]::IsNullOrWhiteSpace($shortcut) -and (Test-Path -LiteralPath $shortcut -PathType Leaf)) {
+    $shell = New-Object -ComObject WScript.Shell
+    $link = $shell.CreateShortcut($shortcut)
+    $expectedGui = Join-Path $root "OpenShiftSetup.exe"
+    $expectedLauncher = Join-Path $root "Start-Open-Shift.ps1"
+    $ownsShortcut = ([string] $link.TargetPath) -ieq $expectedGui -or
+        (([IO.Path]::GetFileName([string] $link.TargetPath)) -ieq "powershell.exe" -and ([string] $link.Arguments).Contains($expectedLauncher))
+    if ($ownsShortcut) {
+        Remove-Item -LiteralPath $shortcut -Force
+    } else {
+        Write-Warning "Desktop shortcut was not owned by this installation and was preserved: $shortcut"
+    }
+}
 Remove-Item -LiteralPath $root -Recurse -Force
 Write-Host "Open Shift was uninstalled. The Steam installation was not modified."

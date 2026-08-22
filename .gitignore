@@ -9,3 +9,5 @@ build/
 dist/
 work/
 reference-local/
+/packaging/bin/
+/packaging/obj/

@@ -10,12 +10,19 @@
    不需要单独安装 Python 或从网络下载运行时。
 2. 双击 `OpenShiftSetup.exe`。这是基于 WebView2 的 Windows 图形界面，会自动寻找 Steam 游戏；如果未找到，在图形界面中
    选择包含 `data.win` 的 VA-11 HALL-A 目录。
-3. 在图形界面中输入 DeepSeek API Key，然后点击“Install / Repair”。Key 使用 Windows
+3. 在图形界面中输入 DeepSeek API Key，然后点击“安装 / 修复”。Key 使用 Windows
    DPAPI 加密，只能由当前 Windows 用户解密，不写入配置、日志、数据库或发布包。
-4. 安装完成后点击“Prepare and Start”，或以后双击桌面上的 `Open Shift.lnk`。程序会先
+4. 安装完成后点击“准备并启动”，或以后双击桌面上的 `Open Shift.lnk`。程序会先
    准备当天剧情，准备完成后自动启动隔离副本。
 5. 在游戏的 `Extra Chapters` 进入 `O.S.`，之后按原版流程从 Jill 房间开始营业。
-6. 卸载使用图形界面的“Uninstall”。默认保留玩家存档，并且始终不改动 Steam 原版。
+6. 卸载使用图形界面的“卸载”。确认框会明确提示保留玩家存档，并且始终不改动 Steam 原版。
+
+如果启动器提示缺少 Microsoft Edge WebView2 Runtime，请安装微软的 WebView2
+Evergreen Runtime 后重试。发行包自带 .NET 与 Python 运行组件，但 Windows 的
+WebView2 Runtime 仍由系统提供。
+
+从旧版升级时，直接用新发行包打开 `OpenShiftSetup.exe` 并点击“安装 / 修复”。
+安装器会比较补丁源指纹；只有当前隔离副本确实属于同一版本时才跳过重建。
 
 安装后的启动入口是桌面快捷方式，不需要 PowerShell 命令。发布包仍不包含原版
 资源或生成的 `data.win`；UTMT 只在用户本机首次安装时读取正版 `data.win` 并生成

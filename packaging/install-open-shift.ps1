@@ -19,13 +19,48 @@ function Write-Utf8NoBom([string] $Path, [string] $Content) {
     [IO.File]::WriteAllText($Path, $Content, (New-Object Text.UTF8Encoding($false)))
 }
 
+function Get-Sha256Hex([string] $Path) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    try { return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
+function Add-SteamRoot([Collections.Generic.HashSet[string]] $Roots, [string] $Candidate) {
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return }
+    try { [void] $Roots.Add([IO.Path]::GetFullPath($Candidate.Trim().TrimEnd('\'))) } catch { }
+}
+
+function Get-SteamRoots {
+    $roots = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    Add-SteamRoot $roots (Join-Path ${env:ProgramFiles(x86)} "Steam")
+    Add-SteamRoot $roots (Join-Path $env:ProgramFiles "Steam")
+    Add-SteamRoot $roots "C:\Steam"
+    foreach ($registryPath in @("HKCU:\Software\Valve\Steam", "HKLM:\Software\WOW6432Node\Valve\Steam")) {
+        try {
+            $steam = Get-ItemProperty -LiteralPath $registryPath -ErrorAction Stop
+            Add-SteamRoot $roots ([string] $(if ($steam.SteamPath) { $steam.SteamPath } else { $steam.InstallPath }))
+        } catch { }
+    }
+    foreach ($steamRoot in @($roots)) {
+        $vdf = Join-Path $steamRoot "steamapps\libraryfolders.vdf"
+        if (-not (Test-Path -LiteralPath $vdf -PathType Leaf)) { continue }
+        try {
+            $content = Get-Content -LiteralPath $vdf -Raw
+            foreach ($match in [regex]::Matches($content, '"path"\s+"([^"]+)"')) {
+                Add-SteamRoot $roots $match.Groups[1].Value.Replace('\\', '\')
+            }
+            foreach ($match in [regex]::Matches($content, '"\d+"\s+"([^"]+)"')) {
+                Add-SteamRoot $roots $match.Groups[1].Value.Replace('\\', '\')
+            }
+        } catch { }
+    }
+    return @($roots)
+}
+
 function Find-SteamGameDir {
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles(x86)} "Steam\steamapps\common\VA-11 HALL-A"),
-        (Join-Path $env:ProgramFiles "Steam\steamapps\common\VA-11 HALL-A"),
-        "C:\Steam\steamapps\common\VA-11 HALL-A"
-    ) | Where-Object { $_ }
-    foreach ($candidate in $candidates) {
+    foreach ($steamRoot in (Get-SteamRoots)) {
+        $candidate = Join-Path $steamRoot "steamapps\common\VA-11 HALL-A"
         if (Test-Path -LiteralPath (Join-Path $candidate "data.win") -PathType Leaf) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
@@ -49,17 +84,25 @@ function Find-UtmtCli {
 }
 
 function Find-SteamRoot {
-    $candidates = @(
-        (Join-Path ${env:ProgramFiles(x86)} "Steam"),
-        (Join-Path $env:ProgramFiles "Steam"),
-        (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SteamGameDir)))
-    ) | Where-Object { $_ }
+    $candidates = @(Get-SteamRoots) + @((Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $SteamGameDir))))
     foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath (Join-Path $candidate "Steam2.dll") -PathType Leaf) {
+        if ((Test-Path -LiteralPath (Join-Path $candidate "Steam2.dll") -PathType Leaf) -or
+            (Test-Path -LiteralPath (Join-Path $candidate "steam.exe") -PathType Leaf)) {
             return [IO.Path]::GetFullPath($candidate)
         }
     }
     throw "Steam root containing Steam2.dll was not found"
+}
+
+function Get-PatchFingerprint([string] $Root) {
+    $files = @(
+        (Join-Path $Root "game-patch\manifest.json"),
+        (Join-Path $Root "game-patch\apply_mod.csx")
+    ) + @(Get-ChildItem -LiteralPath (Join-Path $Root "game-patch\gml") -Filter "*.gml" -File | Select-Object -ExpandProperty FullName)
+    $hashText = (($files | Sort-Object | ForEach-Object { Get-Sha256Hex $_ }) -join "`n")
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($hashText)))).Replace("-", "").ToLowerInvariant() }
+    finally { $sha.Dispose() }
 }
 
 if (-not $SteamGameDir) { $SteamGameDir = Find-SteamGameDir }
@@ -83,6 +126,12 @@ if (Test-Path -LiteralPath $bundledRuntime -PathType Leaf) {
     $runtimeIsPython = $true
 }
 $steamRoot = Find-SteamRoot
+$patchFingerprint = Get-PatchFingerprint $packageRoot
+$packageVersion = "development"
+$packageManifest = Join-Path $packageRoot "PACKAGE_MANIFEST.json"
+if (Test-Path -LiteralPath $packageManifest -PathType Leaf) {
+    try { $packageVersion = [string] ((Get-Content -LiteralPath $packageManifest -Raw | ConvertFrom-Json).package_version) } catch { }
+}
 
 $installRoot = [IO.Path]::GetFullPath($InstallDir)
 $copyRoot = [IO.Path]::GetFullPath($GameCopyDir)
@@ -121,6 +170,9 @@ if (-not $sameRoot) {
     if (Test-Path -LiteralPath (Join-Path $packageRoot "pyproject.toml")) {
         Copy-Item -LiteralPath (Join-Path $packageRoot "pyproject.toml") -Destination $installRoot -Force
     }
+    if (Test-Path -LiteralPath $packageManifest -PathType Leaf) {
+        Copy-Item -LiteralPath $packageManifest -Destination $installRoot -Force
+    }
 }
 if (-not $runtimeIsPython) {
     $runtimePath = Join-Path $installRoot "OpenShift.exe"
@@ -139,8 +191,12 @@ $alreadyInstalled = $false
 if ((Test-Path -LiteralPath $patchRecord -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $copyRoot "data.win") -PathType Leaf)) {
     try {
         $priorPatch = Get-Content -LiteralPath $patchRecord -Raw | ConvertFrom-Json
-        $currentHash = (Get-FileHash -LiteralPath (Join-Path $copyRoot "data.win") -Algorithm SHA256).Hash.ToLowerInvariant()
-        $alreadyInstalled = $currentHash -eq ([string] $priorPatch.installed_sha256).ToLowerInvariant()
+        $priorStatePath = Join-Path $installRoot "install.json"
+        $priorState = if (Test-Path -LiteralPath $priorStatePath -PathType Leaf) { Get-Content -LiteralPath $priorStatePath -Raw | ConvertFrom-Json } else { $null }
+        $currentHash = Get-Sha256Hex (Join-Path $copyRoot "data.win")
+        $alreadyInstalled = $currentHash -eq ([string] $priorPatch.installed_sha256).ToLowerInvariant() -and
+            $null -ne $priorState -and
+            ([string] $priorState.patch_fingerprint).ToLowerInvariant() -eq $patchFingerprint
     } catch {
         $alreadyInstalled = $false
     }
@@ -180,8 +236,11 @@ prefetch_days = 1
     Write-Utf8NoBom $config $configText
 }
 
+$shortcutPath = if ($SkipShortcut) { "" } else { Join-Path ([Environment]::GetFolderPath("Desktop")) "Open Shift.lnk" }
 $state = [ordered]@{
     schema_version = 1
+    package_version = $packageVersion
+    patch_fingerprint = $patchFingerprint
     install_dir = $installRoot
     game_copy_dir = $copyRoot
     steam_game_dir = [IO.Path]::GetFullPath($SteamGameDir)
@@ -191,6 +250,7 @@ $state = [ordered]@{
     runtime = $runtimePath
     runtime_is_python = $runtimeIsPython
     bridge_command = if ($runtimeIsPython) { @($runtimePath, "-m", "open_shift", "serve-bridge") } else { @($runtimePath, "serve-bridge") }
+    shortcut_path = $shortcutPath
     installed_at_utc = [DateTime]::UtcNow.ToString("o")
 }
 Write-Utf8NoBom (Join-Path $installRoot "install.json") ($state | ConvertTo-Json)
@@ -199,9 +259,8 @@ if (-not $SkipCredential) {
     & (Join-Path $installRoot "packaging\configure-api-key.ps1") -InstallDir $installRoot
 }
 
-if (-not $SkipShortcut) {
-    $launcher = Join-Path $installRoot "Start-Open-Shift.ps1"
-    $launcherText = @"
+$launcher = Join-Path $installRoot "Start-Open-Shift.ps1"
+$launcherText = @"
 `$ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Security
 `$root = Split-Path -Parent `$MyInvocation.MyCommand.Path
@@ -215,9 +274,9 @@ try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$
 if (`$state.runtime_is_python) { `$env:PYTHONPATH = Join-Path `$root "src"; & `$state.runtime -m open_shift @arguments } else { & `$state.runtime @arguments }
 exit `$LASTEXITCODE
 "@
-    Write-Utf8NoBom $launcher $launcherText
-    $desktop = [Environment]::GetFolderPath("Desktop")
-    $shortcut = Join-Path $desktop "Open Shift.lnk"
+Write-Utf8NoBom $launcher $launcherText
+if (-not $SkipShortcut) {
+    $shortcut = $shortcutPath
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($shortcut)
     $installedGui = Join-Path $installRoot "OpenShiftSetup.exe"
