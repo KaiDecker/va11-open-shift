@@ -87,167 +87,198 @@ function Start-HiddenPowerShell([string] $script, [string[]] $arguments, [string
 }
 
 $form = New-Object Windows.Forms.Form
-$form.Text = "OPEN SHIFT · 安装器"
-$form.ClientSize = New-Object Drawing.Size(720, 535)
+$form.Text = "OPEN SHIFT - Launcher"
+$form.ClientSize = New-Object Drawing.Size(540, 790)
 $form.FormBorderStyle = "FixedSingle"
 $form.MaximizeBox = $false
 $form.StartPosition = "CenterScreen"
-$form.Font = New-Object Drawing.Font("Segoe UI", 10)
-$form.BackColor = [Drawing.Color]::FromArgb(8, 12, 29)
+$form.Font = New-Object Drawing.Font("Segoe UI", 9.5)
+$form.BackColor = [Drawing.Color]::FromArgb(239, 241, 247)
 $iconPath = Join-Path $packageRoot "OpenShift.ico"
 if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
     $form.Icon = New-Object Drawing.Icon($iconPath)
 }
 
 $headerPanel = New-Object Windows.Forms.Panel
-$headerPanel.BackColor = [Drawing.Color]::FromArgb(14, 22, 43)
-$headerPanel.SetBounds(0, 0, 720, 94)
+$headerPanel.BackColor = [Drawing.Color]::FromArgb(248, 249, 252)
+$headerPanel.BorderStyle = "None"
+$headerPanel.SetBounds(16, 16, 508, 84)
 $form.Controls.Add($headerPanel)
 
 $headerRule = New-Object Windows.Forms.Panel
-$headerRule.BackColor = [Drawing.Color]::FromArgb(68, 202, 224)
-$headerRule.SetBounds(24, 86, 150, 3)
+$headerRule.BackColor = [Drawing.Color]::FromArgb(42, 194, 128)
+$headerRule.SetBounds(38, 92, 112, 3)
 $form.Controls.Add($headerRule)
+
+$brandIcon = New-Object Windows.Forms.PictureBox
+$brandIcon.SizeMode = "Zoom"
+$brandIcon.SetBounds(31, 30, 54, 54)
+if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
+    $brandIcon.Image = (New-Object Drawing.Icon($iconPath)).ToBitmap()
+}
+$form.Controls.Add($brandIcon)
 
 $title = New-Object Windows.Forms.Label
 $title.Text = "OPEN SHIFT"
-$title.Font = New-Object Drawing.Font("Segoe UI", 22, [Drawing.FontStyle]::Bold)
-$title.ForeColor = [Drawing.Color]::FromArgb(244, 248, 255)
-$title.SetBounds(24, 20, 300, 42)
+$title.Font = New-Object Drawing.Font("Segoe UI", 20, [Drawing.FontStyle]::Bold)
+$title.ForeColor = [Drawing.Color]::FromArgb(37, 43, 55)
+$title.SetBounds(98, 27, 285, 36)
 $form.Controls.Add($title)
 
 $subtitle = New-Object Windows.Forms.Label
-$subtitle.Text = "VA-11 HALL-A 结局之后的安全安装与启动工具"
-$subtitle.ForeColor = [Drawing.Color]::FromArgb(148, 174, 201)
-$subtitle.SetBounds(28, 63, 520, 26)
+$subtitle.Text = "VA-11 HALL-A - Local world after the ending"
+$subtitle.ForeColor = [Drawing.Color]::FromArgb(114, 124, 143)
+$subtitle.SetBounds(100, 60, 330, 22)
 $form.Controls.Add($subtitle)
 
+$steamBadge = New-Object Windows.Forms.Label
+$steamBadge.Text = "●  STEAM"
+$steamBadge.Font = New-Object Drawing.Font("Segoe UI", 9, [Drawing.FontStyle]::Bold)
+$steamBadge.ForeColor = [Drawing.Color]::FromArgb(35, 176, 104)
+$steamBadge.BackColor = [Drawing.Color]::FromArgb(229, 247, 237)
+$steamBadge.TextAlign = "MiddleCenter"
+$steamBadge.SetBounds(405, 30, 100, 30)
+$form.Controls.Add($steamBadge)
+
+$version = New-Object Windows.Forms.Label
+$version.Text = "PLAYER 0.14"
+$version.Font = New-Object Drawing.Font("Consolas", 8)
+$version.ForeColor = [Drawing.Color]::FromArgb(121, 130, 149)
+$version.TextAlign = "MiddleRight"
+$version.SetBounds(380, 62, 125, 20)
+$form.Controls.Add($version)
+
 $contentPanel = New-Object Windows.Forms.Panel
-$contentPanel.BackColor = [Drawing.Color]::FromArgb(14, 22, 43)
-$contentPanel.BorderStyle = "FixedSingle"
-$contentPanel.SetBounds(18, 104, 684, 292)
+$contentPanel.BackColor = [Drawing.Color]::FromArgb(250, 250, 252)
+$contentPanel.BorderStyle = "None"
+$contentPanel.SetBounds(18, 116, 504, 410)
 $form.Controls.Add($contentPanel)
 
 $steamLabel = New-Object Windows.Forms.Label
-$steamLabel.Text = "Steam 游戏目录"
-$steamLabel.ForeColor = [Drawing.Color]::FromArgb(219, 231, 246)
-$steamLabel.SetBounds(34, 113, 180, 24)
+$steamLabel.Text = "Steam game directory"
+$steamLabel.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$steamLabel.ForeColor = [Drawing.Color]::FromArgb(57, 62, 73)
+$steamLabel.SetBounds(36, 136, 250, 24)
 $form.Controls.Add($steamLabel)
 
 $steamBox = New-Object Windows.Forms.TextBox
 $steamBox.Text = Find-SteamGame
-$steamBox.BackColor = [Drawing.Color]::FromArgb(8, 14, 29)
-$steamBox.ForeColor = [Drawing.Color]::FromArgb(241, 246, 255)
+$steamBox.BackColor = [Drawing.Color]::FromArgb(235, 237, 243)
+$steamBox.ForeColor = [Drawing.Color]::FromArgb(45, 51, 64)
 $steamBox.BorderStyle = "FixedSingle"
-$steamBox.SetBounds(34, 140, 549, 30)
+$steamBox.SetBounds(36, 164, 400, 34)
 $form.Controls.Add($steamBox)
 
 $browseButton = New-Object Windows.Forms.Button
-$browseButton.Text = "浏览..."
-$browseButton.SetBounds(590, 138, 96, 34)
+$browseButton.Text = "Browse"
+$browseButton.SetBounds(448, 162, 74, 38)
 $form.Controls.Add($browseButton)
 
 $copyLabel = New-Object Windows.Forms.Label
-$copyLabel.Text = "隔离游戏副本：" + $gameCopyDir
-$copyLabel.ForeColor = [Drawing.Color]::FromArgb(128, 157, 185)
-$copyLabel.SetBounds(34, 177, 650, 24)
+$copyLabel.Text = "Isolated copy  ·  " + $gameCopyDir
+$copyLabel.Font = New-Object Drawing.Font("Consolas", 8)
+$copyLabel.ForeColor = [Drawing.Color]::FromArgb(117, 124, 141)
+$copyLabel.SetBounds(38, 205, 480, 24)
 $form.Controls.Add($copyLabel)
 
 $keyLabel = New-Object Windows.Forms.Label
 $keyLabel.Text = "DeepSeek API Key"
-$keyLabel.ForeColor = [Drawing.Color]::FromArgb(219, 231, 246)
-$keyLabel.SetBounds(34, 216, 180, 24)
+$keyLabel.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$keyLabel.ForeColor = [Drawing.Color]::FromArgb(57, 62, 73)
+$keyLabel.SetBounds(36, 246, 250, 24)
 $form.Controls.Add($keyLabel)
 
 $keyBox = New-Object Windows.Forms.TextBox
 $keyBox.UseSystemPasswordChar = $true
-$keyBox.BackColor = [Drawing.Color]::FromArgb(8, 14, 29)
-$keyBox.ForeColor = [Drawing.Color]::FromArgb(241, 246, 255)
+$keyBox.BackColor = [Drawing.Color]::FromArgb(235, 237, 243)
+$keyBox.ForeColor = [Drawing.Color]::FromArgb(45, 51, 64)
 $keyBox.BorderStyle = "FixedSingle"
-$keyBox.SetBounds(34, 243, 549, 30)
+$keyBox.SetBounds(36, 274, 400, 34)
 $form.Controls.Add($keyBox)
 
 $saveKeyButton = New-Object Windows.Forms.Button
-$saveKeyButton.Text = "保存 Key"
-$saveKeyButton.SetBounds(590, 241, 96, 34)
+$saveKeyButton.Text = "Save"
+$saveKeyButton.SetBounds(448, 272, 74, 38)
 $form.Controls.Add($saveKeyButton)
 
 $keyHint = New-Object Windows.Forms.Label
-$keyHint.Text = "使用当前用户的 Windows DPAPI 加密，不写入 TOML、日志或存档。"
-$keyHint.ForeColor = [Drawing.Color]::FromArgb(128, 157, 185)
-$keyHint.SetBounds(34, 280, 650, 24)
+$keyHint.Text = "Encrypted with Windows DPAPI; never written to TOML, logs, or saves."
+$keyHint.Font = New-Object Drawing.Font("Segoe UI", 8.5)
+$keyHint.ForeColor = [Drawing.Color]::FromArgb(117, 124, 141)
+$keyHint.SetBounds(38, 315, 480, 22)
 $form.Controls.Add($keyHint)
 
 $safetyPanel = New-Object Windows.Forms.Panel
-$safetyPanel.BackColor = [Drawing.Color]::FromArgb(20, 31, 56)
-$safetyPanel.BorderStyle = "FixedSingle"
-$safetyPanel.SetBounds(34, 316, 652, 66)
+$safetyPanel.BackColor = [Drawing.Color]::FromArgb(239, 242, 248)
+$safetyPanel.BorderStyle = "None"
+$safetyPanel.SetBounds(36, 350, 486, 150)
 $form.Controls.Add($safetyPanel)
 
 $safety = New-Object Windows.Forms.Label
 $safety.Text = "Steam 原版 data.win：只读输入`r`n补丁 data.win：仅写入隔离副本`r`n世界数据库和配对存档：%LOCALAPPDATA%\VA_11_Hall_A"
-$safety.ForeColor = [Drawing.Color]::FromArgb(177, 202, 226)
-$safety.SetBounds(12, 7, 620, 54)
+$safety.Font = New-Object Drawing.Font("Consolas", 8.5)
+$safety.ForeColor = [Drawing.Color]::FromArgb(73, 83, 103)
+$safety.SetBounds(14, 12, 460, 130)
 $safetyPanel.Controls.Add($safety)
 
 $actionPanel = New-Object Windows.Forms.Panel
-$actionPanel.BackColor = [Drawing.Color]::FromArgb(14, 22, 43)
-$actionPanel.SetBounds(18, 406, 684, 82)
+$actionPanel.BackColor = [Drawing.Color]::FromArgb(250, 250, 252)
+$actionPanel.SetBounds(18, 544, 504, 132)
 $form.Controls.Add($actionPanel)
 
 $installButton = New-Object Windows.Forms.Button
 $installButton.Text = "安装 / 修复"
-$installButton.SetBounds(34, 418, 140, 40)
+$installButton.SetBounds(36, 558, 230, 44)
 $form.Controls.Add($installButton)
 
 $startButton = New-Object Windows.Forms.Button
 $startButton.Text = "准备并启动"
-$startButton.SetBounds(184, 418, 160, 40)
+$startButton.SetBounds(280, 558, 242, 44)
 $startButton.Enabled = Test-Path -LiteralPath (Join-Path $installDir "Start-Open-Shift.ps1")
 $form.Controls.Add($startButton)
 
 $logButton = New-Object Windows.Forms.Button
 $logButton.Text = "打开日志"
-$logButton.SetBounds(354, 418, 105, 40)
+$logButton.SetBounds(36, 620, 145, 36)
 $form.Controls.Add($logButton)
 
 $uninstallButton = New-Object Windows.Forms.Button
 $uninstallButton.Text = "卸载"
-$uninstallButton.SetBounds(581, 418, 105, 40)
+$uninstallButton.SetBounds(196, 620, 145, 36)
 $form.Controls.Add($uninstallButton)
 
 $status = New-Object Windows.Forms.Label
 $status.Text = "就绪。Steam 原版文件保持只读。"
-$status.ForeColor = [Drawing.Color]::FromArgb(104, 224, 232)
-$status.SetBounds(28, 494, 663, 26)
+$status.ForeColor = [Drawing.Color]::FromArgb(31, 174, 177)
+$status.SetBounds(28, 702, 490, 24)
 $form.Controls.Add($status)
 
 $progress = New-Object Windows.Forms.ProgressBar
 $progress.Style = "Marquee"
 $progress.MarqueeAnimationSpeed = 0
-$progress.SetBounds(28, 522, 663, 8)
+$progress.SetBounds(28, 742, 490, 8)
 $form.Controls.Add($progress)
 
 function Set-ButtonStyle([Windows.Forms.Button] $button, [Drawing.Color] $background, [Drawing.Color] $foreground) {
     $button.FlatStyle = "Flat"
     $button.FlatAppearance.BorderSize = 1
-    $button.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(65, 91, 124)
+    $button.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(209, 216, 229)
     $button.BackColor = $background
     $button.ForeColor = $foreground
     $button.Cursor = [Windows.Forms.Cursors]::Hand
 }
 
-Set-ButtonStyle $browseButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(215, 232, 247))
-Set-ButtonStyle $saveKeyButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(215, 232, 247))
-Set-ButtonStyle $installButton ([Drawing.Color]::FromArgb(35, 146, 166)) ([Drawing.Color]::White)
-Set-ButtonStyle $startButton ([Drawing.Color]::FromArgb(226, 61, 139)) ([Drawing.Color]::White)
-Set-ButtonStyle $logButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(215, 232, 247))
-Set-ButtonStyle $uninstallButton ([Drawing.Color]::FromArgb(74, 34, 63)) ([Drawing.Color]::FromArgb(255, 194, 215))
+Set-ButtonStyle $browseButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(61, 77, 101))
+Set-ButtonStyle $saveKeyButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(61, 77, 101))
+Set-ButtonStyle $installButton ([Drawing.Color]::FromArgb(43, 166, 185)) ([Drawing.Color]::White)
+Set-ButtonStyle $startButton ([Drawing.Color]::FromArgb(229, 53, 137)) ([Drawing.Color]::White)
+Set-ButtonStyle $logButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(61, 77, 101))
+Set-ButtonStyle $uninstallButton ([Drawing.Color]::FromArgb(246, 228, 239)) ([Drawing.Color]::FromArgb(130, 61, 104))
 
-$headerPanel.Region = New-RoundedRegion $headerPanel.Width $headerPanel.Height 18
-$contentPanel.Region = New-RoundedRegion $contentPanel.Width $contentPanel.Height 16
-$actionPanel.Region = New-RoundedRegion $actionPanel.Width $actionPanel.Height 16
-$safetyPanel.Region = New-RoundedRegion $safetyPanel.Width $safetyPanel.Height 12
+$headerPanel.Region = New-RoundedRegion $headerPanel.Width $headerPanel.Height 26
+$contentPanel.Region = New-RoundedRegion $contentPanel.Width $contentPanel.Height 22
+$actionPanel.Region = New-RoundedRegion $actionPanel.Width $actionPanel.Height 22
+$safetyPanel.Region = New-RoundedRegion $safetyPanel.Width $safetyPanel.Height 16
 foreach ($field in @($steamBox, $keyBox)) {
     $field.BorderStyle = "None"
     $field.Region = New-RoundedRegion $field.Width $field.Height 8
@@ -262,21 +293,22 @@ function Set-ButtonHover([Windows.Forms.Button] $button, [Drawing.Color] $baseCo
     $button.Add_MouseLeave({ param($sender, $eventArgs); $sender.BackColor = $sender.Tag.Base })
 }
 
-Set-ButtonHover $browseButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(35, 61, 96))
-Set-ButtonHover $saveKeyButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(35, 61, 96))
-Set-ButtonHover $installButton ([Drawing.Color]::FromArgb(35, 146, 166)) ([Drawing.Color]::FromArgb(53, 178, 193))
-Set-ButtonHover $startButton ([Drawing.Color]::FromArgb(226, 61, 139)) ([Drawing.Color]::FromArgb(244, 84, 159))
-Set-ButtonHover $logButton ([Drawing.Color]::FromArgb(24, 43, 72)) ([Drawing.Color]::FromArgb(35, 61, 96))
-Set-ButtonHover $uninstallButton ([Drawing.Color]::FromArgb(74, 34, 63)) ([Drawing.Color]::FromArgb(105, 43, 83))
+Set-ButtonHover $browseButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(215, 229, 246))
+Set-ButtonHover $saveKeyButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(215, 229, 246))
+Set-ButtonHover $installButton ([Drawing.Color]::FromArgb(43, 166, 185)) ([Drawing.Color]::FromArgb(56, 188, 196))
+Set-ButtonHover $startButton ([Drawing.Color]::FromArgb(229, 53, 137)) ([Drawing.Color]::FromArgb(244, 77, 155))
+Set-ButtonHover $logButton ([Drawing.Color]::FromArgb(231, 238, 249)) ([Drawing.Color]::FromArgb(215, 229, 246))
+Set-ButtonHover $uninstallButton ([Drawing.Color]::FromArgb(246, 228, 239)) ([Drawing.Color]::FromArgb(238, 207, 225))
 
 # Keep decorative panels behind the interactive controls in WinForms' z-order.
 $headerPanel.SendToBack()
 $headerRule.SendToBack()
 $contentPanel.SendToBack()
 $actionPanel.SendToBack()
+$brandIcon.BringToFront()
 $title.BringToFront()
 $subtitle.BringToFront()
-foreach ($control in @($steamLabel, $steamBox, $browseButton, $copyLabel, $keyLabel, $keyBox, $saveKeyButton, $keyHint, $safetyPanel, $installButton, $startButton, $logButton, $uninstallButton, $status, $progress)) {
+foreach ($control in @($steamBadge, $version, $steamLabel, $steamBox, $browseButton, $copyLabel, $keyLabel, $keyBox, $saveKeyButton, $keyHint, $safetyPanel, $installButton, $startButton, $logButton, $uninstallButton, $status, $progress)) {
     $control.BringToFront()
 }
 
