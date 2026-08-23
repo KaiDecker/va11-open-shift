@@ -34,8 +34,12 @@ for maintainer and acceptance workflows.
 For a strict real-DeepSeek acceptance run, use
 `launch-deepseek-acceptance.ps1`. It reads the API key with hidden input,
 probes DeepSeek, creates a new timestamped database, and generates the first
-day before opening the copied game. Provider failures stop the launch instead
-of silently switching to local dialogue.
+day before opening the copied game. The acceptance script intentionally keeps
+provider failures strict so a real API problem is visible during verification.
+The normal player launcher keeps deterministic local fallbacks enabled: if a
+dialogue or drink reaction request fails after the local rules have evaluated
+the action, the order result, income and story cursor still commit and the
+game receives a local reaction scene.
 
 Players can switch the DeepSeek generation mode in the GUI after installation:
 快速 keeps ordinary dialogue fast, 平衡 enables Thinking only for world
@@ -46,7 +50,7 @@ and drink branch the player actually reaches. The default remains `disabled`
 because thinking increases generation time and token use.
 Installed launchers also write secret-free JSONL timing records to
 `timing.log`, including each provider request, thinking mode, elapsed
-milliseconds, and the total daily graph preparation time. This makes it
+milliseconds, fallback events, and the total daily graph preparation time. This makes it
 possible to compare thinking with non-thinking before changing the generation
 strategy.
 

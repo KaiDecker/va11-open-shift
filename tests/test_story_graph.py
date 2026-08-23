@@ -506,6 +506,94 @@ class DailyStoryGraphTests(unittest.TestCase):
                 self.assertTrue(unselected.isdisjoint(remembered))
             service.wait_for_background_generation()
 
+    def test_provider_failure_uses_local_reaction_and_commits_order(self) -> None:
+        class FailingReactionProvider:
+            @staticmethod
+            def decide(context):
+                return MockProvider().decide(context)
+
+            @staticmethod
+            def generate_dialogue_line(context):
+                raise BYOKTransportError("synthetic reaction transport failure")
+
+            @staticmethod
+            def generate_player_dialogue_line(context):
+                raise BYOKTransportError("synthetic reaction transport failure")
+
+        providers = [MockProvider(), MockProvider(), FailingReactionProvider()]
+
+        def provider_factory():
+            return providers.pop(0) if providers else FailingReactionProvider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=provider_factory,
+                advance_minutes=0,
+                daily_story_mode=True,
+                allow_provider_fallback=True,
+            )
+            graph = service.prepare_daily_story_graph(1)
+            self.assertEqual(graph.day_index, 1)
+            opening = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": "fallback-open-1",
+                    "client_session_id": "fallback-session-0001",
+                }
+            )
+            service.ack_scene(
+                self._ack(opening.scene_id, "fallback-ack-1", "continued_in_bar")
+            )
+            doorbell = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": "fallback-open-2",
+                    "client_session_id": "fallback-session-0001",
+                }
+            )
+            service.ack_scene(
+                self._ack(doorbell.scene_id, "fallback-ack-2", "continued_in_bar")
+            )
+            arrival = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": "fallback-open-3",
+                    "client_session_id": "fallback-session-0001",
+                }
+            )
+            assert arrival.order is not None
+            service.ack_scene(
+                self._ack(arrival.scene_id, "fallback-ack-3", "order_started")
+            )
+            request = {
+                "protocol_version": 1,
+                "request_id": "fallback-order-1",
+                "client_session_id": "fallback-session-0001",
+                "scene_id": arrival.scene_id,
+                "order_id": arrival.order.order_id,
+                "drink": self._exact_drink(arrival.order.requested_drink_id),
+            }
+            resolution = service.resolve_order(request)
+            replay = service.resolve_order(request)
+            self.assertEqual(resolution, replay)
+            self.assertEqual(resolution.result.category, ServiceCategory.EXACT)
+            self.assertTrue(resolution.scene.scene_id.startswith("day_1_customer_1_exact"))
+            with WorldStore(db_path) as store:
+                commits = store.list_story_branch_commits()
+                self.assertEqual(len(commits), 1)
+                fallback_events = [
+                    event
+                    for event in store.list_events()
+                    if event["event_type"] == "dialogue_provider_fallback"
+                ]
+                self.assertEqual(len(fallback_events), 1)
+                self.assertEqual(
+                    fallback_events[0]["payload"]["error_type"],
+                    "BYOKTransportError",
+                )
+
     def test_sqlite_reopen_restores_valid_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"

@@ -280,7 +280,7 @@ if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configur
 `$protected = [IO.File]::ReadAllBytes(`$secretFile)
 `$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }
-`$arguments = @("launch", "--config", `$state.config, "--db", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift.sqlite3"), "--runtime-file", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift-runtime.ini"), "--game-cwd", `$state.game_copy_dir, "--game-command", "VA-11 Hall A.exe", "--steam-root", `$state.steam_root, "--steam-app-id", "447530", "--provider-required", "--prepare-before-game", "--bridge-command") + @(`$state.bridge_command)
+`$arguments = @("launch", "--config", `$state.config, "--db", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift.sqlite3"), "--runtime-file", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift-runtime.ini"), "--game-cwd", `$state.game_copy_dir, "--game-command", "VA-11 Hall A.exe", "--steam-root", `$state.steam_root, "--steam-app-id", "447530", "--prepare-before-game", "--bridge-command") + @(`$state.bridge_command)
 if (`$state.runtime_is_python) { `$env:PYTHONPATH = Join-Path `$root "src"; & `$state.runtime -m open_shift @arguments } else { & `$state.runtime @arguments }
 exit `$LASTEXITCODE
 "@

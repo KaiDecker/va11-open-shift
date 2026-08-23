@@ -60,6 +60,7 @@ _NON_NARRATIVE_EVENTS = {
     "action_rejected",
     "agent_dialogue_completed",
     "dialogue_provider_error",
+    "dialogue_provider_fallback",
     "drink_served",
     "player_scene_ack",
     "provider_error",
@@ -1650,6 +1651,24 @@ class WorldSceneService:
                 if not self.allow_provider_fallback:
                     raise
                 self._report_error("selected result provider fallback", exc)
+                emit_timing(
+                    "order_reaction_fallback",
+                    order_id=order.order_id,
+                    service_event_id=service_event_id,
+                    result_category=result.category.value,
+                    error_type=type(exc).__name__,
+                )
+                store.append_event(
+                    store.current_tick,
+                    "dialogue_provider_fallback",
+                    order.customer_id,
+                    payload={
+                        "error_type": type(exc).__name__,
+                        "source_event_id": service_event_id,
+                        "order_id": order.order_id,
+                        "result_category": result.category.value,
+                    },
+                )
                 reaction_scene = result_node.scene
             store.record_story_branch_commit(
                 day_index=day_index,
