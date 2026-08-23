@@ -236,13 +236,13 @@ internal sealed class OpenShiftLauncherForm : Form
                     continue;
                 }
                 if (!inProvider) continue;
-                Match match = Regex.Match(line, "^\\s*thinking\\s*=\\s*\\\"(?<mode>default|enabled|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase);
+                Match match = Regex.Match(line, "^\\s*thinking\\s*=\\s*\\\"(?<mode>default|enabled|balanced|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase);
                 if (!match.Success) continue;
                 found = match.Groups["mode"].Value.ToLowerInvariant();
                 matches++;
             }
             available = matches == 1;
-            return available && found == "enabled" ? "enabled" : "disabled";
+            return available ? (found == "default" ? "disabled" : found) : "disabled";
         }
         catch { return "disabled"; }
     }
@@ -250,7 +250,7 @@ internal sealed class OpenShiftLauncherForm : Form
     private void SetThinkingMode(string value)
     {
         string mode = (value ?? "").Trim().ToLowerInvariant();
-        if (mode != "enabled" && mode != "disabled")
+        if (mode != "enabled" && mode != "balanced" && mode != "disabled")
             throw new InvalidOperationException("DeepSeek Thinking 模式无效。");
         if (!File.Exists(runtimeConfigPath))
             throw new InvalidOperationException("请先安装 OPEN SHIFT，再切换 DeepSeek Thinking。");
@@ -269,7 +269,7 @@ internal sealed class OpenShiftLauncherForm : Form
             if (!inProvider || !Regex.IsMatch(lines[index], "^\\s*thinking\\s*=")) continue;
             if (thinkingLine >= 0)
                 throw new InvalidOperationException("运行配置中存在重复的 thinking 设置。");
-            if (!Regex.IsMatch(lines[index], "^\\s*thinking\\s*=\\s*\\\"(?:default|enabled|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase))
+            if (!Regex.IsMatch(lines[index], "^\\s*thinking\\s*=\\s*\\\"(?:default|enabled|balanced|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase))
                 throw new InvalidOperationException("运行配置中的 thinking 设置无法安全修改。");
             thinkingLine = index;
         }
@@ -289,7 +289,8 @@ internal sealed class OpenShiftLauncherForm : Form
         {
             if (File.Exists(temporary)) try { File.Delete(temporary); } catch { }
         }
-        SendState(mode == "enabled" ? "DeepSeek Thinking 已开启，下次生成营业日时生效。" : "DeepSeek Thinking 已关闭，下次生成营业日时生效。", false);
+        string label = mode == "enabled" ? "深度" : mode == "balanced" ? "平衡" : "快速";
+        SendState("DeepSeek 模式已切换为“" + label + "”，下次生成时生效。", false);
     }
 
     private void ValidateRuntimeConfig(string configPath)
