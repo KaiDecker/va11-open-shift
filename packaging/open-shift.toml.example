@@ -9,4 +9,4 @@ max_calls = 100000
 thinking = "disabled"
 
 [world]
-prefetch_days = 1
+prefetch_days = 0

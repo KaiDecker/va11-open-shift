@@ -18,6 +18,7 @@ internal sealed class OpenShiftLauncherForm : Form
     private readonly string root;
     private readonly string installDir;
     private readonly string gameCopyDir;
+    private readonly string runtimeConfigPath;
     private readonly WebView2 browser;
     private Process activeProcess;
     private string activeMode = "";
@@ -33,6 +34,7 @@ internal sealed class OpenShiftLauncherForm : Form
         root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenShift");
         gameCopyDir = Path.Combine(installDir, "game");
+        runtimeConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VA_11_Hall_A", "open-shift.toml");
         selectedSteamGame = FindSteamGame();
         Text = "OPEN SHIFT";
         ClientSize = new Size(540, 790);
@@ -80,7 +82,9 @@ internal sealed class OpenShiftLauncherForm : Form
     private void SendState(string message, bool busy)
     {
         if (browser.CoreWebView2 == null) return;
-        string json = "{\"steam\":" + Json(selectedSteamGame) + ",\"copy\":" + Json(gameCopyDir) + ",\"status\":" + Json(message) + ",\"busy\":" + (busy ? "true" : "false") + ",\"startDisabled\":" + (!File.Exists(Path.Combine(installDir, "Start-Open-Shift.ps1")) ? "true" : "false") + "}";
+        bool thinkingAvailable;
+        string thinking = ReadThinkingMode(out thinkingAvailable);
+        string json = "{\"steam\":" + Json(selectedSteamGame) + ",\"copy\":" + Json(gameCopyDir) + ",\"status\":" + Json(message) + ",\"busy\":" + (busy ? "true" : "false") + ",\"startDisabled\":" + (!File.Exists(Path.Combine(installDir, "Start-Open-Shift.ps1")) ? "true" : "false") + ",\"thinking\":" + Json(thinking) + ",\"thinkingAvailable\":" + (thinkingAvailable ? "true" : "false") + "}";
         browser.CoreWebView2.ExecuteScriptAsync("window.setState(" + json + ");");
     }
 
@@ -180,6 +184,7 @@ internal sealed class OpenShiftLauncherForm : Form
             else if (action == "saveKey") SaveApiKey(Match(message, "value"));
             else if (action == "install") Install(Match(message, "steam"), Match(message, "key"));
             else if (action == "start") StartGame();
+            else if (action == "thinking") SetThinkingMode(Match(message, "value"));
             else if (action == "logs") OpenLogs();
             else if (action == "uninstall") Uninstall();
             else if (action == "steamChanged") selectedSteamGame = Match(message, "value").Trim();
@@ -211,6 +216,123 @@ internal sealed class OpenShiftLauncherForm : Form
         try { File.WriteAllBytes(Path.Combine(installDir, "api-key.dpapi"), ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser)); }
         finally { Array.Clear(bytes, 0, bytes.Length); }
         SendState("DeepSeek API Key 已为当前 Windows 用户加密保存。", false);
+    }
+
+    private string ReadThinkingMode(out bool available)
+    {
+        available = false;
+        if (!File.Exists(runtimeConfigPath)) return "disabled";
+        try
+        {
+            bool inProvider = false;
+            string found = "";
+            int matches = 0;
+            foreach (string line in File.ReadAllLines(runtimeConfigPath, Encoding.UTF8))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+                {
+                    inProvider = String.Equals(trimmed, "[provider]", StringComparison.OrdinalIgnoreCase);
+                    continue;
+                }
+                if (!inProvider) continue;
+                Match match = Regex.Match(line, "^\\s*thinking\\s*=\\s*\\\"(?<mode>default|enabled|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase);
+                if (!match.Success) continue;
+                found = match.Groups["mode"].Value.ToLowerInvariant();
+                matches++;
+            }
+            available = matches == 1;
+            return available && found == "enabled" ? "enabled" : "disabled";
+        }
+        catch { return "disabled"; }
+    }
+
+    private void SetThinkingMode(string value)
+    {
+        string mode = (value ?? "").Trim().ToLowerInvariant();
+        if (mode != "enabled" && mode != "disabled")
+            throw new InvalidOperationException("DeepSeek Thinking 模式无效。");
+        if (!File.Exists(runtimeConfigPath))
+            throw new InvalidOperationException("请先安装 OPEN SHIFT，再切换 DeepSeek Thinking。");
+
+        string[] lines = File.ReadAllLines(runtimeConfigPath, Encoding.UTF8);
+        bool inProvider = false;
+        int thinkingLine = -1;
+        for (int index = 0; index < lines.Length; index++)
+        {
+            string trimmed = lines[index].Trim();
+            if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+            {
+                inProvider = String.Equals(trimmed, "[provider]", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+            if (!inProvider || !Regex.IsMatch(lines[index], "^\\s*thinking\\s*=")) continue;
+            if (thinkingLine >= 0)
+                throw new InvalidOperationException("运行配置中存在重复的 thinking 设置。");
+            if (!Regex.IsMatch(lines[index], "^\\s*thinking\\s*=\\s*\\\"(?:default|enabled|disabled)\\\"\\s*(?:#.*)?$", RegexOptions.IgnoreCase))
+                throw new InvalidOperationException("运行配置中的 thinking 设置无法安全修改。");
+            thinkingLine = index;
+        }
+        if (thinkingLine < 0)
+            throw new InvalidOperationException("运行配置中缺少 provider.thinking 设置，请执行安装 / 修复。");
+
+        string indentation = Regex.Match(lines[thinkingLine], "^\\s*").Value;
+        lines[thinkingLine] = indentation + "thinking = \"" + mode + "\"";
+        string temporary = runtimeConfigPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllLines(temporary, lines, new UTF8Encoding(false));
+            ValidateRuntimeConfig(temporary);
+            File.Replace(temporary, runtimeConfigPath, null);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) try { File.Delete(temporary); } catch { }
+        }
+        SendState(mode == "enabled" ? "DeepSeek Thinking 已开启，下次生成营业日时生效。" : "DeepSeek Thinking 已关闭，下次生成营业日时生效。", false);
+    }
+
+    private void ValidateRuntimeConfig(string configPath)
+    {
+        string statePath = Path.Combine(installDir, "install.json");
+        if (!File.Exists(statePath)) throw new InvalidOperationException("安装状态不存在，请执行安装 / 修复。");
+        string runtime;
+        bool runtimeIsPython;
+        using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath, Encoding.UTF8)))
+        {
+            JsonElement runtimeValue;
+            JsonElement pythonValue;
+            if (!document.RootElement.TryGetProperty("runtime", out runtimeValue) || String.IsNullOrWhiteSpace(runtimeValue.GetString()))
+                throw new InvalidOperationException("安装状态中没有可用的 OPEN SHIFT 运行时。");
+            runtime = runtimeValue.GetString();
+            runtimeIsPython = document.RootElement.TryGetProperty("runtime_is_python", out pythonValue) && pythonValue.GetBoolean();
+        }
+        if (!File.Exists(runtime)) throw new InvalidOperationException("OPEN SHIFT 运行时不存在，请执行安装 / 修复。");
+
+        string arguments = runtimeIsPython
+            ? "-m open_shift validate-config --config " + Quote(configPath)
+            : "validate-config --config " + Quote(configPath);
+        var info = new ProcessStartInfo(runtime, arguments)
+        {
+            WorkingDirectory = installDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        if (runtimeIsPython) info.EnvironmentVariables["PYTHONPATH"] = Path.Combine(installDir, "src");
+        using (Process process = Process.Start(info) ?? throw new InvalidOperationException("无法启动配置校验。"))
+        {
+            string output = process.StandardOutput.ReadToEnd();
+            string error = process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(30000))
+            {
+                try { process.Kill(); } catch { }
+                throw new InvalidOperationException("运行配置校验超时。");
+            }
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException("运行配置校验失败：" + (String.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim()));
+        }
     }
 
     private void Install(string steam, string key)

@@ -64,7 +64,7 @@ try {
         throw "DeepSeek probe failed. The game was not started."
     }
 
-    Write-Host "Generating the first day before opening the game. This can take several minutes."
+    Write-Host "Preparing the local day skeleton before opening the game."
     Write-Host "Acceptance database: $databasePath"
     & $Python -m open_shift launch `
         --db $databasePath `

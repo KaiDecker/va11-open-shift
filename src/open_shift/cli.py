@@ -118,7 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--paired-save-dir", type=Path)
     bridge.add_argument("--seed", type=int, default=7)
     bridge.add_argument("--advance-minutes", type=int, default=1440)
-    bridge.add_argument("--prefetch-days", type=int, choices=(0, 1), default=1)
+    bridge.add_argument("--prefetch-days", type=int, choices=(0, 1), default=0)
     bridge.add_argument("--provider-base-url")
     bridge.add_argument("--provider-model")
     bridge.add_argument("--provider-protocol", choices=[item.value for item in APIProtocol])
@@ -147,7 +147,7 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--seed", type=int, default=7)
     launch.add_argument("--port", type=int, default=0)
     launch.add_argument("--advance-minutes", type=int, default=1440)
-    launch.add_argument("--prefetch-days", type=int, choices=(0, 1), default=1)
+    launch.add_argument("--prefetch-days", type=int, choices=(0, 1), default=0)
     launch.add_argument("--config", type=Path)
     launch.add_argument("--health-timeout", type=float, default=10.0)
     launch.add_argument("--bridge-command", nargs="+")
@@ -441,6 +441,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 app=BridgeApplication(
                     config,
                     scene_provider=world.open_scene,
+                    scene_hint_provider=world.scene_speaker_hint,
                     ack_handler=world.ack_scene,
                     order_handler=world.resolve_order,
                     save_pair_handler=save_pair,

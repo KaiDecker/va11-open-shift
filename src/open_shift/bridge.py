@@ -8,12 +8,14 @@ import ipaddress
 import json
 import re
 import threading
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from .drinks import DrinkOrder, ServiceResult
+from .diagnostics import emit_timing, monotonic_seconds
 
 
 PROTOCOL_VERSION = 1
@@ -305,6 +307,7 @@ class BridgeApplication:
         scene: ScenePackage | None = None,
         *,
         scene_provider: Callable[[Mapping[str, Any]], ScenePackage] | None = None,
+        scene_hint_provider: Callable[[Mapping[str, Any]], str | None] | None = None,
         ack_handler: Callable[[Mapping[str, Any]], None] | None = None,
         order_handler: Callable[[Mapping[str, Any]], OrderResolution] | None = None,
         save_pair_handler: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
@@ -316,6 +319,7 @@ class BridgeApplication:
         self.config = config
         self.scene = scene or stage_three_scene()
         self._scene_provider = scene_provider
+        self._scene_hint_provider = scene_hint_provider
         self._ack_handler = ack_handler
         self._order_handler = order_handler
         self._save_pair_handler = save_pair_handler
@@ -330,6 +334,11 @@ class BridgeApplication:
         self._save_restore_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._tablet_feed_requests: dict[str, tuple[str, dict[str, Any]]] = {}
         self._story_prepare_requests: dict[str, tuple[str, dict[str, Any]]] = {}
+        # Scene jobs keep the HTTP request short while the provider works in a
+        # background thread.  The legacy synchronous endpoint remains intact
+        # for older clients and as a fallback.
+        self._scene_jobs: dict[str, dict[str, Any]] = {}
+        self._scene_jobs_by_request: dict[str, str] = {}
         self._cache_lock = threading.Lock()
 
     def _authenticate(self, headers: Mapping[str, str]) -> None:
@@ -381,6 +390,25 @@ class BridgeApplication:
                     },
                 )
             self._authenticate(headers)
+            if method == "GET" and route.startswith("/v1/scenes/jobs/"):
+                if route.endswith("/result"):
+                    job_id = route.split("/")[-2]
+                    result = self._scene_job_result(job_id)
+                    return BridgeResponse(result.pop("_http_status", 200), result)
+                job_id = route.rsplit("/", 1)[-1]
+                return BridgeResponse(200, self._scene_job_status(job_id))
+            if method == "POST" and route == "/v1/scenes/jobs":
+                try:
+                    return BridgeResponse(202, self._submit_scene_job(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("scene job submission", error)
+                    raise BridgeError(
+                        503,
+                        "scene_job_unavailable",
+                        "the world service could not start a scene job",
+                    ) from None
             if method == "POST" and route == "/v1/scenes/open":
                 try:
                     return BridgeResponse(200, self._open_scene(_require_object(body)))
@@ -521,6 +549,153 @@ class BridgeApplication:
             return self._idempotent(
                 self._open_requests, request_id, request, response
             )
+
+    @staticmethod
+    def _utc_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+    def _submit_scene_job(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Queue scene generation and return a pollable, secret-free job record."""
+
+        _require_fields(request, {"protocol_version", "request_id", "client_session_id"})
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(409, "protocol_mismatch", "client protocol version was not supported")
+        request_digest = hashlib.sha256(_canonical_json(request)).hexdigest()
+        with self._cache_lock:
+            existing_id = self._scene_jobs_by_request.get(request_id)
+            if existing_id is not None:
+                existing = self._scene_jobs[existing_id]
+                if not hmac.compare_digest(existing["request_digest"], request_digest):
+                    raise BridgeError(409, "request_id_conflict", "request_id was already used with different content")
+                return self._public_scene_job(existing)
+            job_id = "job_" + request_id
+            now = self._utc_timestamp()
+            record: dict[str, Any] = {
+                "job_id": job_id,
+                "request_id": request_id,
+                "request": dict(request),
+                "request_digest": request_digest,
+                "status": "queued",
+                "created_at": now,
+                "started_at": None,
+                "completed_at": None,
+                "elapsed_ms": None,
+                "attempt": 1,
+                "scene": None,
+                "error": None,
+                "speaker_hint": None,
+            }
+            if self._scene_hint_provider is not None:
+                hint = self._scene_hint_provider(request)
+                if hint is not None and hint not in ALLOWED_SPEAKERS:
+                    raise ValueError("scene speaker hint was invalid")
+                record["speaker_hint"] = hint
+            self._scene_jobs[job_id] = record
+            self._scene_jobs_by_request[request_id] = job_id
+        emit_timing("scene_job_queued", request_id=request_id, job_id=job_id, attempt=1)
+        worker = threading.Thread(
+            target=self._run_scene_job,
+            args=(job_id,),
+            name=f"open-shift-scene-{request_id}",
+            # A non-daemon worker lets the interpreter flush the final timing
+            # record before exit. Provider calls have their own bounded
+            # timeout, so this cannot leave the player stuck indefinitely.
+            daemon=False,
+        )
+        worker.start()
+        return self._public_scene_job(record)
+
+    def _public_scene_job(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        value = {
+            "protocol_version": PROTOCOL_VERSION,
+            "job_id": record["job_id"],
+            "request_id": record["request_id"],
+            "status": record["status"],
+            "created_at": record["created_at"],
+            "started_at": record["started_at"],
+            "completed_at": record["completed_at"],
+            "elapsed_ms": record["elapsed_ms"],
+            "attempt": record["attempt"],
+            "speaker_hint": record.get("speaker_hint") or "",
+        }
+        if record.get("scene") is not None:
+            value["scene"] = record["scene"]
+        if record.get("error") is not None:
+            value["error"] = record["error"]
+        return value
+
+    def _run_scene_job(self, job_id: str) -> None:
+        with self._cache_lock:
+            record = self._scene_jobs.get(job_id)
+            if record is None:
+                return
+            record["status"] = "running"
+            record["started_at"] = self._utc_timestamp()
+            request = dict(record["request"])
+        started = monotonic_seconds()
+        emit_timing("scene_job_started", request_id=record["request_id"], job_id=job_id, attempt=1)
+        try:
+            scene = self._scene_provider(request) if self._scene_provider is not None else self.scene
+            if not isinstance(scene, ScenePackage):
+                raise TypeError("scene provider returned an invalid package")
+        except Exception as error:
+            elapsed_ms = round((monotonic_seconds() - started) * 1000)
+            error_code = type(error).__name__
+            with self._cache_lock:
+                record["status"] = "failed"
+                record["completed_at"] = self._utc_timestamp()
+                record["elapsed_ms"] = elapsed_ms
+                record["error"] = {"code": error_code, "message": "scene generation failed"}
+            emit_timing("scene_job_failed", request_id=record["request_id"], job_id=job_id, elapsed_ms=elapsed_ms, error_type=error_code)
+            self._report_error("scene job generation", error)
+            return
+        elapsed_ms = round((monotonic_seconds() - started) * 1000)
+        with self._cache_lock:
+            record["status"] = "ready"
+            record["completed_at"] = self._utc_timestamp()
+            record["elapsed_ms"] = elapsed_ms
+            record["scene"] = scene.to_gamemaker_dict()
+        emit_timing("scene_job_ready", request_id=record["request_id"], job_id=job_id, elapsed_ms=elapsed_ms, line_count=len(scene.lines))
+
+    def _scene_job_status(self, job_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"job_[A-Za-z0-9][A-Za-z0-9._-]{0,63}", job_id):
+            raise BridgeError(400, "invalid_job_id", "scene job identifier was invalid")
+        with self._cache_lock:
+            record = self._scene_jobs.get(job_id)
+            if record is None:
+                raise BridgeError(404, "unknown_job", "scene job was not found")
+            return self._public_scene_job(record)
+
+    def _scene_job_result(self, job_id: str) -> dict[str, Any]:
+        """Return a legacy scene response once a job is ready.
+
+        This bridge keeps the GameMaker decoder small: pending results are
+        HTTP 202, while a ready result deliberately has the same three-field
+        shape as ``/v1/scenes/open``.
+        """
+
+        if not re.fullmatch(r"job_[A-Za-z0-9][A-Za-z0-9._-]{0,63}", job_id):
+            raise BridgeError(400, "invalid_job_id", "scene job identifier was invalid")
+        with self._cache_lock:
+            record = self._scene_jobs.get(job_id)
+            if record is None:
+                raise BridgeError(404, "unknown_job", "scene job was not found")
+            status = record["status"]
+            if status != "ready":
+                return {
+                    "_http_status": 202,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": record["request_id"],
+                    "job_id": job_id,
+                    "status": status,
+                }
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": record["request_id"],
+                "scene": record["scene"],
+            }
 
     def _ack_scene(self, request: dict[str, Any]) -> dict[str, Any]:
         _require_fields(

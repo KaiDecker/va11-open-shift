@@ -12,7 +12,9 @@ from .bridge import AGENT_SPEAKERS, ScenePackage
 from .drinks import ServiceCategory
 
 
-DAILY_STORY_GRAPH_VERSION = "stage_7a_v1"
+# Version bump prevents a previously prefetched full-day graph from bypassing
+# the Stage 16 on-demand materialization path after an upgrade.
+DAILY_STORY_GRAPH_VERSION = "stage_16_on_demand_v1"
 MAX_DAILY_CUSTOMERS = 3
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 

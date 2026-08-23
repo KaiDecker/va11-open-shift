@@ -24,6 +24,12 @@
     input:focus { box-shadow:0 0 0 2px #1687ff44; } .small { flex:0 0 74px; }
     .hint,.copy { color:#8490a2; font:10px Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:7px; }
     .hint { font:11px Segoe UI,sans-serif; }
+    .setting { display:flex; align-items:center; justify-content:space-between; gap:18px; }
+    .setting-copy { min-width:0; } .setting-copy label { margin-bottom:4px; }
+    button.toggle { position:relative; flex:0 0 104px; height:34px; padding:0 12px 0 37px; border:1px solid #d7deea; border-radius:17px; background:#e8ecf3; color:#66738a; cursor:pointer; font-size:11px; font-weight:700; text-align:center; transition:background .16s,color .16s,border-color .16s; }
+    button.toggle::before { content:""; position:absolute; left:4px; top:4px; width:24px; height:24px; border-radius:50%; background:#fff; box-shadow:0 2px 7px #68758d44; transition:transform .16s; }
+    button.toggle.on { background:#dff7ec; border-color:#a9e5ca; color:#168957; }
+    button.toggle.on::before { transform:translateX(69px); }
     .safe { margin-top:16px; padding:15px; border-radius:16px; background:#f0f3f9; color:#54627b; font:11px Consolas,monospace; line-height:1.45; }
     .safe strong { color:#3b465b; font-family:Segoe UI,sans-serif; font-size:12px; }
     .actions { margin-top:16px; padding:16px 20px 18px; } .actions .primary { display:flex; gap:14px; }
@@ -40,25 +46,28 @@
     <section class="hero">
       <img class="brand-icon" id="brand" src="../../assets/open-shift-icon.svg" alt="OPEN SHIFT">
       <div><h1>OPEN SHIFT</h1><div class="tagline">VA-11 HALL-A · 结局之后的本地世界</div></div>
-      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.15 RC</div></div>
+      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.16 RC</div></div>
     </section>
     <section class="card">
       <div class="field"><label>Steam 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="sub small" data-action="browse">选择</button></div><div class="copy" id="copy"></div></div>
       <div class="field"><label>DeepSeek API Key</label><div class="row"><input id="key" type="password" spellcheck="false"><button class="sub small" data-action="saveKey">保存</button></div><div class="hint">使用 Windows DPAPI 加密保存，不写入 TOML、日志或存档。</div></div>
+      <div class="field setting"><div class="setting-copy"><label>DeepSeek Thinking</label><div class="hint" id="thinkingHint">安装后可切换；开启后生成更慢，也会消耗更多 Token。</div></div><button class="toggle" id="thinkingToggle" type="button" role="switch" aria-checked="false" data-action="thinking" title="切换 DeepSeek Thinking"><span id="thinkingLabel">已关闭</span></button></div>
       <div class="safe"><strong>安全状态</strong><br>Steam 原版 data.win：只读输入<br>补丁 data.win：仅写入隔离副本<br>世界数据库和配对存档：%LOCALAPPDATA%\VA_11_Hall_A</div>
     </section>
     <section class="card actions"><div class="primary"><button class="action install" data-action="install">安装 / 修复</button><button class="action start" data-action="start">准备并启动</button></div><div class="secondary"><button class="sub" data-action="logs">打开日志</button><button class="sub danger" data-action="uninstall">卸载</button></div></section>
     <div class="status" id="status">就绪。Steam 原版文件保持只读。</div><div class="progress"><span></span></div>
   </main>
   <script>
-    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status');
+    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status'), thinkingToggle=document.getElementById('thinkingToggle'), thinkingLabel=document.getElementById('thinkingLabel'), thinkingHint=document.getElementById('thinkingHint');
     function send(action, data={}) { if (window.chrome?.webview) window.chrome.webview.postMessage(JSON.stringify({action,...data})); }
-    let busy=false, startDisabled=true;
-    function applyAvailability() { document.querySelectorAll('[data-action]').forEach(button=>{ button.disabled=busy && button.dataset.action!=='logs'; }); steam.disabled=busy; key.disabled=busy; document.querySelector('[data-action="start"]').disabled=busy||startDisabled; }
-    function setState(s) { if(s.steam!==undefined) steam.value=s.steam; if(s.copy!==undefined) copy.textContent='隔离副本 · '+s.copy; if(s.status) status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;app.classList.toggle('busy',busy);} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; applyAvailability(); }
+    let busy=false, startDisabled=true, thinking='disabled', thinkingAvailable=false;
+    function applyThinking() { const enabled=thinking==='enabled'; thinkingToggle.classList.toggle('on',enabled); thinkingToggle.setAttribute('aria-checked',String(enabled)); thinkingLabel.textContent=enabled?'已开启':'已关闭'; thinkingHint.textContent=thinkingAvailable?(enabled?'已开启。生成时间和 Token 消耗会增加。':'已关闭。优先使用更快的非思考生成。'):'安装后可切换；开启后生成更慢，也会消耗更多 Token。'; }
+    function applyAvailability() { document.querySelectorAll('[data-action]').forEach(button=>{ button.disabled=busy && button.dataset.action!=='logs'; }); steam.disabled=busy; key.disabled=busy; document.querySelector('[data-action="start"]').disabled=busy||startDisabled; thinkingToggle.disabled=busy||!thinkingAvailable; }
+    function setState(s) { if(s.steam!==undefined) steam.value=s.steam; if(s.copy!==undefined) copy.textContent='隔离副本 · '+s.copy; if(s.status) status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;app.classList.toggle('busy',busy);} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; applyThinking(); applyAvailability(); }
     window.setState=setState;
-    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});key.value='';} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else send(a); }));
+    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});key.value='';} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else if(a==='thinking')send(a,{value:thinking==='enabled'?'disabled':'enabled'}); else send(a); }));
     steam.addEventListener('change',()=>send('steamChanged',{value:steam.value}));
+    applyThinking(); applyAvailability();
   </script>
 </body>
 </html>

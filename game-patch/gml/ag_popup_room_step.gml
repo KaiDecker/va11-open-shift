@@ -1,4 +1,4 @@
-if (global.cur_day == 1001)
+if (global.cur_day >= 1001)
 {
     if (!ag_open_shift_click_armed)
     {

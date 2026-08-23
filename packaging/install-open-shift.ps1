@@ -111,7 +111,10 @@ if (-not $SteamGameDir) {
 }
 if (-not $UtmtCli) { $UtmtCli = Find-UtmtCli }
 if (-not $UtmtCli) {
-    $UtmtCli = Read-Host "Path to UndertaleModTool CLI 0.9.1.2"
+    # This script is also launched hidden by the GUI. Never fall back to
+    # Read-Host here: a missing/non-CLI bundle would otherwise appear frozen
+    # forever while waiting for input that the player cannot see.
+    throw "UndertaleModTool CLI 0.9.1.2 was not found in the package. Re-download a complete player package or pass -UtmtCli explicitly."
 }
 if (-not (Test-Path -LiteralPath $SteamGameDir -PathType Container)) { throw "Steam game folder was not found: $SteamGameDir" }
 if (-not (Test-Path -LiteralPath $UtmtCli -PathType Leaf)) { throw "UTMT CLI was not found: $UtmtCli" }
@@ -177,6 +180,12 @@ if (-not $sameRoot) {
 if (-not $runtimeIsPython) {
     $runtimePath = Join-Path $installRoot "OpenShift.exe"
 }
+$installedIcon = Join-Path $installRoot ("OpenShift-" + $patchFingerprint.Substring(0, 12) + ".ico")
+$bundledIcon = Join-Path $packageRoot "OpenShift.ico"
+if ((Test-Path -LiteralPath $bundledIcon -PathType Leaf) -and
+    ([IO.Path]::GetFullPath($bundledIcon) -ne [IO.Path]::GetFullPath($installedIcon))) {
+    Copy-Item -LiteralPath $bundledIcon -Destination $installedIcon -Force
+}
 
 $env:PYTHONPATH = Join-Path $installRoot "src"
 if ($runtimeIsPython) {
@@ -231,7 +240,7 @@ max_calls = 100000
 thinking = "disabled"
 
 [world]
-prefetch_days = 1
+prefetch_days = 0
 "@
     Write-Utf8NoBom $config $configText
 }
@@ -267,6 +276,7 @@ Add-Type -AssemblyName System.Security
 `$state = Get-Content -LiteralPath (Join-Path `$root "install.json") -Raw | ConvertFrom-Json
 `$secretFile = Join-Path `$root "api-key.dpapi"
 if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configured. Run packaging\configure-api-key.ps1." }
+`$env:OPEN_SHIFT_TIMING_LOG = Join-Path `$root "timing.log"
 `$protected = [IO.File]::ReadAllBytes(`$secretFile)
 `$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }
@@ -277,13 +287,18 @@ exit `$LASTEXITCODE
 Write-Utf8NoBom $launcher $launcherText
 if (-not $SkipShortcut) {
     $shortcut = $shortcutPath
+    Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($shortcut)
     $installedGui = Join-Path $installRoot "OpenShiftSetup.exe"
     if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
         $link.TargetPath = $installedGui
         $link.Arguments = ""
-        $link.IconLocation = "$installedGui,0"
+        if (Test-Path -LiteralPath $installedIcon -PathType Leaf) {
+            $link.IconLocation = "$installedIcon,0"
+        } else {
+            $link.IconLocation = "$installedGui,0"
+        }
     } else {
         $link.TargetPath = "powershell.exe"
         $link.Arguments = "-ExecutionPolicy Bypass -File `"$launcher`""
@@ -291,6 +306,10 @@ if (-not $SkipShortcut) {
     $link.WorkingDirectory = $installRoot
     $link.Description = "Start VA-11 HALL-A Open Shift"
     $link.Save()
+    $iconRefresh = Join-Path $env:SystemRoot "System32\ie4uinit.exe"
+    if (Test-Path -LiteralPath $iconRefresh -PathType Leaf) {
+        & $iconRefresh -show
+    }
 }
 
 Write-Host "Open Shift installed. Start it with: $installRoot\Start-Open-Shift.ps1"

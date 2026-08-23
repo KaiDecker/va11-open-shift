@@ -5,19 +5,71 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     var ag_result;
     var ag_was_order_response;
     var ag_error_code;
+    var ag_scene_job_deferred;
     ag_status = ds_map_find_value(async_load, "status");
     ag_http_status = ds_map_find_value(async_load, "http_status");
     ag_result = ds_map_find_value(async_load, "result");
+    show_debug_message("[OPEN SHIFT] dialogue_callback http_status=" + string(ag_http_status) + " transport_status=" + string(ag_status) + " request=" + ag_request_id + " state=" + string(ag_state));
     ag_was_order_response = (ag_state == 7);
     ag_error_code = "";
+    ag_scene_job_deferred = 0;
 
-    if ((ag_state == 1 || ag_state == 7) && instance_exists(ag_wait_box))
+    // The job endpoint acknowledges quickly (202). Keep the existing scene
+    // decoder for the final legacy-shaped result, so old validation remains
+    // authoritative while the game polls in the background.
+    if (ag_status == 0 && ag_http_status == 202 && (ag_state == 1 || ag_state == 8))
+    {
+        var ag_job_root;
+        ag_job_root = json_decode(ag_result);
+        if (ds_exists(ag_job_root, ds_type_map) && ds_map_exists(ag_job_root, "job_id"))
+        {
+            if (ag_state == 1)
+            {
+                ag_scene_job_id = string(ds_map_find_value(ag_job_root, "job_id"));
+                ag_scene_job_poll_count = 0;
+                if (ds_map_exists(ag_job_root, "speaker_hint"))
+                    ag_wait_speaker = string(ds_map_find_value(ag_job_root, "speaker_hint"));
+                show_debug_message("[OPEN SHIFT] dialogue_job_queued job=" + ag_scene_job_id);
+            }
+            if (instance_exists(ag_wait_box))
+            {
+                with (ag_wait_box) instance_destroy();
+                ag_wait_box = noone;
+            }
+            ag_http_request = -1;
+            ag_state = 8;
+            ag_scene_job_poll_at = current_time + 500;
+            ag_scene_job_deferred = 1;
+        }
+        if (ds_exists(ag_job_root, ds_type_map)) ds_map_destroy(ag_job_root);
+    }
+    else if (ag_status == 0 && ag_http_status == 200 && ag_state == 8)
+    {
+        var ag_job_result_root;
+        ag_job_result_root = json_decode(ag_result);
+        // A ready /result response is deliberately the old three-field
+        // scene envelope; let the normal parser below consume it.
+        if (!ds_exists(ag_job_result_root, ds_type_map) || !ds_map_exists(ag_job_result_root, "scene"))
+        {
+            ag_http_request = -1;
+            ag_scene_job_poll_at = current_time + 750;
+            ag_scene_job_deferred = 1;
+        }
+        else
+        {
+            ag_state = 1;
+            show_debug_message("[OPEN SHIFT] dialogue_job_ready job=" + ag_scene_job_id);
+        }
+        if (ds_exists(ag_job_result_root, ds_type_map)) ds_map_destroy(ag_job_result_root);
+    }
+
+    if (ag_scene_job_deferred == 0 && (ag_state == 1 || ag_state == 7 || ag_state == 8) && instance_exists(ag_wait_box))
     {
         with (ag_wait_box) instance_destroy();
         ag_wait_box = noone;
     }
 
-    if (ag_status != 0 || ag_http_status != 200)
+    if (ag_scene_job_deferred == 0 && (ag_status != 0 || ag_http_status != 200))
     {
         // Preserve the request kind before changing ag_state.  The legacy
         // client otherwise loses the order context and reports a generic
@@ -79,7 +131,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                 ag_error_message = "O.S.：本地世界服务拒绝了请求。";
         }
     }
-    else if (ag_state == 3)
+    else if (ag_scene_job_deferred == 0 && ag_state == 3)
     {
         if (ag_order_pending && !ag_order_started)
         {
@@ -115,7 +167,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             else
             {
                 ag_request_sequence += 1;
-                ag_request_id = "open_" + ag_session_id + "_" + string(ag_request_sequence);
+                ag_request_id = "open_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
                 var ag_next_headers;
                 var ag_next_body;
                 ag_next_headers = ds_map_create();
@@ -135,7 +187,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             }
         }
     }
-    else if (ag_state == 1 || ag_state == 7)
+    else if (ag_scene_job_deferred == 0 && (ag_state == 1 || ag_state == 7))
     {
         var ag_is_order_response;
         var ag_expected_order_id;
@@ -330,6 +382,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             if (ag_is_order_response)
                 ag_order_started = 0;
             ag_state = 2;
+            show_debug_message("[OPEN SHIFT] dialogue_ready scene=" + ag_scene_id + " lines=" + string(ag_line_count) + " elapsed_ms=" + string(current_time - ag_wait_started_at));
         }
         else
         {

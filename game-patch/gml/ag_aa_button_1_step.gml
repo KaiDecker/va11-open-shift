@@ -4,7 +4,7 @@ if (!instance_exists(config_obj))
     {
         instance_destroy();
     }
-    if (global.cur_day == 1001)
+    if (global.cur_day >= 1001)
     {
         if (place_meeting(x, y, cursor_hitbox) && mouse_check_button_pressed(mb_left) && !instance_exists(aa_art1))
         {
