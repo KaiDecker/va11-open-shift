@@ -1,4 +1,19 @@
-if ((ag_state == 1 || ag_state == 3 || ag_state == 7) && current_time > ag_timeout_at)
+if (ag_state == 8 && ag_http_request == -1 && current_time >= ag_scene_job_poll_at)
+{
+    var ag_poll_headers;
+    ag_poll_headers = ds_map_create();
+    ds_map_add(ag_poll_headers, "Content-Type", "application/json");
+    ini_open("open-shift-runtime.ini");
+    ds_map_add(ag_poll_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+    ini_close();
+    ag_http_request = http_request(ag_bridge_url + "/v1/scenes/jobs/" + ag_scene_job_id + "/result", "GET", ag_poll_headers, "");
+    ds_map_destroy(ag_poll_headers);
+    ag_scene_job_poll_count += 1;
+    ag_scene_job_poll_at = current_time + 750;
+    show_debug_message("[OPEN SHIFT] dialogue_job_poll job=" + ag_scene_job_id + " count=" + string(ag_scene_job_poll_count));
+}
+
+if ((ag_state == 1 || ag_state == 3 || ag_state == 7 || ag_state == 8) && current_time > ag_timeout_at)
 {
     if (ag_state == 3)
     {
@@ -10,6 +25,17 @@ if ((ag_state == 1 || ag_state == 3 || ag_state == 7) && current_time > ag_timeo
         ag_state = 4;
         ag_error_message = "O.S.：本地世界服务没有返回调酒结果。";
     }
+    else if (ag_state == 8)
+    {
+        ag_state = 4;
+        ag_http_request = -1;
+        if (instance_exists(ag_wait_box))
+        {
+            with (ag_wait_box) instance_destroy();
+            ag_wait_box = noone;
+        }
+        ag_error_message = "O.S.：对白生成超时，请查看 timing.log。";
+    }
     else
     {
         ag_state = 4;
@@ -17,23 +43,70 @@ if ((ag_state == 1 || ag_state == 3 || ag_state == 7) && current_time > ag_timeo
     }
 }
 
-if ((ag_state == 1 || ag_state == 7) && !instance_exists(obj_textbox))
+if ((ag_state == 1 || ag_state == 7 || ag_state == 8) && !instance_exists(obj_textbox))
 {
+    if (ag_state != 8)
+        ag_wait_speaker = "";
+    if (ag_state == 7)
+        ag_wait_speaker = ag_order_customer;
+    ag_wait_started_at = current_time;
     ag_wait_box = instance_create(0, 0, obj_textbox);
     ag_wait_box.current_text = 0;
     ag_wait_box.current_chr = 0;
     ag_wait_box.current_line = 0;
     ag_wait_box.total_boxes = 0;
-    if (ag_state == 7)
-        ag_wait_box.input_text[0] = "调酒杯在吧台上轻轻落定。";
-    else
-        ag_wait_box.input_text[0] = "冰箱压缩机在吧台后低声运转。";
+    ag_wait_box.input_text[0] = "...";
     ag_wait_box.edited_text[0] = ag_wait_box.input_text[0];
     ag_wait_box.cmd_data_queue = ds_queue_create();
     ag_wait_box.cmd_pos_queue = ds_queue_create();
     ag_wait_box.next_cmd_pos = -1;
     ag_wait_box.textbox_skip_possible = 0;
     global.output_text = "";
+    show_debug_message("[OPEN SHIFT] dialogue_wait state=" + string(ag_state) + " speaker=" + ag_wait_speaker + " request=" + ag_request_id + " started_ms=" + string(ag_wait_started_at));
+
+    if (ag_wait_speaker == "dana" || ag_wait_speaker == "dorothy" || ag_wait_speaker == "alma" || ag_wait_speaker == "stella" || ag_wait_speaker == "sei")
+    {
+        global.danahide = 1;
+        global.dorohide = 1;
+        global.almahide = 1;
+        global.stelhide = 1;
+        global.seihide = 1;
+        if (ag_wait_speaker == "dana")
+        {
+            global.danahide = 0;
+            global.danaface = "";
+            global.danalips = 1;
+            if (!instance_exists(sprite_dana)) instance_create(185, 268, sprite_dana);
+        }
+        else if (ag_wait_speaker == "dorothy")
+        {
+            global.dorohide = 0;
+            global.doroface = "";
+            global.dorolips = 1;
+            if (!instance_exists(sprite_doro)) instance_create(185, 268, sprite_doro);
+        }
+        else if (ag_wait_speaker == "alma")
+        {
+            global.almahide = 0;
+            global.almaface = "";
+            global.almalips = 1;
+            if (!instance_exists(sprite_alma)) instance_create(185, 268, sprite_alma);
+        }
+        else if (ag_wait_speaker == "stella")
+        {
+            global.stelhide = 0;
+            global.stelface = "";
+            global.stellips = 1;
+            if (!instance_exists(sprite_stella)) instance_create(185, 268, sprite_stella);
+        }
+        else if (ag_wait_speaker == "sei")
+        {
+            global.seihide = 0;
+            global.seiface = "";
+            global.seilips = 1;
+            if (!instance_exists(sprite_sei)) instance_create(185, 268, sprite_sei);
+        }
+    }
 }
 
 if (ag_state == 2 && !instance_exists(obj_textbox))
@@ -179,7 +252,7 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         ini_close();
         ag_body = ds_map_create();
         ds_map_add(ag_body, "protocol_version", 1);
-        ds_map_add(ag_body, "request_id", "ack_" + ag_session_id + "_" + string(ag_request_sequence));
+        ds_map_add(ag_body, "request_id", "ack_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence));
         ds_map_add(ag_body, "client_session_id", ag_session_id);
         ds_map_add(ag_body, "scene_id", ag_scene_id);
         if (ag_order_pending)

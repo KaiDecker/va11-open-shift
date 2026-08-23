@@ -40,7 +40,7 @@ class RuntimeConfig:
     provider_timeout_seconds: float = 30.0
     provider_max_calls: int = 100000
     provider_thinking: ThinkingMode = ThinkingMode.DEFAULT
-    prefetch_days: int = 1
+    prefetch_days: int = 0
 
     def __post_init__(self) -> None:
         if (self.provider_base_url is None) != (self.provider_model is None):
@@ -127,7 +127,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             provider_timeout_seconds=float(provider.get("timeout_seconds", 30.0)),
             provider_max_calls=int(provider.get("max_calls", 100000)),
             provider_thinking=ThinkingMode(provider.get("thinking", ThinkingMode.DEFAULT.value)),
-            prefetch_days=int(world.get("prefetch_days", 1)),
+            prefetch_days=int(world.get("prefetch_days", 0)),
         )
     except (TypeError, ValueError) as exc:
         raise RuntimeConfigError(f"runtime config values were invalid: {exc}") from exc

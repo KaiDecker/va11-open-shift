@@ -25,6 +25,7 @@ from .dialogue import (
     validate_dialogue_output,
     validate_player_dialogue_output,
 )
+from .diagnostics import emit_timing, monotonic_seconds
 from .drinks import (
     AlcoholRequirement,
     DrinkOrder,
@@ -111,7 +112,7 @@ class WorldSceneService:
         seed: int = 7,
         advance_minutes: int = DAY_MINUTES,
         daily_story_mode: bool = False,
-        prefetch_days: int = 1,
+        prefetch_days: int = 0,
         allow_provider_fallback: bool = True,
     ) -> None:
         if advance_minutes < 0 or advance_minutes > 30 * DAY_MINUTES:
@@ -297,7 +298,7 @@ class WorldSceneService:
             }
 
     def prepare_story_day(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        """Synchronously make the current bounded day playable before bar entry."""
+        """Prepare only deterministic day metadata; dialogue is on-demand."""
 
         with self._lock, WorldStore(self.db_path) as store:
             self._release_legacy_save_gate(store)
@@ -311,7 +312,12 @@ class WorldSceneService:
             opening_seen = (
                 store.get_meta(f"bridge_ack:opening_day_{day_index}") is not None
             )
-        self.prepare_daily_story_graph(day_index)
+        # The old implementation called the provider for every customer and
+        # every possible drink branch here.  That made entering the room wait
+        # for an entire day's dialogue.  A local skeleton is sufficient for
+        # the cursor/order rules; the selected scene is materialized later by
+        # the scene job worker.
+        self.prepare_daily_story_skeleton(day_index)
         return {
             "world_day": day_index,
             "status": "ready",
@@ -319,6 +325,138 @@ class WorldSceneService:
             "shift_phase": shift_phase,
             "last_completed_story_day": last_completed_story_day,
         }
+
+    def _build_daily_story_skeleton(
+        self,
+        day_index: int,
+        source_tick: int,
+        events: tuple[dict[str, Any], ...],
+        display_names: Mapping[str, str],
+    ) -> DailyStoryGraph:
+        """Build the cheap, provider-free cursor used before play begins."""
+
+        nodes: list[StoryGraphNode] = []
+        for index, event in enumerate(events, start=1):
+            prefix = f"day_{day_index}_customer_{index}"
+            arrival_id = f"{prefix}_arrival"
+            merge_id = f"{prefix}_merge"
+            next_arrival_id = (
+                f"day_{day_index}_customer_{index + 1}_arrival"
+                if index < len(events)
+                else None
+            )
+            customer = self._customer(self._participants(event))
+            order = replace(
+                order_for_customer(customer, int(event["event_id"])),
+                order_id=f"order_day_{day_index}_{index}",
+            )
+            arrival_scene = replace(
+                self._fallback_scene(
+                    event,
+                    display_names,
+                    source_tick,
+                    scene_id=f"{prefix}_order",
+                ),
+                order=order,
+            )
+            branch_targets = tuple(
+                (category.value, f"{prefix}_{category.value}")
+                for category in ServiceCategory
+            )
+            nodes.append(
+                StoryGraphNode(
+                    arrival_id,
+                    StoryNodeKind.ARRIVAL_ORDER,
+                    order.customer_id,
+                    self._event_premise(event, display_names, source_tick),
+                    scene=arrival_scene,
+                    branch_targets=branch_targets,
+                )
+            )
+            for category in ServiceCategory:
+                result = self._candidate_result(order, category)
+                reaction = self._fallback_reaction(
+                    order,
+                    result,
+                    int(event["event_id"]),
+                    scene_id=f"{prefix}_{category.value}",
+                )
+                nodes.append(
+                    StoryGraphNode(
+                        f"{prefix}_{category.value}",
+                        StoryNodeKind.RESULT_DIALOGUE,
+                        order.customer_id,
+                        self._result_premise(order, result),
+                        scene=reaction,
+                        service_category=category,
+                        next_node_id=merge_id,
+                    )
+                )
+            nodes.append(
+                StoryGraphNode(
+                    merge_id,
+                    StoryNodeKind.MERGE,
+                    None,
+                    "",
+                    next_node_id=next_arrival_id,
+                )
+            )
+        return DailyStoryGraph(
+            f"daily_story_day_{day_index}",
+            day_index,
+            DAILY_STORY_GRAPH_VERSION,
+            source_tick,
+            tuple(int(event["event_id"]) for event in events),
+            f"day_{day_index}_customer_1_arrival",
+            f"day_{day_index}_customer_{len(events)}_merge",
+            tuple(nodes),
+        )
+
+    def prepare_daily_story_skeleton(self, day_index: int) -> DailyStoryGraph:
+        """Persist a provider-free day skeleton without making API calls."""
+
+        if isinstance(day_index, bool) or not isinstance(day_index, int) or day_index < 1:
+            raise ValueError("day_index must be a positive integer")
+        with self._generation_lock, self._lock, WorldStore(self.db_path) as store:
+            record = store.get_daily_story_graph(day_index, DAILY_STORY_GRAPH_VERSION)
+            if record is not None and record["status"] == "ready":
+                raw_graph = record["graph"]
+                if not isinstance(raw_graph, Mapping):
+                    raise ValueError("ready daily story graph payload was invalid")
+                return DailyStoryGraph.from_dict(raw_graph)
+            self._engine(store, MockProvider())
+            self._ensure_scheduled_public_event(store)
+            if record is None:
+                source_events = self._daily_source_events(store.list_events())
+                if not source_events:
+                    raise ValueError("world did not contain a story source event")
+                source_tick = store.current_tick
+                source_event_ids = tuple(int(event["event_id"]) for event in source_events)
+            else:
+                source_tick = int(record["source_tick"])
+                source_event_ids = tuple(record["source_event_ids"])
+                source_events = tuple(
+                    self._find_event(store, event_id) for event_id in source_event_ids
+                )
+            store.begin_daily_story_graph(
+                day_index,
+                DAILY_STORY_GRAPH_VERSION,
+                source_tick,
+                source_event_ids,
+            )
+            names = {agent.agent_id: agent.display_name for agent in store.list_agents()}
+            graph = self._build_daily_story_skeleton(
+                day_index, source_tick, source_events, names
+            )
+            store.complete_daily_story_graph(
+                day_index, DAILY_STORY_GRAPH_VERSION, graph.to_dict()
+            )
+            emit_timing(
+                "story_skeleton_ready",
+                day=day_index,
+                customer_count=len(source_events),
+            )
+            return graph
 
     def _recover_unacknowledged_settlement(self, store: WorldStore) -> None:
         """Commit a settlement whose final client acknowledgement was lost.
@@ -778,6 +916,8 @@ class WorldSceneService:
 
         if isinstance(day_index, bool) or not isinstance(day_index, int) or day_index < 1:
             raise ValueError("day_index must be a positive integer")
+        started = monotonic_seconds()
+        emit_timing("story_graph_start", day=day_index)
         with self._generation_lock, WorldStore(self.db_path) as store:
             record = store.get_daily_story_graph(
                 day_index, DAILY_STORY_GRAPH_VERSION
@@ -794,6 +934,11 @@ class WorldSceneService:
                     or graph.source_event_ids != record["source_event_ids"]
                 ):
                     raise ValueError("ready daily story graph metadata was inconsistent")
+                emit_timing(
+                    "story_graph_ready_cached",
+                    day=day_index,
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                )
                 return graph
 
             if record is None:
@@ -843,6 +988,11 @@ class WorldSceneService:
                     # bounded graph with deterministic local dialogue; no
                     # provider text or failed draft is committed.
                     self._report_error("daily story provider fallback", exc)
+                    emit_timing(
+                        "story_graph_provider_fallback",
+                        day=day_index,
+                        error_type=type(exc).__name__,
+                    )
                     fallback_provider = MockProvider()
                     graph = self._build_daily_story_graph(
                         day_index,
@@ -857,8 +1007,20 @@ class WorldSceneService:
                     DAILY_STORY_GRAPH_VERSION,
                     graph.to_dict(),
                 )
+                emit_timing(
+                    "story_graph_ready",
+                    day=day_index,
+                    customer_count=len(source_events),
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                )
                 return graph
             except Exception as exc:
+                emit_timing(
+                    "story_graph_error",
+                    day=day_index,
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                    error_type=type(exc).__name__,
+                )
                 self._report_error("daily story graph generation", exc)
                 store.fail_daily_story_graph(
                     day_index,
@@ -1077,6 +1239,9 @@ class WorldSceneService:
     ) -> ScenePackage:
         with WorldStore(self.db_path) as day_store:
             day_index = int(day_store.get_meta("current_story_day", "1") or 1)
+        # Local-only and fast. Run before taking the scene lock so an older
+        # database cannot invert the scene/generation lock order.
+        self.prepare_daily_story_skeleton(day_index)
         request_id = str(request["request_id"])
         request_json = json.dumps(
             dict(request), separators=(",", ":"), sort_keys=True
@@ -1089,40 +1254,17 @@ class WorldSceneService:
             )
             opening = self._ambient_scene(day_index, "opening")
             if store.get_meta(f"bridge_ack:{opening.scene_id}") is None:
-                if graph_record is None:
-                    self._start_daily_story_generation(day_index)
                 return self._persist_ambient_request(store, request, opening)
-            if graph_record is None:
-                self._start_daily_story_generation(day_index)
-                return self._persist_ambient_request(
-                    store, request, self._ambient_scene(day_index, "waiting")
-                )
-            if graph_record["status"] == "generating":
-                return self._persist_ambient_request(
-                    store, request, self._ambient_scene(day_index, "waiting")
-                )
-            if graph_record["status"] == "failed":
-                report_key = (
-                    f"story_failure_reported:{day_index}:"
-                    f"{graph_record['attempt_count']}"
-                )
-                if store.get_meta(report_key) is None:
-                    store.set_meta(report_key, "1")
-                    raise BridgeError(
-                        503,
-                        "story_generation_failed",
-                        f"daily story generation failed: {graph_record['error_code']}",
-                    )
-                self._start_daily_story_generation(day_index)
-                return self._persist_ambient_request(
-                    store, request, self._ambient_scene(day_index, "waiting")
+            if graph_record is None or graph_record["status"] != "ready":
+                raise BridgeError(
+                    503,
+                    "story_skeleton_unavailable",
+                    "the local story skeleton could not be prepared",
                 )
             raw_graph = graph_record["graph"]
             if not isinstance(raw_graph, Mapping):
                 raise ValueError("ready daily story graph payload was invalid")
             graph = DailyStoryGraph.from_dict(raw_graph)
-            if self.prefetch_days == 1:
-                self._start_daily_story_generation(day_index + 1)
             doorbell = self._ambient_scene(day_index, "doorbell")
             if store.get_meta(f"bridge_ack:{doorbell.scene_id}") is None:
                 return self._persist_ambient_request(store, request, doorbell)
@@ -1174,6 +1316,36 @@ class WorldSceneService:
                     raise ValueError("daily result node had no committed branch")
                 source_event_id = int(commit["service_event_id"])
             scene = node.scene
+            materialized_key = f"story_materialized_scene:{scene.scene_id}"
+            materialized_payload = store.get_meta(materialized_key)
+            if materialized_payload is not None:
+                persisted_materialized = json.loads(materialized_payload)
+                if isinstance(persisted_materialized, dict):
+                    scene = ScenePackage.from_dict(persisted_materialized)
+            elif node.kind is StoryNodeKind.ARRIVAL_ORDER:
+                # The skeleton contains the authoritative order and node IDs;
+                # only the selected arrival dialogue is sent to the provider.
+                event = self._find_event(store, source_event_id)
+                names = {
+                    agent.agent_id: agent.display_name
+                    for agent in store.list_agents()
+                }
+                provider = self.provider_factory()
+                generated = self._generated_scene(
+                    event,
+                    names,
+                    store.current_tick,
+                    self._engine(store, provider),
+                    provider,
+                    scene_id=scene.scene_id,
+                )
+                if generated.order is None or node.scene.order is None:
+                    raise ValueError("generated arrival did not contain an order")
+                scene = replace(generated, order=replace(generated.order, order_id=node.scene.order.order_id))
+                store.set_meta(
+                    materialized_key,
+                    json.dumps(scene.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                )
             record = {
                 "dialogue_version": 3,
                 "request": request_json,
@@ -1210,6 +1382,34 @@ class WorldSceneService:
                     ),
                 )
             return scene
+
+    def scene_speaker_hint(self, request: Mapping[str, Any]) -> str | None:
+        """Return the next known portrait without constructing a provider."""
+
+        if not self.daily_story_mode:
+            return None
+        with self._lock, WorldStore(self.db_path) as store:
+            day_index = int(store.get_meta("current_story_day", "1") or 1)
+            if store.get_meta(f"bridge_ack:opening_day_{day_index}") is None:
+                return None
+            graph_record = store.get_daily_story_graph(
+                day_index, DAILY_STORY_GRAPH_VERSION
+            )
+            if graph_record is None or graph_record["status"] != "ready":
+                return None
+            if store.get_meta(f"bridge_ack:doorbell_day_{day_index}") is None:
+                return None
+            raw_graph = graph_record["graph"]
+            if not isinstance(raw_graph, Mapping):
+                return None
+            graph = DailyStoryGraph.from_dict(raw_graph)
+            progress = store.get_daily_story_progress(
+                day_index, DAILY_STORY_GRAPH_VERSION
+            )
+            if progress is None or progress["status"] == "completed":
+                return None
+            node = self._story_node(graph, str(progress["current_node_id"]))
+            return node.customer_id
 
     def open_scene(self, request: Mapping[str, Any]) -> ScenePackage:
         if self.daily_story_mode:
@@ -1432,6 +1632,25 @@ class WorldSceneService:
                     "income_delta": income_delta,
                 },
             )
+            reaction_scene = result_node.scene
+            # Result branches in the skeleton are cheap placeholders. Only
+            # the branch the player actually selected is sent to the provider.
+            try:
+                provider = self.provider_factory()
+                reaction_scene = self._generated_reaction(
+                    order,
+                    result,
+                    service_event_id,
+                    store.current_tick,
+                    self._engine(store, provider),
+                    provider,
+                    scene_id=result_node.scene.scene_id,
+                )
+            except BYOKError as exc:
+                if not self.allow_provider_fallback:
+                    raise
+                self._report_error("selected result provider fallback", exc)
+                reaction_scene = result_node.scene
             store.record_story_branch_commit(
                 day_index=day_index,
                 generation_version=DAILY_STORY_GRAPH_VERSION,
@@ -1454,7 +1673,7 @@ class WorldSceneService:
                 "resolution_input": resolution_input,
                 "service_event_id": service_event_id,
                 "result": result.to_dict(),
-                "scene": result_node.scene.to_dict(),
+                "scene": reaction_scene.to_dict(),
                 "income_delta": income_delta,
             }
             store.set_meta(
@@ -1468,26 +1687,26 @@ class WorldSceneService:
             )
             store.set_meta(request_key, request_json)
             store.set_meta(
-                f"bridge_scene:{result_node.scene.scene_id}", service_event_id
+                f"bridge_scene:{reaction_scene.scene_id}", service_event_id
             )
             store.set_meta(
-                f"bridge_scene_payload:{result_node.scene.scene_id}",
+                f"bridge_scene_payload:{reaction_scene.scene_id}",
                 json.dumps(
-                    result_node.scene.to_dict(),
+                    reaction_scene.to_dict(),
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
                 ),
             )
             store.set_meta(
-                f"story_scene_node:{result_node.scene.scene_id}",
+                f"story_scene_node:{reaction_scene.scene_id}",
                 json.dumps(
                     {"day_index": day_index, "node_id": result_node_id},
                     separators=(",", ":"),
                     sort_keys=True,
                 ),
             )
-        return OrderResolution(result, result_node.scene, income_delta)
+        return OrderResolution(result, reaction_scene, income_delta)
 
     def resolve_order(self, request: Mapping[str, Any]) -> OrderResolution:
         scene_id = str(request["scene_id"])

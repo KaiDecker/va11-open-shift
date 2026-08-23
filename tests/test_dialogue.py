@@ -35,7 +35,15 @@ from open_shift.lore import (
     CANON_SOURCE_URLS,
     CHARACTER_LORE,
     JILL_LORE,
+    ORIGINAL_CANON_FACTS,
+    ORIGINAL_DIALOGUE_CHARACTER_LINE_COUNTS,
+    ORIGINAL_DIALOGUE_CORPUS_FILE_COUNT,
+    ORIGINAL_DIALOGUE_CORPUS_LINE_COUNT,
+    ORIGINAL_DIALOGUE_CORPUS_SPECIAL_LINE_COUNT,
+    ORIGINAL_DIALOGUE_CORPUS_SPEAKER_LABEL_COUNT,
+    ORIGINAL_DIALOGUE_CORPUS_STOPLIP_RECORD_COUNT,
     ORIGINAL_DIALOGUE_STYLE,
+    SELECTED_TIMELINE_FACTS,
     CONTINUITY_FACTS,
 )
 from open_shift.models import (
@@ -196,16 +204,32 @@ class DialogueContractTests(unittest.TestCase):
             CANON_SOURCE_URLS,
         )
         self.assertTrue(CONTINUITY_FACTS)
+        self.assertTrue(ORIGINAL_CANON_FACTS)
+        self.assertTrue(SELECTED_TIMELINE_FACTS)
+        self.assertIn("已与 Gaby 和解", "".join(SELECTED_TIMELINE_FACTS))
         self.assertTrue(ORIGINAL_DIALOGUE_STYLE)
+        self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_FILE_COUNT, 28)
+        self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_LINE_COUNT, 17_194)
+        self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_SPECIAL_LINE_COUNT, 70)
+        self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_SPEAKER_LABEL_COUNT, 53)
+        self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_STOPLIP_RECORD_COUNT, 17_271)
+        self.assertEqual(dict(ORIGINAL_DIALOGUE_CHARACTER_LINE_COUNTS)["Jill"], 7_036)
         self.assertNotIn("Classy", repr(CHARACTER_LORE["stella"]))
 
     def test_observation_contains_only_current_speaker_private_state(self) -> None:
         observation = dialogue_observation(turn_context())
         encoded = json.dumps(observation, ensure_ascii=False)
+        self.assertIn("original_canon_facts", observation)
+        self.assertIn("selected_timeline_facts", observation)
+        self.assertIn("已与 Gaby 和解", "".join(observation["selected_timeline_facts"]))
         self.assertEqual(observation["speaker"]["agent_id"], "dana")
         self.assertIn("stable_core", observation["speaker"]["canon"])
         self.assertIn("voice", observation["speaker"]["canon"])
+        self.assertIn("speech_cadence", observation["speaker"]["canon"])
+        self.assertIn("interaction_patterns", observation["speaker"]["canon"])
         self.assertIn("drink_preferences", observation["speaker"]["canon"])
+        self.assertIn("decision_principles", observation["speaker"]["canon"])
+        self.assertIn("behavioral_boundaries", observation["speaker"]["canon"])
         self.assertEqual(
             observation["private_relevant_memories"][0]["summary"],
             "Dana privately remembers Dorothy checking in.",
@@ -221,6 +245,9 @@ class DialogueContractTests(unittest.TestCase):
         self.assertIn("不得询问", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("不可自行改写", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("通用客服式句型", DIALOGUE_SYSTEM_INSTRUCTION)
+        self.assertIn("一个反应节拍", DIALOGUE_SYSTEM_INSTRUCTION)
+        self.assertIn("speech_cadence", DIALOGUE_SYSTEM_INSTRUCTION)
+        self.assertIn("interaction_patterns", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("唯一执行调酒", DIALOGUE_SYSTEM_INSTRUCTION)
         self.assertIn("Dana", DIALOGUE_SYSTEM_INSTRUCTION)
         for forbidden_meta_term in (
@@ -239,6 +266,18 @@ class DialogueContractTests(unittest.TestCase):
         self.assertNotIn("secret_location", encoded)
         self.assertNotIn("private_mood", encoded)
         self.assertNotIn("999", encoded)
+
+    def test_character_lore_exposes_action_boundaries_for_every_agent(self) -> None:
+        for agent_id, lore in CHARACTER_LORE.items():
+            payload = lore.prompt_payload()
+            self.assertGreaterEqual(len(payload["decision_principles"]), 2)
+            self.assertGreaterEqual(len(payload["behavioral_boundaries"]), 2)
+            self.assertGreaterEqual(len(payload["speech_cadence"]), 2)
+            self.assertGreaterEqual(len(payload["interaction_patterns"]), 2)
+            self.assertTrue(all(item for item in payload["decision_principles"]))
+            self.assertTrue(all(item for item in payload["behavioral_boundaries"]))
+            self.assertTrue(all(item for item in payload["speech_cadence"]))
+            self.assertTrue(all(item for item in payload["interaction_patterns"]))
 
     def test_output_validation_rejects_wrong_fields_and_allows_addressing_jill(self) -> None:
         context = turn_context()
@@ -302,6 +341,8 @@ class DialogueContractTests(unittest.TestCase):
         encoded = json.dumps(observation, ensure_ascii=False)
         self.assertEqual(observation["speaker"]["speaker_id"], "jill")
         self.assertEqual(observation["speaker"]["role"], "player_bartender")
+        self.assertIn("speech_cadence", observation["speaker"]["canon"])
+        self.assertIn("interaction_patterns", observation["speaker"]["canon"])
         self.assertNotIn("private_relevant_memories", encoded)
         self.assertNotIn("relationships", encoded)
         draft = validate_player_dialogue_output(
@@ -348,7 +389,7 @@ class DialogueContractTests(unittest.TestCase):
         self.assertEqual(provider.calls_used, 1)
         call = transport.calls[0]
         self.assertEqual(call["payload"]["response_format"], {"type": "json_object"})
-        self.assertEqual(call["payload"]["max_tokens"], 256)
+        self.assertEqual(call["payload"]["max_tokens"], 1024)
         self.assertEqual(call["payload"]["thinking"], {"type": "disabled"})
         user_input = call["payload"]["messages"][1]["content"]
         self.assertIn("private_relevant_memories", user_input)
@@ -433,6 +474,48 @@ class DialogueContractTests(unittest.TestCase):
         self.assertEqual(result.text, "先把今天的事情说清楚。")
         self.assertEqual(provider.calls_used, 2)
         self.assertEqual(len(transport.calls), 2)
+
+    def test_thinking_dialogue_retries_once_without_reasoning(self) -> None:
+        transport = SequenceTransport(
+            [
+                {"choices": [{"message": {"content": "truncated"}}]},
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "expression_id": "neutral",
+                                        "text": "那就先把这杯放在这里。",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+            ]
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                max_calls=2,
+                thinking_mode=ThinkingMode.ENABLED,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+
+        result = provider.generate_dialogue_line(turn_context())
+
+        self.assertEqual(result.text, "那就先把这杯放在这里。")
+        self.assertEqual(
+            transport.calls[0]["payload"]["thinking"], {"type": "enabled"}
+        )
+        self.assertEqual(
+            transport.calls[1]["payload"]["thinking"], {"type": "disabled"}
+        )
 
     def test_byok_player_dialogue_retries_one_invalid_contract_response(self) -> None:
         transport = SequenceTransport(

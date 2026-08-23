@@ -1,4 +1,4 @@
-if (global.cur_day == 1001)
+if (global.cur_day >= 1001)
 {
     if (global.ag_open_shift_intro_seen == 0)
         global.ag_open_shift_intro_pending = 1;
@@ -57,7 +57,7 @@ if (global.cur_day == 1001)
     global.porndl = 1;
     global.lightdl = 1;
     global.housedl = 1;
-    global.jillcomment = "JILL: 正在准备今天的营业……";
+    global.jillcomment = "O.S.：正在准备今天的营业……";
     if (instance_exists(room_text))
     {
         with (room_text)
@@ -77,23 +77,13 @@ if (global.cur_day == 1001)
             dismiss = "点击鼠标关闭";
         }
     }
-    if (!instance_exists(ag_preload_controller))
-    {
-        global.ag_prefetch_ready = 0;
-        instance_create(x, y, ag_preload_controller);
-    }
-}
-
-// The original room setup is gated to cur_day 1001. Open Shift keeps its
-// story day separately, so later O.S. days still need the apartment popup
-// text initialized when the room is recreated.
-if (global.cur_day >= 1001 && instance_exists(room_text))
-{
-    with (room_text)
-    {
-        deadline = global.datestring;
-        distraction = "Glitch City 的日子仍在继续。#熟悉的客人也有了新的生活。";
-        unlocked = "今日营业已准备完成。点击‘去酒吧上班’开始。";
-        dismiss = "点击鼠标关闭";
-    }
+    // Restart preparation on every return to Jill's room. A persistent
+    // controller can otherwise retain yesterday's ready flag and let the
+    // original work button enter the bar before today's graph exists.
+    if (instance_exists(ag_preload_controller))
+        with (ag_preload_controller) instance_destroy();
+    global.ag_prefetch_ready = 0;
+    global.ag_prefetch_day = 0;
+    global.ag_preload_notice_day = 0;
+    instance_create(x, y, ag_preload_controller);
 }

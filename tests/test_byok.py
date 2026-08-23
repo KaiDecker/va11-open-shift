@@ -309,6 +309,59 @@ class BYOKProviderTests(unittest.TestCase):
         )
         self.assertEqual(value["action_type"], "work")
 
+    def test_model_output_ignores_thinking_block_before_final_json(self) -> None:
+        from open_shift.byok import _as_action_object
+
+        value = _as_action_object(
+            '<think>考虑过这个示例：{"action_type":"rest"}</think>\n'
+            '{"action_type":"work","target_id":null,"location":null,'
+            '"duration_minutes":480,"reason_code":"earn_money"}'
+        )
+        self.assertEqual(value["action_type"], "work")
+
+    def test_chat_output_accepts_structured_content_parts(self) -> None:
+        transport = FakeTransport(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "output_text", "text": action_json()}
+                            ],
+                            "reasoning_content": "内部推理不应作为答案",
+                        }
+                    }
+                ]
+            }
+        )
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret",
+            transport=transport,
+        )
+        self.assertEqual(provider.decide(context()).action_type.value, "message")
+
+    def test_chat_output_rejects_reasoning_without_final_content(self) -> None:
+        transport = FakeTransport(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "reasoning_content": "我还在思考",
+                        }
+                    }
+                ]
+            }
+        )
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret",
+            transport=transport,
+        )
+        with self.assertRaisesRegex(BYOKResponseError, "final content"):
+            provider.decide(context())
+
     def test_model_output_still_rejects_json_arrays(self) -> None:
         from open_shift.byok import BYOKResponseError, _as_action_object
 

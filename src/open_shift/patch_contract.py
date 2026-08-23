@@ -184,7 +184,8 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         'ag_current_speaker != "jill"',
         'ag_current_speaker != "jill" && ag_current_speaker != ""',
         'ag_speaker_id == ""',
-        "冰箱压缩机在吧台后低声运转。",
+        'ag_wait_box.input_text[0] = "..."',
+        "dialogue_wait",
         "story_generation_failed",
         "ag_was_order_response",
         "ag_error_code",
@@ -208,10 +209,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "global.headline1",
         "global.artcomment1",
         "ag_preload_controller",
-        "正在准备今天的营业",
+        "今天的对白会在酒吧实时生成",
         "ag_prefetch_ready",
         "/v1/story/prepare",
-        "今日营业已准备完成",
+        "今日世界状态已准备完成",
         "本地服务暂时不可用",
         "global.aacomment54",
         "OPEN SHIFT",
@@ -222,6 +223,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "global.jillcomment",
         "global.ag_story_day_advance_applied",
         "global.ag_story_day += 1",
+        "global.ag_request_epoch = 0",
+        "global.ag_request_epoch += 1",
+        "ag_request_scope",
+        "ag_preload_scope",
         "global.shop_casitas = 1",
         "global.gotmeshop = 1",
         "global.cur_day == 1001",
@@ -235,6 +240,28 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         raise PatchContractError("GML still required a paired save before the next day")
     if combined.count("global.ag_story_day = 1") != 1:
         raise PatchContractError("O.S. story day initialization was missing")
+    if combined.count("global.ag_request_epoch = 0") != 1:
+        raise PatchContractError("O.S. request epoch initialization was missing")
+    recurring_day_sources = {
+        "ag_bridge_mixcontrol_append.gml",
+        "ag_towork_button_mouse.gml",
+        "ag_show_room_create_append.gml",
+        "ag_popup_room_step.gml",
+        "ag_aa_button_1_step.gml",
+        "ag_aa_button_2_step.gml",
+        "ag_aa_button_3_step.gml",
+    }
+    day_one_only = sorted(
+        source.name
+        for source in sources
+        if source.name in recurring_day_sources
+        and "global.cur_day >= 1001" not in source.read_text(encoding="utf-8")
+    )
+    if day_one_only:
+        raise PatchContractError(
+            "recurring O.S. day hooks did not cover DAY 2+: "
+            + ", ".join(day_one_only)
+        )
     missing = [item for item in required_boundaries if item not in combined]
     if missing:
         raise PatchContractError(

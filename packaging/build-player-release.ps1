@@ -1,5 +1,5 @@
 param(
-    [string] $Version = "0.15.0-rc.5",
+    [string] $Version = "0.16.0-rc.1",
     [string] $Output = (Join-Path (Join-Path $PSScriptRoot "..\work") "open-shift-player-$Version.zip"),
     [string] $Python = "python",
     [string] $WebViewSdk = "",
@@ -34,6 +34,16 @@ function Find-WebViewSdk {
     throw "WebView2 SDK files were not found. Use -WebViewSdk with a directory containing the Core, WinForms, and Loader DLLs."
 }
 $resolvedWebViewSdk = Find-WebViewSdk
+$utmtCheck = Join-Path ([IO.Path]::GetTempPath()) ("open-shift-utmt-check-" + [guid]::NewGuid().ToString("N"))
+try {
+    Expand-Archive -LiteralPath $UtmtCliZip -DestinationPath $utmtCheck -Force
+    if (-not (Get-ChildItem -LiteralPath $utmtCheck -Filter "UndertaleModCli.exe" -Recurse -File -ErrorAction SilentlyContinue)) {
+        throw "-UtmtCliZip must contain UndertaleModCli.exe from UTMT_CLI_v0.9.1.2-Windows.zip; a desktop UndertaleModTool archive is not sufficient."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $utmtCheck -Recurse -Force -ErrorAction SilentlyContinue
+}
 $webViewCore = Join-Path $resolvedWebViewSdk "Microsoft.Web.WebView2.Core.dll"
 $webViewForms = Join-Path $resolvedWebViewSdk "Microsoft.Web.WebView2.WinForms.dll"
 $webViewLoader = Join-Path $resolvedWebViewSdk "WebView2Loader.dll"

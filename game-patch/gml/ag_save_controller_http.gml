@@ -65,7 +65,7 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         {
             global.ag_story_day = ag_response_world_day;
             global.datestring = "O.S. DAY " + string(global.ag_story_day);
-            global.jillcomment = "JILL: 已保存到 DAY " + string(global.ag_story_day) + "。";
+            global.jillcomment = "O.S.：已保存到 DAY " + string(global.ag_story_day) + "。";
             global.block_click = 0;
             instance_destroy();
         }

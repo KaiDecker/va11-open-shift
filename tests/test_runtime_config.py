@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from open_shift.cli import main
+from open_shift.byok import ThinkingMode
 from open_shift.runtime_config import RuntimeConfigError, load_runtime_config
 
 
@@ -35,9 +36,28 @@ prefetch_days = 1
                 )
             )
             self.assertEqual(config.to_byok_config().model, "deepseek-v4-flash")
+            self.assertIs(config.provider_thinking, ThinkingMode.DISABLED)
             rendered = config.redacted_dict()
             self.assertNotIn("do-not-store", str(rendered).lower())
             self.assertEqual(rendered["world"]["prefetch_days"], 1)
+
+    def test_loads_gui_supported_thinking_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = load_runtime_config(
+                self.write(
+                    Path(temp_dir),
+                    """
+[provider]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+thinking = "enabled"
+
+[world]
+prefetch_days = 1
+""",
+                )
+            )
+            self.assertIs(config.provider_thinking, ThinkingMode.ENABLED)
 
     def test_rejects_secret_values_and_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

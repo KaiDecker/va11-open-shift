@@ -112,6 +112,11 @@ class SocialSimulationTests(unittest.TestCase):
                 store.append_memory("dana", dana_event, 0.8, "Dana secret", ["secret"])
                 store.append_memory("alma", alma_event, 1.0, "Alma secret", ["secret"])
                 observation = decision_observation(engine._context(20, "dana"))
+                self.assertIn("public_identity", observation["actor"])
+                self.assertIn("canon", observation["actor"])
+                self.assertIn("decision_principles", observation["actor"]["canon"])
+                self.assertIn("behavioral_boundaries", observation["actor"]["canon"])
+                self.assertIn("不能代替 Jill 调酒", "".join(observation["actor"]["canon"]["behavioral_boundaries"]))
                 summaries = {
                     memory["summary"] for memory in observation["relevant_memories"]
                 }

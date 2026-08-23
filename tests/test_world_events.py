@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from open_shift.bridge import BridgeApplication, BridgeConfig, BridgeError
+from open_shift.providers import MockProvider
 from open_shift.world_bridge import WorldSceneService
 from open_shift.world_events import PublicWorldEvent
 
@@ -170,6 +171,32 @@ class WorldEventTests(unittest.TestCase):
             self.assertEqual(result["last_completed_story_day"], 0)
             replay = service.prepare_story_day({"request_id": "prepare-2"})
             self.assertEqual(replay, result)
+
+    def test_story_prepare_does_not_call_dialogue_provider(self) -> None:
+        class CountingProvider(MockProvider):
+            dialogue_calls = 0
+            player_calls = 0
+
+            @classmethod
+            def generate_dialogue_line(cls, context):
+                cls.dialogue_calls += 1
+                return super().generate_dialogue_line(context)
+
+            @classmethod
+            def generate_player_dialogue_line(cls, context):
+                cls.player_calls += 1
+                return super().generate_player_dialogue_line(context)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=CountingProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            service.prepare_story_day({"request_id": "skeleton-only"})
+            self.assertEqual(CountingProvider.dialogue_calls, 0)
+            self.assertEqual(CountingProvider.player_calls, 0)
 
 
 if __name__ == "__main__":

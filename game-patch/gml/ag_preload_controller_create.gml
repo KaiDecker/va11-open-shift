@@ -1,11 +1,21 @@
 ag_preload_state = 0;
 ag_preload_http_request = -1;
 ag_preload_request_id = "";
+ag_preload_started_at = current_time;
+ag_preload_finished_at = 0;
+ag_preload_http_status = 0;
+ag_preload_debug_last_state = -1;
+ag_preload_debug_last_event = "created";
 ag_preload_timeout_at = current_time + 120000;
+ag_preload_retry_at = 0;
 ag_preload_error = "";
 ag_preload_attempt = 1;
+global.ag_request_epoch += 1;
+ag_preload_scope = string(global.ag_request_epoch);
 global.ag_prefetch_ready = 0;
 global.ag_prefetch_failed = 0;
+global.ag_prefetch_day = 0;
+global.ag_preload_notice_day = 0;
 
 ini_open("open-shift-runtime.ini");
 ag_preload_port = ini_read_real("bridge", "port", 8711);
@@ -26,7 +36,7 @@ else
     ds_map_add(ag_preload_headers, "Content-Type", "application/json");
     ds_map_add(ag_preload_headers, "X-Open-Shift-Token", ag_preload_token);
     ag_preload_body = ds_map_create();
-    ag_preload_request_id = "prepare_" + ag_preload_session + "_" + string(ag_preload_attempt);
+    ag_preload_request_id = "prepare_" + ag_preload_session + "_" + ag_preload_scope + "_" + string(ag_preload_attempt);
     ds_map_add(ag_preload_body, "protocol_version", 1);
     ds_map_add(ag_preload_body, "request_id", ag_preload_request_id);
     ds_map_add(ag_preload_body, "client_session_id", ag_preload_session);
@@ -36,4 +46,6 @@ else
     ag_preload_token = "";
     ag_preload_timeout_at = current_time + 120000;
     ag_preload_state = 1;
+    ag_preload_debug_last_event = "request_sent";
+    show_debug_message("[OPEN SHIFT] preload request_sent day=" + string(global.ag_story_day) + " attempt=" + string(ag_preload_attempt) + " request=" + ag_preload_request_id);
 }

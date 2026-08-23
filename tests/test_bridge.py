@@ -146,6 +146,72 @@ class BridgeApplicationTests(unittest.TestCase):
         self.assertEqual(scene["return_to"], "bar")
         self.assertEqual(response.body["request_id"], "open-1")
 
+    def test_scene_job_is_pollable_and_secret_free(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def provider(request: dict[str, Any]) -> ScenePackage:
+            started.set()
+            release.wait(2)
+            return stage_scene()
+
+        def stage_scene() -> ScenePackage:
+            return ScenePackage(
+                "async_scene",
+                (SceneLine("async_line", "stella", "sprite_stella", "neutral", "异步场景已准备好。"),),
+            )
+
+        app = BridgeApplication(
+            BridgeConfig(token=TOKEN, port=0),
+            scene_provider=provider,
+            scene_hint_provider=lambda request: "stella",
+        )
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "async-open-1",
+            "client_session_id": self.session_id,
+        }
+        queued = app.handle("POST", "/v1/scenes/jobs", self.headers, encoded(request))
+        self.assertEqual(queued.status, 202)
+        self.assertIn(queued.body["status"], {"queued", "running", "ready"})
+        self.assertNotIn("request", queued.body)
+        self.assertEqual(queued.body["speaker_hint"], "stella")
+        self.assertTrue(started.wait(1))
+        running = app.handle("GET", "/v1/scenes/jobs/job_async-open-1", self.headers)
+        self.assertEqual(running.status, 200)
+        self.assertIn(running.body["status"], {"running", "ready"})
+        release.set()
+        for _ in range(20):
+            ready = app.handle("GET", "/v1/scenes/jobs/job_async-open-1", self.headers)
+            if ready.body["status"] == "ready":
+                break
+            threading.Event().wait(0.01)
+        self.assertEqual(ready.body["status"], "ready")
+        self.assertEqual(ready.body["scene"]["scene_id"], "async_scene")
+        self.assertIsInstance(ready.body["elapsed_ms"], int)
+
+        legacy_result = app.handle(
+            "GET", "/v1/scenes/jobs/job_async-open-1/result", self.headers
+        )
+        self.assertEqual(legacy_result.status, 200)
+        self.assertEqual(set(legacy_result.body), {"protocol_version", "request_id", "scene"})
+        self.assertEqual(legacy_result.body["scene"]["scene_id"], "async_scene")
+
+    def test_scene_job_request_id_conflict_is_rejected(self) -> None:
+        app = BridgeApplication(BridgeConfig(token=TOKEN, port=0))
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "async-conflict",
+            "client_session_id": self.session_id,
+        }
+        first = app.handle("POST", "/v1/scenes/jobs", self.headers, encoded(request))
+        changed = dict(request)
+        changed["client_session_id"] = "another-session"
+        second = app.handle("POST", "/v1/scenes/jobs", self.headers, encoded(changed))
+        self.assertEqual(first.status, 202)
+        self.assertEqual(second.status, 409)
+        self.assertEqual(second.body["error"]["code"], "request_id_conflict")
+
     def test_open_and_ack_are_idempotent(self) -> None:
         first = self.open_scene("same-open")
         second = self.open_scene("same-open")
