@@ -61,6 +61,7 @@ class ResponseFormat(str, Enum):
 class ThinkingMode(str, Enum):
     DEFAULT = "default"
     DISABLED = "disabled"
+    BALANCED = "balanced"
     ENABLED = "enabled"
 
 
@@ -136,6 +137,23 @@ class BYOKConfig:
             else "chat/completions"
         )
         return f"{self.base_url.rstrip('/')}/{suffix}"
+
+    def for_operation(self, operation: str) -> "BYOKConfig":
+        """Return the effective thinking setting for one provider operation.
+
+        ``balanced`` reserves reasoning for structured world decisions.  The
+        player-facing dialogue path stays fast so a normal bar exchange does
+        not acquire the latency and token cost of full Thinking.
+        """
+
+        if self.thinking_mode is not ThinkingMode.BALANCED:
+            return self
+        effective = (
+            ThinkingMode.ENABLED
+            if operation in {"action", "story_graph"}
+            else ThinkingMode.DISABLED
+        )
+        return replace(self, thinking_mode=effective)
 
 
 class JsonTransport(Protocol):
@@ -764,11 +782,13 @@ class BYOKProvider:
         )
 
     def decide(self, context: DecisionContext) -> ActionProposal:
+        operation_config = self.config.for_operation("action")
         response = self._request(
-            _responses_payload(self.config, context)
-            if self.config.protocol is APIProtocol.RESPONSES
-            else _chat_payload(self.config, context),
+            _responses_payload(operation_config, context)
+            if operation_config.protocol is APIProtocol.RESPONSES
+            else _chat_payload(operation_config, context),
             operation="action",
+            thinking_mode=operation_config.thinking_mode,
         )
         raw = (
             _extract_responses_output(response)
@@ -781,7 +801,11 @@ class BYOKProvider:
         return validate_action_output(value, context)
 
     def _request(
-        self, payload: Mapping[str, Any], *, operation: str = "provider_request"
+        self,
+        payload: Mapping[str, Any],
+        *,
+        operation: str = "provider_request",
+        thinking_mode: ThinkingMode | None = None,
     ) -> dict[str, Any]:
         if self.calls_used >= self.config.max_calls:
             raise BYOKBudgetExceeded("provider call budget was exhausted")
@@ -793,7 +817,7 @@ class BYOKProvider:
             operation=operation,
             call=call_number,
             model=self.config.model,
-            thinking=self.config.thinking_mode.value,
+            thinking=(thinking_mode or self.config.thinking_mode).value,
         )
         try:
             response = self.transport.post_json(
@@ -826,17 +850,18 @@ class BYOKProvider:
     def generate_dialogue_line(
         self, context: DialogueTurnContext
     ) -> DialogueLineDraft:
+        operation_config = self.config.for_operation("dialogue")
         payload = (
-            _dialogue_responses_payload(self.config, context)
-            if self.config.protocol is APIProtocol.RESPONSES
-            else _dialogue_chat_payload(self.config, context)
+            _dialogue_responses_payload(operation_config, context)
+            if operation_config.protocol is APIProtocol.RESPONSES
+            else _dialogue_chat_payload(operation_config, context)
         )
         payloads = [payload]
-        if self.config.thinking_mode is ThinkingMode.ENABLED:
+        if operation_config.thinking_mode is ThinkingMode.ENABLED:
             # Some DeepSeek-compatible deployments still truncate or emit
             # prose for a long Thinking dialogue request. Retry that one line
             # without reasoning rather than making the whole first day fail.
-            quiet_config = replace(self.config, thinking_mode=ThinkingMode.DISABLED)
+            quiet_config = replace(operation_config, thinking_mode=ThinkingMode.DISABLED)
             payloads.append(
                 _dialogue_responses_payload(quiet_config, context)
                 if quiet_config.protocol is APIProtocol.RESPONSES
@@ -846,7 +871,8 @@ class BYOKProvider:
             payloads.append(payload)
         for attempt, attempt_payload in enumerate(payloads):
             try:
-                response = self._request(attempt_payload, operation="dialogue")
+                attempt_mode = ThinkingMode.ENABLED if attempt == 0 and operation_config.thinking_mode is ThinkingMode.ENABLED else ThinkingMode.DISABLED
+                response = self._request(attempt_payload, operation="dialogue", thinking_mode=attempt_mode)
                 raw = (
                     _extract_responses_output(response)
                     if self.config.protocol is APIProtocol.RESPONSES
@@ -870,14 +896,15 @@ class BYOKProvider:
     def generate_player_dialogue_line(
         self, context: PlayerDialogueTurnContext
     ) -> DialogueLineDraft:
+        operation_config = self.config.for_operation("player_dialogue")
         payload = (
-            _player_dialogue_responses_payload(self.config, context)
-            if self.config.protocol is APIProtocol.RESPONSES
-            else _player_dialogue_chat_payload(self.config, context)
+            _player_dialogue_responses_payload(operation_config, context)
+            if operation_config.protocol is APIProtocol.RESPONSES
+            else _player_dialogue_chat_payload(operation_config, context)
         )
         payloads = [payload]
-        if self.config.thinking_mode is ThinkingMode.ENABLED:
-            quiet_config = replace(self.config, thinking_mode=ThinkingMode.DISABLED)
+        if operation_config.thinking_mode is ThinkingMode.ENABLED:
+            quiet_config = replace(operation_config, thinking_mode=ThinkingMode.DISABLED)
             payloads.append(
                 _player_dialogue_responses_payload(quiet_config, context)
                 if quiet_config.protocol is APIProtocol.RESPONSES
@@ -887,7 +914,8 @@ class BYOKProvider:
             payloads.append(payload)
         for attempt, attempt_payload in enumerate(payloads):
             try:
-                response = self._request(attempt_payload, operation="player_dialogue")
+                attempt_mode = ThinkingMode.ENABLED if attempt == 0 and operation_config.thinking_mode is ThinkingMode.ENABLED else ThinkingMode.DISABLED
+                response = self._request(attempt_payload, operation="player_dialogue", thinking_mode=attempt_mode)
                 raw = (
                     _extract_responses_output(response)
                     if self.config.protocol is APIProtocol.RESPONSES
