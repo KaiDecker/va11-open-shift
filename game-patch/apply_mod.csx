@@ -231,7 +231,7 @@ importGroup.QueueAppend(variableControllerCreate, ReadSource("ag_var_controller_
 
 UndertaleCode tabletCreate = Data.Code.ByName("gml_Object_tablet_control_Create_0");
 importGroup.QueueAppend(tabletCreate, @"
-if (global.cur_day == 1001 && !instance_exists(ag_tablet_controller))
+if (global.cur_day >= 1001 && !instance_exists(ag_tablet_controller))
     instance_create(x, y, ag_tablet_controller);");
 
 for (int slot = 1; slot <= 24; slot++)
@@ -287,7 +287,7 @@ if (instance_exists(ag_open_shift_start) && ag_open_shift_start.ready == 1)
 
 UndertaleCode dialogCreate = Data.Code.ByName("gml_Object_dialog_control_Create_0");
 importGroup.QueueAppend(dialogCreate, @"
-if (global.cur_day == 1001 && !instance_exists(ag_bridge_controller))
+if (global.cur_day >= 1001 && !instance_exists(ag_bridge_controller))
 {
     global.block_click = 1;
     instance_create(x, y, ag_bridge_controller);
@@ -341,4 +341,4 @@ foreach (string name in expectedCode)
         throw new Exception("Compiled patch event was missing: " + name);
 }
 
-ScriptMessage("Open Shift Stage 11 original day loop patch compiled successfully.");
+ScriptMessage("Open Shift recurring day dialogue patch compiled successfully.");

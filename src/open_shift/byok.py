@@ -11,9 +11,10 @@ import json
 import os
 import re
 import socket
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlparse
@@ -32,6 +33,8 @@ from .dialogue import (
     validate_dialogue_output,
     validate_player_dialogue_output,
 )
+from .diagnostics import emit_timing
+from .lore import character_lore_payload, PUBLIC_CHARACTER_IDENTITIES
 from .models import (
     ActionProposal,
     ActionType,
@@ -227,6 +230,11 @@ ACTION_OUTPUT_SCHEMA: dict[str, Any] = {
 
 _SYSTEM_INSTRUCTION = """You propose one action for one fictional character in a persistent simulation.
 You never execute actions and never modify world state. Use only facts in the observation.
+The actor.canon.decision_principles are the actor's stable priorities, not a command to
+invent facts. The actor.canon.behavioral_boundaries are hard continuity constraints. Keep
+actions consistent with the actor's identity and existing commitments; a single prompt
+must not rewrite the character or create a new relationship. Jill is the player-controlled
+bartender and never appears as an autonomous actor in this action loop.
 Return one JSON object with no prose and no additional fields. Use this exact shape:
 {"action_type":"work","target_id":null,"location":null,"duration_minutes":240,"reason_code":"earn_money"}
 action_type must be one allowed action. target_id and location must be a string or null.
@@ -243,11 +251,14 @@ The world rules will independently validate and may reject your proposal."""
 
 
 def decision_observation(context: DecisionContext) -> dict[str, Any]:
+    actor_lore = character_lore_payload(context.actor.agent_id)
     return {
         "world_tick": context.tick,
         "actor": {
             "agent_id": context.actor.agent_id,
             "display_name": context.actor.display_name,
+            "public_identity": PUBLIC_CHARACTER_IDENTITIES[context.actor.agent_id],
+            "canon": actor_lore,
             "location": context.actor.location,
             "money": context.actor.money,
             "fatigue": context.actor.fatigue,
@@ -408,7 +419,10 @@ def _dialogue_chat_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": 256,
+        # Thinking consumes completion budget before the final JSON line. A
+        # 256-token cap is enough for a short non-thinking answer but can
+        # truncate the final object when DeepSeek emits reasoning first.
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": DIALOGUE_SYSTEM_INSTRUCTION},
             {"role": "user", "content": dialogue_input_json(context)},
@@ -455,7 +469,9 @@ def _player_dialogue_chat_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
-        "max_tokens": 256,
+        # Keep the same headroom as agent dialogue so Thinking does not leave
+        # the player line with an empty or partial JSON response.
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": PLAYER_DIALOGUE_SYSTEM_INSTRUCTION},
             {"role": "user", "content": player_dialogue_input_json(context)},
@@ -506,11 +522,34 @@ def _extract_chat_output(response: Mapping[str, Any]) -> str | dict[str, Any]:
     choice = choices[0]
     if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
         raise BYOKResponseError("chat choice contained no message")
-    content = choice["message"].get("content")
+    message = choice["message"]
+    content = message.get("content")
     if isinstance(content, dict):
         return content
     if isinstance(content, str):
         return content
+    # A few OpenAI-compatible gateways expose content as structured parts
+    # (the same shape used by the Responses API).  Keep only final text/json
+    # parts; reasoning_content is deliberately not used as an answer.
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            value = part.get("json")
+            if isinstance(value, dict):
+                return value
+            value = part.get("text")
+            if isinstance(value, str):
+                text_parts.append(value)
+            elif isinstance(part.get("content"), str):
+                text_parts.append(part["content"])
+        if text_parts:
+            return "\n".join(text_parts)
+    if content is None and isinstance(message.get("reasoning_content"), str):
+        raise BYOKResponseError(
+            "chat message contained no final content; reasoning output was not used"
+        )
     raise BYOKResponseError("chat message contained no usable content")
 
 
@@ -518,6 +557,14 @@ def _as_action_object(raw: str | dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     text = raw.strip()
+    # Thinking-capable models may put analysis before the final answer.  Do
+    # not feed analysis (or an example object inside it) to the game.  The
+    # tags are used by several OpenAI-compatible providers, including
+    # DeepSeek-compatible gateways.
+    text = re.sub(r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>", "", text,
+                  flags=re.IGNORECASE | re.DOTALL).strip()
+    text = re.sub(r"<analysis\b[^>]*>.*?</analysis>", "", text,
+                  flags=re.IGNORECASE | re.DOTALL).strip()
     candidates = [text]
     if text.startswith("```") and text.endswith("```"):
         fenced = text[3:-3].strip()
@@ -525,12 +572,22 @@ def _as_action_object(raw: str | dict[str, Any]) -> dict[str, Any]:
             fenced = fenced[4:].lstrip()
         candidates.insert(0, fenced)
     # Some JSON-compatible endpoints still add a short explanation around
-    # the object. Extract only a bounded outer object; semantic validation
-    # below remains authoritative and rejects unknown or missing fields.
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(text[start : end + 1])
+    # the object. Use JSONDecoder.raw_decode at every opening brace rather
+    # than first/last braces: reasoning text can contain JSON examples before
+    # the actual answer. The final complete object is the model's answer.
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+    if objects:
+        candidates.append(json.dumps(objects[-1], ensure_ascii=False))
     for candidate in candidates:
         try:
             value = json.loads(candidate)
@@ -710,7 +767,8 @@ class BYOKProvider:
         response = self._request(
             _responses_payload(self.config, context)
             if self.config.protocol is APIProtocol.RESPONSES
-            else _chat_payload(self.config, context)
+            else _chat_payload(self.config, context),
+            operation="action",
         )
         raw = (
             _extract_responses_output(response)
@@ -722,20 +780,48 @@ class BYOKProvider:
             value = normalize_json_object_output(value)
         return validate_action_output(value, context)
 
-    def _request(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _request(
+        self, payload: Mapping[str, Any], *, operation: str = "provider_request"
+    ) -> dict[str, Any]:
         if self.calls_used >= self.config.max_calls:
             raise BYOKBudgetExceeded("provider call budget was exhausted")
         self.calls_used += 1
-        return self.transport.post_json(
-            url=self.config.endpoint,
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            payload=payload,
-            timeout_seconds=self.config.timeout_seconds,
+        call_number = self.calls_used
+        started = time.perf_counter()
+        emit_timing(
+            "provider_request_start",
+            operation=operation,
+            call=call_number,
+            model=self.config.model,
+            thinking=self.config.thinking_mode.value,
         )
+        try:
+            response = self.transport.post_json(
+                url=self.config.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                payload=payload,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        except Exception as error:
+            emit_timing(
+                "provider_request_error",
+                operation=operation,
+                call=call_number,
+                elapsed_ms=round((time.perf_counter() - started) * 1000),
+                error_type=type(error).__name__,
+            )
+            raise
+        emit_timing(
+            "provider_request_end",
+            operation=operation,
+            call=call_number,
+            elapsed_ms=round((time.perf_counter() - started) * 1000),
+        )
+        return response
 
     def generate_dialogue_line(
         self, context: DialogueTurnContext
@@ -745,9 +831,22 @@ class BYOKProvider:
             if self.config.protocol is APIProtocol.RESPONSES
             else _dialogue_chat_payload(self.config, context)
         )
-        for attempt in range(2):
+        payloads = [payload]
+        if self.config.thinking_mode is ThinkingMode.ENABLED:
+            # Some DeepSeek-compatible deployments still truncate or emit
+            # prose for a long Thinking dialogue request. Retry that one line
+            # without reasoning rather than making the whole first day fail.
+            quiet_config = replace(self.config, thinking_mode=ThinkingMode.DISABLED)
+            payloads.append(
+                _dialogue_responses_payload(quiet_config, context)
+                if quiet_config.protocol is APIProtocol.RESPONSES
+                else _dialogue_chat_payload(quiet_config, context)
+            )
+        elif len(payloads) == 1:
+            payloads.append(payload)
+        for attempt, attempt_payload in enumerate(payloads):
             try:
-                response = self._request(payload)
+                response = self._request(attempt_payload, operation="dialogue")
                 raw = (
                     _extract_responses_output(response)
                     if self.config.protocol is APIProtocol.RESPONSES
@@ -764,7 +863,7 @@ class BYOKProvider:
                 except ValueError as exc:
                     raise BYOKValidationError(str(exc)) from None
             except (BYOKResponseError, BYOKValidationError):
-                if attempt == 1 or self.calls_used >= self.config.max_calls:
+                if attempt == len(payloads) - 1 or self.calls_used >= self.config.max_calls:
                     raise
         raise AssertionError("unreachable dialogue retry state")
 
@@ -776,9 +875,19 @@ class BYOKProvider:
             if self.config.protocol is APIProtocol.RESPONSES
             else _player_dialogue_chat_payload(self.config, context)
         )
-        for attempt in range(2):
+        payloads = [payload]
+        if self.config.thinking_mode is ThinkingMode.ENABLED:
+            quiet_config = replace(self.config, thinking_mode=ThinkingMode.DISABLED)
+            payloads.append(
+                _player_dialogue_responses_payload(quiet_config, context)
+                if quiet_config.protocol is APIProtocol.RESPONSES
+                else _player_dialogue_chat_payload(quiet_config, context)
+            )
+        elif len(payloads) == 1:
+            payloads.append(payload)
+        for attempt, attempt_payload in enumerate(payloads):
             try:
-                response = self._request(payload)
+                response = self._request(attempt_payload, operation="player_dialogue")
                 raw = (
                     _extract_responses_output(response)
                     if self.config.protocol is APIProtocol.RESPONSES
@@ -795,6 +904,6 @@ class BYOKProvider:
                 except ValueError as exc:
                     raise BYOKValidationError(str(exc)) from None
             except (BYOKResponseError, BYOKValidationError):
-                if attempt == 1 or self.calls_used >= self.config.max_calls:
+                if attempt == len(payloads) - 1 or self.calls_used >= self.config.max_calls:
                     raise
         raise AssertionError("unreachable player dialogue retry state")

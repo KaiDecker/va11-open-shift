@@ -20,7 +20,8 @@ For the final player package, double-click `OpenShiftSetup.exe`. Its WebView2-ba
 Windows GUI detects the Steam library, validates the original hash, creates or repairs the
 patched isolated copy, stores the DeepSeek key with current-user DPAPI, and
 creates a desktop `Open Shift` shortcut. The same GUI prepares the next day,
-starts the game, opens diagnostics, and safely uninstalls the isolated copy.
+starts the game, opens diagnostics, switches DeepSeek Thinking with validated
+TOML persistence, and safely uninstalls the isolated copy.
 
 The public project name is **OPEN SHIFT**. Community-facing posts are maintained
 outside the player package and may be adapted for local community rules.
@@ -36,8 +37,22 @@ probes DeepSeek, creates a new timestamped database, and generates the first
 day before opening the copied game. Provider failures stop the launch instead
 of silently switching to local dialogue.
 
-Pass `-Thinking enabled` to test DeepSeek thinking while keeping whole-day
-generation before gameplay. The default remains `disabled` because thinking
-increases generation time and token use for every candidate dialogue line.
+Players can switch DeepSeek Thinking in the GUI after installation. Maintainers
+can pass `-Thinking enabled` to the acceptance script. Day entry prepares only
+a local deterministic skeleton; provider calls are made on demand for the scene
+and drink branch the player actually reaches. The default remains `disabled`
+because thinking increases generation time and token use.
+Installed launchers also write secret-free JSONL timing records to
+`timing.log`, including each provider request, thinking mode, elapsed
+milliseconds, and the total daily graph preparation time. This makes it
+possible to compare thinking with non-thinking before changing the generation
+strategy.
+
+The bridge also exposes a non-blocking scene-job protocol for the newer client:
+`POST /v1/scenes/jobs` returns a `job_id` immediately, and
+`GET /v1/scenes/jobs/<job_id>` reports `queued`, `running`, `ready`, or
+`failed`, together with UTC timestamps and elapsed milliseconds. The legacy
+`POST /v1/scenes/open` endpoint remains available while the GameMaker client
+migrates to polling, so existing acceptance builds continue to work.
 Pass `-Database <path>` to resume an existing world; omit it to create a new
 timestamped acceptance database.

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .paired_saves import WorldSessionCheckpoint
+from .diagnostics import emit_timing, monotonic_seconds
 
 
 class LauncherError(RuntimeError):
@@ -162,6 +163,7 @@ class RuntimeSession:
         self._world_checkpoint.begin()
         env["OPEN_SHIFT_SESSION_CHECKPOINT"] = str(checkpoint_path)
         try:
+            emit_timing("bridge_start", port=self.port)
             self._bridge_process = subprocess.Popen(
                 self._bridge_command(),
                 env=env,
@@ -227,6 +229,8 @@ class RuntimeSession:
         )
 
     def prepare_story(self) -> None:
+        started = monotonic_seconds()
+        emit_timing("story_prepare_start", timeout_seconds=self.config.story_prepare_timeout_seconds)
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/v1/story/prepare",
             data=json.dumps(
@@ -275,6 +279,11 @@ class RuntimeSession:
             or payload["last_completed_story_day"] >= payload["world_day"]
         ):
             raise LauncherError("story preparation returned an invalid response")
+        emit_timing(
+            "story_prepare_end",
+            elapsed_ms=round((monotonic_seconds() - started) * 1000),
+            world_day=payload.get("world_day"),
+        )
 
     def stop_bridge(self) -> None:
         process = self._bridge_process
@@ -312,7 +321,7 @@ class RuntimeSession:
             self.wait_for_bridge(self.config.health_timeout_seconds)
             if self.config.prepare_story_before_game:
                 print(
-                    "Preparing the first Open Shift day before starting the game...",
+                    "Preparing the local day skeleton before starting the game...",
                     flush=True,
                 )
                 self.prepare_story()

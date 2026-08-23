@@ -168,6 +168,47 @@ class DailyStoryGraphTests(unittest.TestCase):
             ).prepare_daily_story_graph(1)
             self.assertEqual(replay, graph)
 
+    def test_on_demand_mode_generates_only_reached_scene_and_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            provider = RecordingProvider()
+            service = WorldSceneService(
+                db_path,
+                provider_factory=lambda: provider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            service.prepare_story_day({"request_id": "on-demand-prepare"})
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (0, 0))
+
+            opening = service.open_scene(
+                {"protocol_version": 1, "request_id": "on-demand-open-1", "client_session_id": "story-session-0001"}
+            )
+            service.ack_scene(self._ack(opening.scene_id, "on-demand-ack-1", "continued_in_bar"))
+            doorbell = service.open_scene(
+                {"protocol_version": 1, "request_id": "on-demand-open-2", "client_session_id": "story-session-0001"}
+            )
+            service.ack_scene(self._ack(doorbell.scene_id, "on-demand-ack-2", "continued_in_bar"))
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (0, 0))
+
+            arrival = service.open_scene(
+                {"protocol_version": 1, "request_id": "on-demand-open-3", "client_session_id": "story-session-0001"}
+            )
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (1, 1))
+            assert arrival.order is not None
+            service.ack_scene(self._ack(arrival.scene_id, "on-demand-ack-3", "order_started"))
+            service.resolve_order(
+                {
+                    "protocol_version": 1,
+                    "request_id": "on-demand-order-1",
+                    "client_session_id": "story-session-0001",
+                    "scene_id": arrival.scene_id,
+                    "order_id": arrival.order.order_id,
+                    "drink": self._exact_drink(arrival.order.requested_drink_id),
+                }
+            )
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (2, 2))
+
     def test_failed_generation_reuses_sources_and_records_only_safe_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"
@@ -506,7 +547,13 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(opening.scene_id, "ambient-ack-1", "continued_in_bar")
             )
-            self._wait_for_status(db_path, 1, "ready")
+            # Entry builds only the local skeleton; no next-day graph or
+            # provider dialogue is prefetched.
+            with WorldStore(db_path) as store:
+                record = store.get_daily_story_graph(1, DAILY_STORY_GRAPH_VERSION)
+                self.assertIsNotNone(record)
+                assert record is not None
+                self.assertEqual(record["status"], "ready")
 
             doorbell = service.open_scene(
                 {
@@ -520,11 +567,10 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(doorbell.scene_id, "ambient-ack-2", "continued_in_bar")
             )
-            self._wait_for_status(db_path, 2, "ready")
             with WorldStore(db_path) as store:
                 self.assertEqual(
                     [item["day_index"] for item in store.list_daily_story_graphs()],
-                    [1, 2],
+                    [1],
                 )
                 self.assertFalse(
                     any(
@@ -559,29 +605,31 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(opening.scene_id, "failure-ack-1", "continued_in_bar")
             )
-            self._wait_for_status(db_path, 1, "failed")
-            with self.assertRaises(BridgeError) as raised:
-                service.open_scene(
-                    {
-                        "protocol_version": 1,
-                        "request_id": "failure-open-2",
-                        "client_session_id": "story-session-0001",
-                    }
-                )
-            self.assertEqual(raised.exception.code, "story_generation_failed")
-            self.assertIn("RuntimeError", raised.exception.message)
-            self.assertNotIn("private diagnostic", raised.exception.message)
-
-            waiting = service.open_scene(
+            # The first actual scene request is the first point at which the
+            # provider is touched; failure is surfaced by that request.
+            doorbell = service.open_scene(
                 {
                     "protocol_version": 1,
-                    "request_id": "failure-open-3",
+                    "request_id": "failure-open-2",
                     "client_session_id": "story-session-0001",
                 }
             )
-            self.assertTrue(waiting.scene_id.startswith("waiting_"))
-            self.assertIsNone(waiting.lines[0].speaker_id)
-            service.wait_for_background_generation()
+            service.ack_scene(
+                self._ack(doorbell.scene_id, "failure-ack-2", "continued_in_bar")
+            )
+            with self.assertRaises(RuntimeError):
+                service.open_scene(
+                    {
+                        "protocol_version": 1,
+                        "request_id": "failure-open-3",
+                        "client_session_id": "story-session-0001",
+                    }
+                )
+            with WorldStore(db_path) as store:
+                record = store.get_daily_story_graph(1, DAILY_STORY_GRAPH_VERSION)
+                self.assertIsNotNone(record)
+                assert record is not None
+                self.assertEqual(record["status"], "ready")
 
     def test_completed_shift_opens_next_day_without_requiring_save(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

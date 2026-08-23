@@ -1,4 +1,4 @@
-if (global.cur_day == 1001 && instance_exists(ag_bridge_controller))
+if (global.cur_day >= 1001 && instance_exists(ag_bridge_controller))
 {
     with (ag_bridge_controller)
     {
@@ -30,7 +30,7 @@ if (global.cur_day == 1001 && instance_exists(ag_bridge_controller))
 
             ag_resolve_body = ds_map_create();
             ag_request_sequence += 1;
-            ag_request_id = "resolve_" + ag_session_id + "_" + string(ag_request_sequence);
+            ag_request_id = "resolve_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
             ds_map_add(ag_resolve_body, "protocol_version", 1);
             ds_map_add(ag_resolve_body, "request_id", ag_request_id);
             ds_map_add(ag_resolve_body, "client_session_id", ag_session_id);
