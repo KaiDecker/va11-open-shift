@@ -59,6 +59,21 @@ prefetch_days = 1
             )
             self.assertIs(config.provider_thinking, ThinkingMode.ENABLED)
 
+    def test_loads_balanced_thinking_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = load_runtime_config(
+                self.write(
+                    Path(temp_dir),
+                    """
+[provider]
+base_url = "https://api.deepseek.com"
+model = "deepseek-v4-flash"
+thinking = "balanced"
+""",
+                )
+            )
+            self.assertIs(config.provider_thinking, ThinkingMode.BALANCED)
+
     def test_rejects_secret_values_and_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(RuntimeConfigError, "secret-bearing"):

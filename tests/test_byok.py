@@ -211,6 +211,27 @@ class BYOKProviderTests(unittest.TestCase):
             transport.calls[0]["payload"]["thinking"], {"type": "disabled"}
         )
 
+    def test_balanced_mode_keeps_dialogue_fast(self) -> None:
+        transport = FakeTransport(
+            {"choices": [{"message": {"content": '{"expression_id":"neutral","text":"好的。"}'}}]}
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "deepseek-v4-flash",
+                protocol=APIProtocol.CHAT_COMPLETIONS,
+                thinking_mode=ThinkingMode.BALANCED,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+        from open_shift.dialogue import DialogueTurnContext
+        dialogue_context = DialogueTurnContext(
+            "balanced-scene", 0, 3, "A quiet bar.", context(), ("dana", "jill"), ()
+        )
+        provider.generate_dialogue_line(dialogue_context)
+        self.assertEqual(transport.calls[0]["payload"]["thinking"], {"type": "disabled"})
+
     def test_explicit_thinking_rejects_responses_protocol(self) -> None:
         with self.assertRaises(BYOKConfigurationError):
             BYOKConfig(

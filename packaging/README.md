@@ -37,8 +37,10 @@ probes DeepSeek, creates a new timestamped database, and generates the first
 day before opening the copied game. Provider failures stop the launch instead
 of silently switching to local dialogue.
 
-Players can switch DeepSeek Thinking in the GUI after installation. Maintainers
-can pass `-Thinking enabled` to the acceptance script. Day entry prepares only
+Players can switch the DeepSeek generation mode in the GUI after installation:
+快速 keeps ordinary dialogue fast, 平衡 enables Thinking only for world
+decisions, and 深度 enables it for every generation. Maintainers can pass
+`-Thinking enabled` or `-Thinking balanced` to the acceptance script. Day entry prepares only
 a local deterministic skeleton; provider calls are made on demand for the scene
 and drink branch the player actually reaches. The default remains `disabled`
 because thinking increases generation time and token use.
