@@ -12,14 +12,15 @@ from .bridge import AGENT_SPEAKERS, ScenePackage
 from .drinks import ServiceCategory
 
 
-# Version bump prevents a previously prefetched full-day graph from bypassing
-# the Stage 16 on-demand materialization path after an upgrade.
-DAILY_STORY_GRAPH_VERSION = "stage_16_on_demand_v1"
+# Version bump prevents a previously prefetched graph from bypassing the
+# Stage 19 full-day flow gates after an upgrade.
+DAILY_STORY_GRAPH_VERSION = "stage_19_full_day_v1"
 MAX_DAILY_CUSTOMERS = 3
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class StoryNodeKind(str, Enum):
+    INTERLUDE = "interlude"
     ARRIVAL_ORDER = "arrival_order"
     RESULT_DIALOGUE = "result_dialogue"
     MERGE = "merge"
@@ -73,6 +74,16 @@ class StoryGraphNode:
                 or targets
             ):
                 raise ValueError("result dialogue node was incomplete")
+        elif self.kind is StoryNodeKind.INTERLUDE:
+            if (
+                self.customer_id is not None
+                or not self.topic
+                or self.scene is None
+                or self.service_category is not None
+                or self.next_node_id is None
+                or targets
+            ):
+                raise ValueError("interlude node was incomplete")
         elif self.kind is StoryNodeKind.MERGE:
             if (
                 self.customer_id is not None
@@ -197,7 +208,10 @@ class DailyStoryGraph:
             raise ValueError("daily story node identifiers were not unique")
         if self.entry_node_id not in by_id or self.terminal_node_id not in by_id:
             raise ValueError("daily story entry or terminal node was missing")
-        if by_id[self.entry_node_id].kind is not StoryNodeKind.ARRIVAL_ORDER:
+        if by_id[self.entry_node_id].kind not in {
+            StoryNodeKind.INTERLUDE,
+            StoryNodeKind.ARRIVAL_ORDER,
+        }:
             raise ValueError("daily story entry node was invalid")
         arrivals = [
             node for node in self.nodes if node.kind is StoryNodeKind.ARRIVAL_ORDER
@@ -206,11 +220,12 @@ class DailyStoryGraph:
             node for node in self.nodes if node.kind is StoryNodeKind.RESULT_DIALOGUE
         ]
         merges = [node for node in self.nodes if node.kind is StoryNodeKind.MERGE]
+        interludes = [node for node in self.nodes if node.kind is StoryNodeKind.INTERLUDE]
         if len(arrivals) != len(self.source_event_ids):
             raise ValueError("daily story arrival count did not match source events")
         if len(results) != len(arrivals) * len(ServiceCategory):
             raise ValueError("daily story result count was invalid")
-        if len(merges) != len(arrivals) or len(self.nodes) != len(arrivals) * 6:
+        if len(merges) != len(arrivals) or len(self.nodes) != len(arrivals) * 6 + len(interludes):
             raise ValueError("daily story graph was not finitely bounded")
         terminal = by_id[self.terminal_node_id]
         if terminal.kind is not StoryNodeKind.MERGE or terminal.next_node_id is not None:
@@ -221,7 +236,8 @@ class DailyStoryGraph:
             if (
                 node.kind is StoryNodeKind.MERGE
                 and node.next_node_id is not None
-                and by_id[node.next_node_id].kind is not StoryNodeKind.ARRIVAL_ORDER
+                and by_id[node.next_node_id].kind
+                not in {StoryNodeKind.ARRIVAL_ORDER, StoryNodeKind.INTERLUDE}
             ):
                 raise ValueError("daily story merge did not lead to an arrival")
 

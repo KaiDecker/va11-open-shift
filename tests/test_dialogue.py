@@ -24,6 +24,7 @@ from open_shift.dialogue import (
     DialogueTurnContext,
     DialogueUtterance,
     PlayerDialogueTurnContext,
+    SceneDirection,
     dialogue_observation,
     player_dialogue_observation,
     validate_dialogue_output,
@@ -43,6 +44,13 @@ from open_shift.lore import (
     ORIGINAL_DIALOGUE_CORPUS_SPEAKER_LABEL_COUNT,
     ORIGINAL_DIALOGUE_CORPUS_STOPLIP_RECORD_COUNT,
     ORIGINAL_DIALOGUE_STYLE,
+    ORIGINAL_DIALOGUE_VOICE_STATS,
+    ORIGINAL_DAILY_MIXING_MARKER_COUNT,
+    ORIGINAL_DAILY_MUSIC_SELECTION_MARKER_COUNT,
+    ORIGINAL_DAILY_SCENE_SHOW_MARKER_COUNT,
+    ORIGINAL_DAILY_SCRIPT_FILE_COUNT,
+    ORIGINAL_DAILY_SERVICE_RESULT_MARKER_COUNT,
+    ORIGINAL_SHIFT_BEAT_SEQUENCE,
     SELECTED_TIMELINE_FACTS,
     CONTINUITY_FACTS,
 )
@@ -208,11 +216,20 @@ class DialogueContractTests(unittest.TestCase):
         self.assertTrue(SELECTED_TIMELINE_FACTS)
         self.assertIn("已与 Gaby 和解", "".join(SELECTED_TIMELINE_FACTS))
         self.assertTrue(ORIGINAL_DIALOGUE_STYLE)
+        self.assertEqual(
+            {name for name, _ in ORIGINAL_DIALOGUE_VOICE_STATS},
+            {"Jill", "Dana", "Alma", "Dorothy", "Sei", "Stella"},
+        )
         self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_FILE_COUNT, 28)
         self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_LINE_COUNT, 17_194)
         self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_SPECIAL_LINE_COUNT, 70)
         self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_SPEAKER_LABEL_COUNT, 53)
         self.assertEqual(ORIGINAL_DIALOGUE_CORPUS_STOPLIP_RECORD_COUNT, 17_271)
+        self.assertEqual(ORIGINAL_DAILY_SCRIPT_FILE_COUNT, 19)
+        self.assertEqual(ORIGINAL_DAILY_MUSIC_SELECTION_MARKER_COUNT, 33)
+        self.assertEqual(ORIGINAL_DAILY_MIXING_MARKER_COUNT, 620)
+        self.assertEqual(ORIGINAL_DAILY_SERVICE_RESULT_MARKER_COUNT, 449)
+        self.assertEqual(ORIGINAL_DAILY_SCENE_SHOW_MARKER_COUNT, 318)
         self.assertEqual(dict(ORIGINAL_DIALOGUE_CHARACTER_LINE_COUNTS)["Jill"], 7_036)
         self.assertNotIn("Classy", repr(CHARACTER_LORE["stella"]))
 
@@ -259,6 +276,22 @@ class DialogueContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden_meta_term, encoded)
         self.assertIn("original_dialogue_style", observation)
+        self.assertIn("original_dialogue_voice_stats", observation)
+        self.assertIn("original_shift_beat_sequence", observation)
+        direction = observation["scene"]["scene_direction"]
+        self.assertEqual(direction["scene_type"], "arrival_order")
+        self.assertIn("current_beat", direction)
+        self.assertIn("topic", direction)
+        self.assertIn("unresolved_threads", direction)
+        self.assertIn("我先找个位置坐", direction["avoid_patterns"])
+        self.assertEqual(
+            len(observation["original_shift_beat_sequence"]),
+            len(ORIGINAL_SHIFT_BEAT_SEQUENCE),
+        )
+        self.assertAlmostEqual(
+            observation["original_dialogue_voice_stats"]["mean_characters"],
+            16.88,
+        )
         self.assertNotIn("money", observation["speaker"])
         self.assertNotIn("world_tick", observation["scene"])
         self.assertNotIn("world_day", observation["scene"])
@@ -328,6 +361,13 @@ class DialogueContractTests(unittest.TestCase):
                     {"expression_id": "neutral", "text": forbidden}, context
                 )
 
+    def test_dana_cannot_address_herself_as_the_boss(self) -> None:
+        with self.assertRaisesRegex(ValueError, "boss"):
+            validate_dialogue_output(
+                {"expression_id": "neutral", "text": "老板，我自己会去处理。"},
+                turn_context(),
+            )
+
     def test_player_dialogue_has_no_private_agent_state_or_portrait_role(self) -> None:
         context = PlayerDialogueTurnContext(
             "world_event_1",
@@ -342,6 +382,12 @@ class DialogueContractTests(unittest.TestCase):
         self.assertEqual(observation["speaker"]["speaker_id"], "jill")
         self.assertEqual(observation["speaker"]["role"], "player_bartender")
         self.assertIn("speech_cadence", observation["speaker"]["canon"])
+        self.assertIn("original_dialogue_voice_stats", observation)
+        self.assertIn("scene_direction", observation["scene"])
+        self.assertAlmostEqual(
+            observation["original_dialogue_voice_stats"]["mean_characters"],
+            13.73,
+        )
         self.assertIn("interaction_patterns", observation["speaker"]["canon"])
         self.assertNotIn("private_relevant_memories", encoded)
         self.assertNotIn("relationships", encoded)
@@ -353,6 +399,30 @@ class DialogueContractTests(unittest.TestCase):
             validate_player_dialogue_output(
                 {"expression_id": "happy", "text": "我知道了。"}, context
             )
+
+    def test_explicit_scene_direction_survives_in_agent_observation(self) -> None:
+        direction = SceneDirection(
+            "service_reaction",
+            "回扣：把饮品结果接回客人刚才提到的工作",
+            "客人点的饮品已经准确完成，但刚才的工作麻烦还没说完。",
+            "熟人之间可以直接吐槽，不需要互相安慰",
+            ("工作麻烦还没有结论",),
+            ("欢迎光临", "请稍等"),
+            ("从具体结果继续，而不是总结整场对话",),
+        )
+        context = DialogueTurnContext(
+            "order_result_1",
+            1,
+            3,
+            "客人点的饮品已经准确完成。",
+            private_context(),
+            ("dana", "dorothy"),
+            (DialogueUtterance("dorothy", "这杯闻起来还行。"),),
+            None,
+            direction,
+        )
+        payload = dialogue_observation(context)
+        self.assertEqual(payload["scene"]["scene_direction"], direction.to_payload())
 
     def test_byok_dialogue_uses_json_contract_and_shared_budget(self) -> None:
         transport = FakeTransport(
@@ -606,15 +676,24 @@ class DialogueWorldBridgeTests(unittest.TestCase):
                 "client_session_id": "dialogue-session-1",
             }
             scene = service.open_scene(request)
-            self.assertEqual(len(scene.lines), 3)
-            self.assertEqual(len(provider.dialogue_contexts), 1)
+            self.assertEqual(len(scene.lines), 4)
+            self.assertEqual(len(provider.dialogue_contexts), 2)
             self.assertEqual(len(provider.player_contexts), 1)
             self.assertIn("jill", {line.speaker_id for line in scene.lines})
             jill_line = next(line for line in scene.lines if line.speaker_id == "jill")
             self.assertIsNone(jill_line.portrait_id)
             self.assertIsNotNone(scene.order)
-            context = provider.dialogue_contexts[0]
+            context = provider.dialogue_contexts[-1]
             self.assertEqual(len(context.transcript), context.turn_index)
+            self.assertEqual(context.turn_index, 3)
+            self.assertEqual(context.turn_count, 4)
+            self.assertEqual(context.speaker.actor.agent_id, scene.order.customer_id)
+            assert context.scene_direction is not None
+            self.assertIn("回应并转入调酒", context.scene_direction.beat)
+            self.assertEqual(
+                [item.speaker_id for item in context.transcript],
+                [scene.order.customer_id, "jill", provider.dialogue_contexts[0].speaker.actor.agent_id],
+            )
             self.assertTrue(
                 all(memory in context.speaker.memories for memory in context.speaker.memories)
             )
@@ -754,6 +833,18 @@ class DialogueWorldBridgeTests(unittest.TestCase):
             replay = service.resolve_order(request)
             self.assertEqual(resolution, replay)
             self.assertEqual(resolution.result.category, ServiceCategory.EXACT)
+            self.assertEqual(len(resolution.scene.lines), 3)
+            self.assertEqual(len(provider.dialogue_contexts), 4)
+            self.assertEqual(len(provider.player_contexts), 2)
+            closing_context = provider.dialogue_contexts[-1]
+            self.assertEqual(closing_context.turn_index, 2)
+            self.assertEqual(closing_context.turn_count, 3)
+            self.assertEqual(len(closing_context.transcript), 2)
+            assert closing_context.scene_direction is not None
+            self.assertIn("回扣并收束", closing_context.scene_direction.beat)
+            self.assertNotIn("刚才那件事", "\n".join(line.text for line in resolution.scene.lines))
+            self.assertNotIn("话题不用跟着杯子", "\n".join(line.text for line in resolution.scene.lines))
+            self.assertNotIn("下一轮再接着说", "\n".join(line.text for line in resolution.scene.lines))
             self.assertIsNone(resolution.scene.order)
             jill_line = next(
                 line for line in resolution.scene.lines if line.speaker_id == "jill"

@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from open_shift.package import PackageError, build_mod_package
+from open_shift.package import PackageError, _validate_archive, build_mod_package
 
 
 class PackageTests(unittest.TestCase):
@@ -17,6 +17,7 @@ class PackageTests(unittest.TestCase):
             result = build_mod_package(project_root=root, output=output)
             self.assertEqual(result.forbidden_entries, ())
             with zipfile.ZipFile(output) as archive:
+                self.assertIsNone(archive.testzip())
                 names = set(archive.namelist())
                 self.assertIn("PACKAGE_MANIFEST.json", names)
                 self.assertIn("packaging/install-isolated-copy.ps1", names)
@@ -63,6 +64,7 @@ class PackageTests(unittest.TestCase):
                 utmt_cli=utmt,
             )
             with zipfile.ZipFile(output) as archive:
+                self.assertIsNone(archive.testzip())
                 names = set(archive.namelist())
                 self.assertIn("OpenShift.exe", names)
                 self.assertIn("OpenShiftSetup.exe", names)
@@ -80,6 +82,16 @@ class PackageTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         with self.assertRaisesRegex(PackageError, "inside"):
             build_mod_package(project_root=root, output=root / "src" / "bad.zip")
+
+    def test_package_validation_rejects_truncated_archive(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "open-shift.zip"
+            build_mod_package(project_root=root, output=output)
+            truncated = Path(temp_dir) / "truncated.zip"
+            truncated.write_bytes(output.read_bytes()[:-32])
+            with self.assertRaisesRegex(PackageError, "archive validation"):
+                _validate_archive(truncated, ("README.md",))
 
     def test_player_install_contract_does_not_target_steam_or_ship_secrets(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -115,6 +127,10 @@ class PackageTests(unittest.TestCase):
         self.assertIn("$CompletionMarker", installer)
         self.assertIn("patch_fingerprint", installer)
         self.assertIn("package_version", installer)
+        self.assertIn('database = (Join-Path $installRoot "open-shift.sqlite3")', installer)
+        # The launcher script is embedded in a PowerShell here-string, so its
+        # runtime variables are escaped in the installer source.
+        self.assertIn('`$database = if (`$state.database)', installer)
         self.assertIn("libraryfolders.vdf", installer)
         self.assertIn("Get-PatchFingerprint", installer)
         self.assertIn("Get-Sha256Hex", installer)
@@ -148,7 +164,7 @@ class PackageTests(unittest.TestCase):
         self.assertIn("Set-ButtonStyle", gui)
         self.assertIn("FromArgb(239, 241, 247)", gui)
         self.assertIn("FromArgb(248, 249, 252)", gui)
-        self.assertIn("PLAYER 0.18 RC", webview)
+        self.assertIn("PLAYER 0.19 RC", webview)
         self.assertIn("准备并启动", gui)
         self.assertIn("brandIcon", gui)
         self.assertIn("WebView2", host)
@@ -188,9 +204,16 @@ class PackageTests(unittest.TestCase):
         build = (root / "packaging" / "build-player-release.ps1").read_text(encoding="utf-8")
         self.assertIn("PublishSingleFile=true", build)
         self.assertIn("--self-contained true", build)
-        self.assertIn('0.18.0-rc.1', build)
+        self.assertIn('0.19.0-rc.1', build)
         self.assertIn('$WebViewSdk', build)
         self.assertIn('OPEN_SHIFT_WEBVIEW2_SDK', build)
+        self.assertIn('Get-Command -Name $PythonPath -CommandType Application', build)
+        self.assertIn('Select-Object -First 1', build)
+        self.assertIn('Where-Object { $_.Source }', build)
+        self.assertIn('Resolve-Path -LiteralPath $PythonPath', build)
+        self.assertIn('$pythonExe = Resolve-PythonExecutable $Python', build)
+        self.assertIn('$pyinstaller = Join-Path $pythonDir "Scripts\\pyinstaller.exe"', build)
+        self.assertIn('& $pythonExe -m PyInstaller', build)
         low_level = (root / "packaging" / "install-isolated-copy.ps1").read_text(encoding="utf-8")
         self.assertLess(low_level.index('"verify-patch-output"'), low_level.index("New-Item -ItemType Directory -Force -Path $destinationRoot"))
         self.assertIn("$reuseVerifiedPatch", low_level)
@@ -248,6 +271,19 @@ class PackageTests(unittest.TestCase):
                 manifest = json.loads(archive.read("PACKAGE_MANIFEST.json"))
                 self.assertTrue(manifest["source_only"])
                 self.assertTrue(manifest["requires_python"])
+
+    def test_acceptance_launcher_rejects_stale_copies_and_auto_selects_latest_build(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        launcher = (root / "packaging" / "launch-deepseek-acceptance.ps1").read_text(encoding="utf-8")
+        self.assertIn('[string] $GameCopyDir = ""', launcher)
+        self.assertIn('[string] $ExpectedPatchedDataWinSha256 = ""', launcher)
+        self.assertIn('Read-InstallRecords', launcher)
+        self.assertIn('$latestRecord = $records | Select-Object -First 1', launcher)
+        self.assertIn('install.json hash record', launcher)
+        self.assertIn('Refusing to start a stale or unsupported game copy.', launcher)
+        self.assertIn('Actual data.win SHA256:', launcher)
+        self.assertIn('Expected current SHA256:', launcher)
+        self.assertIn('Get-Sha256Hex', launcher)
 
 
 if __name__ == "__main__":

@@ -475,6 +475,98 @@ class BridgeApplicationTests(unittest.TestCase):
         )
         self.assertEqual(invalid.status, 400)
 
+    def test_order_job_is_pollable_and_replays_legacy_result(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        order = DrinkOrder(
+            "order_async",
+            "alma",
+            "btini",
+            "Brandtini",
+            ("sweet",),
+            AlcoholRequirement.REQUIRED,
+            "Jill，一杯 Brandtini。",
+        )
+        calls: list[dict[str, Any]] = []
+
+        def resolve(request):
+            calls.append(dict(request))
+            started.set()
+            release.wait(10)
+            return OrderResolution(
+                ServiceResult(order.order_id, order.customer_id, ServiceCategory.EXACT, "btini", "Brandtini", True),
+                ScenePackage(
+                    "order_result_async",
+                    (SceneLine("result", "alma", "sprite_alma", "happy", "这杯正好。"),),
+                ),
+                250,
+            )
+
+        app = BridgeApplication(BridgeConfig(token=TOKEN, port=0), order_handler=resolve)
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "order-job-1",
+            "client_session_id": self.session_id,
+            "scene_id": "arrival_async",
+            "order_id": order.order_id,
+            "drink": {"adelhyde": 6, "bronson_extract": 0, "powdered_delta": 3, "flanergide": 0, "karmotrine": 1, "ice": 0, "aged": 1, "preparation": "mixed"},
+        }
+        queued = app.handle("POST", "/v1/orders/jobs", self.headers, encoded(request))
+        self.assertEqual(queued.status, 202)
+        self.assertEqual(queued.body["job_id"], "order_job_order-job-1")
+        self.assertNotIn("request", queued.body)
+        self.assertTrue(started.wait(1))
+        running = app.handle("GET", "/v1/orders/jobs/order_job_order-job-1", self.headers)
+        self.assertIn(running.body["status"], {"running", "ready"})
+        pending = app.handle("GET", "/v1/orders/jobs/order_job_order-job-1/result", self.headers)
+        if running.body["status"] == "running":
+            self.assertEqual(pending.status, 202)
+        release.set()
+        for _ in range(100):
+            ready = app.handle("GET", "/v1/orders/jobs/order_job_order-job-1", self.headers)
+            if ready.body["status"] == "ready":
+                break
+            threading.Event().wait(0.01)
+        self.assertEqual(ready.body["status"], "ready")
+        result = app.handle("GET", "/v1/orders/jobs/order_job_order-job-1/result", self.headers)
+        replay = app.handle("POST", "/v1/orders/jobs", self.headers, encoded(request))
+        self.assertEqual(result.status, 200)
+        self.assertEqual(set(result.body), {"protocol_version", "request_id", "result", "scene", "income_delta"})
+        self.assertEqual(result.body["income_delta"], 250)
+        self.assertEqual(replay.body["job_id"], queued.body["job_id"])
+        self.assertEqual(len(calls), 1)
+
+    def test_order_job_failure_is_visible_and_request_id_conflict_is_rejected(self) -> None:
+        failure = RuntimeError("private provider detail")
+
+        def resolve(request):
+            raise failure
+
+        app = BridgeApplication(BridgeConfig(token=TOKEN, port=0), order_handler=resolve)
+        request = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "order-job-fail",
+            "client_session_id": self.session_id,
+            "scene_id": "arrival_async",
+            "order_id": "order_async",
+            "drink": {"adelhyde": 0, "bronson_extract": 0, "powdered_delta": 0, "flanergide": 0, "karmotrine": 0, "ice": 0, "aged": 0, "preparation": "mixed"},
+        }
+        queued = app.handle("POST", "/v1/orders/jobs", self.headers, encoded(request))
+        changed = dict(request)
+        changed["order_id"] = "order_other"
+        conflict = app.handle("POST", "/v1/orders/jobs", self.headers, encoded(changed))
+        self.assertEqual(conflict.status, 409)
+        for _ in range(100):
+            status = app.handle("GET", "/v1/orders/jobs/order_job_order-job-fail", self.headers)
+            if status.body["status"] == "failed":
+                break
+            threading.Event().wait(0.01)
+        self.assertEqual(status.body["status"], "failed")
+        failed = app.handle("GET", "/v1/orders/jobs/order_job_order-job-fail/result", self.headers)
+        self.assertEqual(failed.status, 503)
+        self.assertEqual(failed.body["status"], "failed")
+        self.assertNotIn("private provider detail", json.dumps(failed.body))
+
     def test_paired_save_endpoints_are_strict_authenticated_and_idempotent(self) -> None:
         paired_calls: list[dict[str, Any]] = []
         restored_calls: list[dict[str, Any]] = []
@@ -598,7 +690,7 @@ class BridgeHTTPTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=2) as response:
                 payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(response.status, 200)
-                self.assertEqual(len(payload["scene"]["lines"]), 3)
+                self.assertGreaterEqual(len(payload["scene"]["lines"]), 3)
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
 
             unauthorized = urllib.request.Request(

@@ -22,6 +22,7 @@ from .dialogue import (
     DialogueTurnContext,
     DialogueUtterance,
     PlayerDialogueTurnContext,
+    SceneDirection,
     validate_dialogue_output,
     validate_player_dialogue_output,
 )
@@ -413,6 +414,34 @@ class WorldSceneService:
             tuple(nodes),
         )
 
+    @staticmethod
+    def _daily_interlude_scene(day_index: int, kind: str) -> ScenePackage:
+        scenes: dict[str, tuple[SceneLine, ...]] = {
+            "pre_opening": (
+                SceneLine("preopen_1", "dana", SPEAKER_PORTRAITS["dana"], "neutral", "Jill，先别急着开门。吧台和冰箱都要检查一遍。"),
+                SceneLine("preopen_2", "jill", None, "neutral", "知道了。昨晚留下的杯子我已经洗好，酒柜也补过货。"),
+                SceneLine("preopen_3", "dana", SPEAKER_PORTRAITS["dana"], "happy", "那就好。开店前的几分钟最容易被忽略，但客人一进来就会看见所有细节。"),
+                SceneLine("preopen_4", "jill", None, "neutral", "厕所也清过了。今天的灯光看起来比昨天柔和。"),
+                SceneLine("preopen_5", "dana", SPEAKER_PORTRAITS["dana"], "playful", "先把吧台准备好，灯光我来处理。"),
+                SceneLine("preopen_6", "jill", None, "neutral", "知道了，Dana。"),
+                SceneLine("preopen_7", None, None, "neutral", "门外的街道渐渐有了声音，吧台仍留着最后一点安静。"),
+                SceneLine("preopen_8", "dana", SPEAKER_PORTRAITS["dana"], "neutral", "准备好了就去点唱机那里选一首歌，然后我们正式开门。"),
+            ),
+            "music_selection": (
+                SceneLine("music_1", "jill", None, "neutral", "开店前，先选今晚的背景音乐。"),
+                SceneLine("music_2", None, None, "neutral", "点唱机亮起了微弱的指示灯。"),
+                SceneLine("music_3", "jill", None, "neutral", "选好之后，酒馆才算真正开始营业。"),
+                SceneLine("music_4", "dana", SPEAKER_PORTRAITS["dana"], "happy", "就按你的心情来吧。音乐响起，客人很快就会到了。"),
+            ),
+            "break": (
+                # The original flow lets Jill announce the break before the
+                # native break_time room opens. Keep this short and spoken,
+                # rather than narrating the room transition as dialogue.
+                SceneLine("break_1", "jill", None, "neutral", "我要去休息一下了。"),
+            ),
+        }
+        return ScenePackage(f"{kind}_day_{day_index}", scenes[kind])
+
     def prepare_daily_story_skeleton(self, day_index: int) -> DailyStoryGraph:
         """Persist a provider-free day skeleton without making API calls."""
 
@@ -511,6 +540,36 @@ class WorldSceneService:
         return participants[0]
 
     @staticmethod
+    def _scene_direction(
+        scene_type: str,
+        beat: str,
+        topic: str,
+        *,
+        relationship_tone: str = "熟人之间接话直接，保留各自的脾气和距离",
+        unresolved_threads: tuple[str, ...] = (),
+        avoid_patterns: tuple[str, ...] = (),
+    ) -> SceneDirection:
+        from .lore import scene_direction_rules
+
+        return SceneDirection(
+            scene_type,
+            beat,
+            topic[:240],
+            relationship_tone,
+            unresolved_threads,
+            avoid_patterns
+            or (
+                "欢迎光临",
+                "请稍等",
+                "我先找个位置坐",
+                "吧台一直在这儿",
+                "音乐不错",
+                "今晚应该会更热闹",
+            ),
+            scene_direction_rules(scene_type),
+        )
+
+    @staticmethod
     def _fallback_scene(
         event: Mapping[str, Any],
         display_names: Mapping[str, str],
@@ -521,7 +580,6 @@ class WorldSceneService:
         event_id = int(event["event_id"])
         participants = WorldSceneService._participants(event)
         customer = WorldSceneService._customer(participants)
-        other = next(item for item in participants if item != customer)
         order = order_for_customer(customer, event_id)
         lines = (
             SceneLine(
@@ -536,14 +594,14 @@ class WorldSceneService:
                 "jill",
                 None,
                 "neutral",
-                f"好，{order.requested_name}。稍等。",
+                f"{order.requested_name}，收到。",
             ),
             SceneLine(
                 "fallback_3",
-                other,
-                SPEAKER_PORTRAITS[other],
+                customer,
+                SPEAKER_PORTRAITS[customer],
                 "neutral",
-                "看来现在轮到吧台说话了。",
+                f"好，就按{order.requested_name}来。",
             ),
         )
         return ScenePackage(scene_id or f"world_event_{event_id}", lines, order=order)
@@ -572,11 +630,15 @@ class WorldSceneService:
         other = next(item for item in participants if item != customer)
         order = order_for_customer(customer, event_id)
         public_participants = tuple(dict.fromkeys((*participants, "jill")))
-        turn_count = 3
+        turn_count = 4
         premise = (
             self._event_premise(event, display_names, current_tick)
             + f" {display_names.get(customer, customer.title())}明确点了"
             + f"{order.requested_name}，Jill 正在吧台后确认这份点单。"
+        )
+        unresolved_threads = (
+            f"顾客为什么在今晚点这杯{order.requested_name}",
+            "营业事件中的具体问题还没有得到回应",
         )
         transcript = [DialogueUtterance(customer, order.display_text)]
         player_context = PlayerDialogueTurnContext(
@@ -586,6 +648,13 @@ class WorldSceneService:
             premise,
             public_participants,
             tuple(transcript),
+            None,
+            self._scene_direction(
+                "arrival_order",
+                "确认点单：Jill 针对饮品或追加要求提出一个具体短反应",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
         )
         player_proposed = player_generator(player_context)
         player_draft = validate_player_dialogue_output(
@@ -596,7 +665,7 @@ class WorldSceneService:
             player_context,
         )
         transcript.append(DialogueUtterance("jill", player_draft.text))
-        agent_context = DialogueTurnContext(
+        other_context = DialogueTurnContext(
             scene_id=scene_id,
             turn_index=2,
             turn_count=turn_count,
@@ -604,14 +673,44 @@ class WorldSceneService:
             speaker=engine.context_for_agent(current_tick, other),
             participant_ids=public_participants,
             transcript=tuple(transcript),
+            scene_direction=self._scene_direction(
+                "arrival_order",
+                "打断或补充：承接 Jill 的具体词，并从另一角度推进现场",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
         )
-        agent_proposed = generator(agent_context)
-        agent_draft = validate_dialogue_output(
+        other_proposed = generator(other_context)
+        other_draft = validate_dialogue_output(
             {
-                "expression_id": agent_proposed.expression_id,
-                "text": agent_proposed.text,
+                "expression_id": other_proposed.expression_id,
+                "text": other_proposed.text,
             },
-            agent_context,
+            other_context,
+        )
+        transcript.append(DialogueUtterance(other, other_draft.text))
+        customer_context = DialogueTurnContext(
+            scene_id=scene_id,
+            turn_index=3,
+            turn_count=turn_count,
+            premise=premise,
+            speaker=engine.context_for_agent(current_tick, customer),
+            participant_ids=public_participants,
+            transcript=tuple(transcript),
+            scene_direction=self._scene_direction(
+                "arrival_order",
+                "回应并转入调酒：顾客接住前两轮的具体内容，留下开始服务的自然钩子",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
+        )
+        customer_proposed = generator(customer_context)
+        customer_draft = validate_dialogue_output(
+            {
+                "expression_id": customer_proposed.expression_id,
+                "text": customer_proposed.text,
+            },
+            customer_context,
         )
         lines = (
             SceneLine(
@@ -626,8 +725,15 @@ class WorldSceneService:
                 "dialogue_3",
                 other,
                 SPEAKER_PORTRAITS[other],
-                agent_draft.expression_id,
-                agent_draft.text,
+                other_draft.expression_id,
+                other_draft.text,
+            ),
+            SceneLine(
+                "dialogue_4",
+                customer,
+                SPEAKER_PORTRAITS[customer],
+                customer_draft.expression_id,
+                customer_draft.text,
             ),
         )
         return ScenePackage(scene_id, lines, order=order)
@@ -714,6 +820,10 @@ class WorldSceneService:
         scene_id = scene_id or f"order_result_{service_event_id}"
         participants = (order.customer_id, "jill")
         premise = self._result_premise(order, result)
+        unresolved_threads = (
+            f"顾客对{result.beverage_name}的即时反应",
+            f"{order.requested_name}与实际出杯结果的关系",
+        )
         customer_context = DialogueTurnContext(
             scene_id,
             0,
@@ -723,6 +833,12 @@ class WorldSceneService:
             participants,
             (),
             result,
+            self._scene_direction(
+                "service_reaction",
+                "饮品结果：顾客先针对实际名称、味道或分量作出具体反应",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
         )
         customer_proposed = generator(customer_context)
         customer_draft = validate_dialogue_output(
@@ -741,6 +857,12 @@ class WorldSceneService:
             participants,
             tuple(transcript),
             result,
+            self._scene_direction(
+                "service_reaction",
+                "短促回应：Jill 承认规则结果，并接住顾客刚才提到的具体词",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
         )
         player_proposed = player_generator(player_context)
         player_draft = validate_player_dialogue_output(
@@ -749,6 +871,31 @@ class WorldSceneService:
                 "text": player_proposed.text,
             },
             player_context,
+        )
+        transcript.append(DialogueUtterance("jill", player_draft.text))
+        closing_context = DialogueTurnContext(
+            scene_id,
+            2,
+            3,
+            premise,
+            engine.context_for_agent(current_tick, order.customer_id),
+            participants,
+            tuple(transcript),
+            result,
+            self._scene_direction(
+                "service_reaction",
+                "回扣并收束：顾客回应前两轮的实际结果，留下继续营业所需的自然动作",
+                premise,
+                unresolved_threads=unresolved_threads,
+            ),
+        )
+        closing_proposed = generator(closing_context)
+        closing_draft = validate_dialogue_output(
+            {
+                "expression_id": closing_proposed.expression_id,
+                "text": closing_proposed.text,
+            },
+            closing_context,
         )
         return ScenePackage(
             scene_id,
@@ -765,8 +912,8 @@ class WorldSceneService:
                     "dialogue_3",
                     order.customer_id,
                     SPEAKER_PORTRAITS[order.customer_id],
-                    "neutral",
-                    self._result_closing(result),
+                    closing_draft.expression_id,
+                    closing_draft.text,
                 ),
             ),
         )
@@ -1253,9 +1400,6 @@ class WorldSceneService:
             graph_record = store.get_daily_story_graph(
                 day_index, DAILY_STORY_GRAPH_VERSION
             )
-            opening = self._ambient_scene(day_index, "opening")
-            if store.get_meta(f"bridge_ack:{opening.scene_id}") is None:
-                return self._persist_ambient_request(store, request, opening)
             if graph_record is None or graph_record["status"] != "ready":
                 raise BridgeError(
                     503,
@@ -1266,9 +1410,49 @@ class WorldSceneService:
             if not isinstance(raw_graph, Mapping):
                 raise ValueError("ready daily story graph payload was invalid")
             graph = DailyStoryGraph.from_dict(raw_graph)
+            # Clear stale client hand-off markers before any opening gate can
+            # return a scene. Older acceptance databases may retain this flag
+            # even though the cursor is not at customer three anymore.
+            break_pending_key = f"break_pending_day_{day_index}"
+            break_pending = store.get_meta(break_pending_key) == "1"
+            progress = store.get_daily_story_progress(
+                day_index, DAILY_STORY_GRAPH_VERSION
+            )
+            expected_break_node = f"day_{day_index}_customer_3_arrival"
+            if break_pending and (
+                progress is None
+                or progress["status"] != "active"
+                or progress["current_node_id"] != expected_break_node
+            ):
+                store.set_meta(break_pending_key, "0")
+                emit_timing(
+                    "daily_flow_gate",
+                    day=day_index,
+                    gate="break_stale_cleared",
+                    current_node_id=(
+                        progress["current_node_id"] if progress is not None else None
+                    ),
+                )
+                break_pending = False
+            opening = self._ambient_scene(day_index, "opening")
+            if store.get_meta(f"bridge_ack:{opening.scene_id}") is None:
+                return self._persist_ambient_request(store, request, opening)
             doorbell = self._ambient_scene(day_index, "doorbell")
             if store.get_meta(f"bridge_ack:{doorbell.scene_id}") is None:
                 return self._persist_ambient_request(store, request, doorbell)
+            pre_opening = self._daily_interlude_scene(day_index, "pre_opening")
+            if store.get_meta(f"bridge_ack:{pre_opening.scene_id}") is None:
+                emit_timing("daily_flow_gate", day=day_index, gate="pre_opening")
+                return self._persist_ambient_request(store, request, pre_opening)
+            music_selection = self._daily_interlude_scene(day_index, "music_selection")
+            if store.get_meta(f"bridge_ack:{music_selection.scene_id}") is None:
+                emit_timing("daily_flow_gate", day=day_index, gate="music_selection")
+                return self._persist_ambient_request(store, request, music_selection)
+            break_scene = self._daily_interlude_scene(day_index, "break")
+            if break_pending:
+                if store.get_meta(f"bridge_ack:{break_scene.scene_id}") is None:
+                    emit_timing("daily_flow_gate", day=day_index, gate="break")
+                    return self._persist_ambient_request(store, request, break_scene)
             meta_key = f"bridge_open:{request_id}"
             prior = store.get_meta(meta_key)
             if prior is not None:
@@ -1298,24 +1482,28 @@ class WorldSceneService:
                 )
             node = self._story_node(graph, str(progress["current_node_id"]))
             if node.kind not in {
+                StoryNodeKind.INTERLUDE,
                 StoryNodeKind.ARRIVAL_ORDER,
                 StoryNodeKind.RESULT_DIALOGUE,
             } or node.scene is None:
                 raise ValueError("daily story cursor did not reference a playable scene")
-            if node.kind is StoryNodeKind.ARRIVAL_ORDER:
-                source_event_id = self._story_source_event_id(graph, node)
+            if node.kind in {StoryNodeKind.ARRIVAL_ORDER, StoryNodeKind.RESULT_DIALOGUE}:
+                if node.kind is StoryNodeKind.ARRIVAL_ORDER:
+                    source_event_id = self._story_source_event_id(graph, node)
+                else:
+                    commit = next(
+                        (
+                            item
+                            for item in store.list_story_branch_commits()
+                            if item["result_node_id"] == node.node_id
+                        ),
+                        None,
+                    )
+                    if commit is None:
+                        raise ValueError("daily result node had no committed branch")
+                    source_event_id = int(commit["service_event_id"])
             else:
-                commit = next(
-                    (
-                        item
-                        for item in store.list_story_branch_commits()
-                        if item["result_node_id"] == node.node_id
-                    ),
-                    None,
-                )
-                if commit is None:
-                    raise ValueError("daily result node had no committed branch")
-                source_event_id = int(commit["service_event_id"])
+                source_event_id = 0
             scene = node.scene
             materialized_key = f"story_materialized_scene:{scene.scene_id}"
             materialized_payload = store.get_meta(materialized_key)
@@ -1364,7 +1552,10 @@ class WorldSceneService:
                         sort_keys=True,
                     ),
                 )
-                store.set_meta(f"bridge_scene:{scene.scene_id}", source_event_id)
+                store.set_meta(
+                    f"bridge_scene:{scene.scene_id}",
+                    "ambient" if node.kind is StoryNodeKind.INTERLUDE else source_event_id,
+                )
                 store.set_meta(
                     f"bridge_scene_payload:{scene.scene_id}",
                     json.dumps(
@@ -1558,173 +1749,149 @@ class WorldSceneService:
         resolution_input: str,
         story_reference: Mapping[str, Any],
     ) -> OrderResolution:
+        """Commit the deterministic drink result before optional dialogue AI."""
+
         order = source_scene.order
         if order is None:
             raise KeyError("story scene did not contain an order")
         day_index = int(story_reference["day_index"])
         arrival_node_id = str(story_reference["node_id"])
-        graph_record = store.get_daily_story_graph(
-            day_index, DAILY_STORY_GRAPH_VERSION
-        )
+        graph_record = store.get_daily_story_graph(day_index, DAILY_STORY_GRAPH_VERSION)
         if graph_record is None or not isinstance(graph_record["graph"], Mapping):
             raise ValueError("daily story graph was unavailable during order resolution")
         graph = DailyStoryGraph.from_dict(graph_record["graph"])
         arrival = self._story_node(graph, arrival_node_id)
         if arrival.kind is not StoryNodeKind.ARRIVAL_ORDER:
             raise ValueError("story order did not reference an arrival node")
-        progress = store.get_daily_story_progress(
-            day_index, DAILY_STORY_GRAPH_VERSION
-        )
+        progress = store.get_daily_story_progress(day_index, DAILY_STORY_GRAPH_VERSION)
         existing_commit = store.get_story_branch_commit(order.order_id)
-        if progress is None or (
-            progress["current_node_id"] != arrival_node_id
-            and existing_commit is None
-        ):
-            raise BridgeError(
-                409,
-                "story_branch_already_advanced",
-                "the daily story had already advanced past this order",
-            )
+        if progress is None or (progress["current_node_id"] != arrival_node_id and existing_commit is None):
+            raise BridgeError(409, "story_branch_already_advanced", "the daily story had already advanced past this order")
 
         request_key = f"bridge_order_request:{request['request_id']}"
         order_key = f"bridge_order:{order.order_id}"
+        local_started = monotonic_seconds()
+        result: ServiceResult
+        service_event_id: int
+        income_delta: int
+        fallback_scene: ScenePackage
+        result_node_id: str
+        replay = False
         with store.transaction():
             prior_request = store.get_meta(request_key)
             if prior_request is not None and prior_request != request_json:
-                raise BridgeError(
-                    409,
-                    "request_id_conflict",
-                    "request_id was already used with different content",
-                )
+                raise BridgeError(409, "request_id_conflict", "request_id was already used with different content")
             prior_order = store.get_meta(order_key)
             if prior_order is not None:
+                replay = True
                 record = json.loads(prior_order)
                 if record.get("resolution_input") != resolution_input:
-                    raise BridgeError(
-                        409,
-                        "order_already_resolved",
-                        "the order was already resolved with a different drink",
-                    )
+                    raise BridgeError(409, "order_already_resolved", "the order was already resolved with a different drink")
+                result = ServiceResult.from_dict(record["result"])
+                service_event_id = int(record["service_event_id"])
+                income_delta = int(record["income_delta"])
+                fallback_scene = ScenePackage.from_dict(record["scene"])
+                result_node_id = dict(arrival.branch_targets)[result.category.value]
                 store.set_meta(request_key, request_json)
-                return OrderResolution(
-                    ServiceResult.from_dict(record["result"]),
-                    ScenePackage.from_dict(record["scene"]),
-                    int(record["income_delta"]),
-                )
-
-            result = evaluate_service(order, submission)
-            result_node_id = dict(arrival.branch_targets)[result.category.value]
-            result_node = self._story_node(graph, result_node_id)
-            if result_node.scene is None:
-                raise ValueError("selected daily result branch had no scene")
-            income_delta = service_income(result, submission)
-            service_event_id = store.append_event(
-                store.current_tick,
-                "drink_served",
-                order.customer_id,
-                payload={
-                    "source_scene_id": source_scene.scene_id,
-                    "source_event_id": self._story_source_event_id(graph, arrival),
-                    "story_day": day_index,
-                    "story_node_id": result_node_id,
-                    "order": order.to_dict(),
-                    "drink": dict(normalized_drink),
-                    "result": result.to_dict(),
-                    "income_delta": income_delta,
-                },
-            )
-            reaction_scene = result_node.scene
-            # Result branches in the skeleton are cheap placeholders. Only
-            # the branch the player actually selected is sent to the provider.
-            try:
-                provider = self.provider_factory()
-                reaction_scene = self._generated_reaction(
-                    order,
-                    result,
-                    service_event_id,
+            else:
+                result = evaluate_service(order, submission)
+                result_node_id = dict(arrival.branch_targets)[result.category.value]
+                result_node = self._story_node(graph, result_node_id)
+                if result_node.scene is None:
+                    raise ValueError("selected daily result branch had no scene")
+                fallback_scene = result_node.scene
+                income_delta = service_income(result, submission)
+                service_event_id = store.append_event(
                     store.current_tick,
-                    self._engine(store, provider),
-                    provider,
-                    scene_id=result_node.scene.scene_id,
+                    "drink_served",
+                    order.customer_id,
+                    payload={
+                        "source_scene_id": source_scene.scene_id,
+                        "source_event_id": self._story_source_event_id(graph, arrival),
+                        "story_day": day_index,
+                        "story_node_id": result_node_id,
+                        "order": order.to_dict(),
+                        "drink": dict(normalized_drink),
+                        "result": result.to_dict(),
+                        "income_delta": income_delta,
+                    },
                 )
-            except BYOKError as exc:
-                if not self.allow_provider_fallback:
-                    raise
-                self._report_error("selected result provider fallback", exc)
-                emit_timing(
-                    "order_reaction_fallback",
+                store.record_story_branch_commit(
+                    day_index=day_index,
+                    generation_version=DAILY_STORY_GRAPH_VERSION,
                     order_id=order.order_id,
+                    arrival_node_id=arrival_node_id,
+                    result_node_id=result_node_id,
+                    category=result.category.value,
                     service_event_id=service_event_id,
-                    result_category=result.category.value,
-                    error_type=type(exc).__name__,
+                    income_delta=income_delta,
                 )
+                store.advance_daily_story_cursor(day_index, DAILY_STORY_GRAPH_VERSION, arrival_node_id, result_node_id)
+                total_income = int(store.get_meta("player_shift_income", "0") or 0)
+                store.set_meta("player_shift_income", total_income + income_delta)
+                record = {
+                    "resolution_input": resolution_input,
+                    "service_event_id": service_event_id,
+                    "result": result.to_dict(),
+                    "scene": fallback_scene.to_dict(),
+                    "income_delta": income_delta,
+                }
+                store.set_meta(order_key, json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+                store.set_meta(request_key, request_json)
+                store.set_meta(f"bridge_scene:{fallback_scene.scene_id}", service_event_id)
+                store.set_meta(f"bridge_scene_payload:{fallback_scene.scene_id}", json.dumps(fallback_scene.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+                store.set_meta(f"story_scene_node:{fallback_scene.scene_id}", json.dumps({"day_index": day_index, "node_id": result_node_id}, separators=(",", ":")))
+
+        emit_timing(
+            "order_local_committed",
+            order_id=order.order_id,
+            result_category=result.category.value,
+            service_event_id=service_event_id,
+            income_delta=income_delta,
+            replay=replay,
+            elapsed_ms=round((monotonic_seconds() - local_started) * 1000),
+        )
+        if replay:
+            return OrderResolution(result, fallback_scene, income_delta)
+        reaction_scene = fallback_scene
+        provider_started = monotonic_seconds()
+        provider_error: Exception | None = None
+        try:
+            provider = self.provider_factory()
+            reaction_scene = self._generated_reaction(
+                order, result, service_event_id, store.current_tick,
+                self._engine(store, provider), provider, scene_id=fallback_scene.scene_id,
+            )
+        except Exception as exc:
+            provider_error = exc
+            reaction_scene = fallback_scene
+            self._report_error("selected result provider fallback", exc)
+
+        if provider_error is not None:
+            with store.transaction():
                 store.append_event(
                     store.current_tick,
                     "dialogue_provider_fallback",
                     order.customer_id,
                     payload={
-                        "error_type": type(exc).__name__,
+                        "error_type": type(provider_error).__name__,
                         "source_event_id": service_event_id,
                         "order_id": order.order_id,
                         "result_category": result.category.value,
                     },
                 )
-                reaction_scene = result_node.scene
-            store.record_story_branch_commit(
-                day_index=day_index,
-                generation_version=DAILY_STORY_GRAPH_VERSION,
-                order_id=order.order_id,
-                arrival_node_id=arrival_node_id,
-                result_node_id=result_node_id,
-                category=result.category.value,
-                service_event_id=service_event_id,
-                income_delta=income_delta,
-            )
-            store.advance_daily_story_cursor(
-                day_index,
-                DAILY_STORY_GRAPH_VERSION,
-                arrival_node_id,
-                result_node_id,
-            )
-            total_income = int(store.get_meta("player_shift_income", "0") or 0)
-            store.set_meta("player_shift_income", total_income + income_delta)
-            record = {
-                "resolution_input": resolution_input,
-                "service_event_id": service_event_id,
-                "result": result.to_dict(),
-                "scene": reaction_scene.to_dict(),
-                "income_delta": income_delta,
-            }
-            store.set_meta(
-                order_key,
-                json.dumps(
-                    record,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ),
-            )
-            store.set_meta(request_key, request_json)
-            store.set_meta(
-                f"bridge_scene:{reaction_scene.scene_id}", service_event_id
-            )
-            store.set_meta(
-                f"bridge_scene_payload:{reaction_scene.scene_id}",
-                json.dumps(
-                    reaction_scene.to_dict(),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ),
-            )
-            store.set_meta(
-                f"story_scene_node:{reaction_scene.scene_id}",
-                json.dumps(
-                    {"day_index": day_index, "node_id": result_node_id},
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ),
-            )
+            emit_timing("order_reaction_fallback", order_id=order.order_id, service_event_id=service_event_id, result_category=result.category.value, error_type=type(provider_error).__name__, elapsed_ms=round((monotonic_seconds() - provider_started) * 1000))
+        else:
+            with store.transaction():
+                latest = json.loads(store.get_meta(order_key) or "{}")
+                if latest.get("resolution_input") != resolution_input:
+                    raise BridgeError(409, "order_already_resolved", "the order resolution changed while generating dialogue")
+                latest["scene"] = reaction_scene.to_dict()
+                store.set_meta(order_key, json.dumps(latest, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+                store.set_meta(f"bridge_scene:{reaction_scene.scene_id}", service_event_id)
+                store.set_meta(f"bridge_scene_payload:{reaction_scene.scene_id}", json.dumps(reaction_scene.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+                store.set_meta(f"story_scene_node:{reaction_scene.scene_id}", json.dumps({"day_index": day_index, "node_id": result_node_id}, separators=(",", ":")))
+            emit_timing("order_reaction_ready", order_id=order.order_id, service_event_id=service_event_id, result_category=result.category.value, elapsed_ms=round((monotonic_seconds() - provider_started) * 1000))
         return OrderResolution(result, reaction_scene, income_delta)
 
     def resolve_order(self, request: Mapping[str, Any]) -> OrderResolution:
@@ -1784,6 +1951,9 @@ class WorldSceneService:
 
             request_key = f"bridge_order_request:{request['request_id']}"
             order_key = f"bridge_order:{order_id}"
+            replay = False
+            replay_scene: ScenePackage | None = None
+            local_started = monotonic_seconds()
             with store.transaction():
                 prior_request = store.get_meta(request_key)
                 if prior_request is not None and prior_request != request_json:
@@ -1806,9 +1976,8 @@ class WorldSceneService:
                     persisted_scene = record.get("scene")
                     store.set_meta(request_key, request_json)
                     if isinstance(persisted_scene, dict):
-                        return OrderResolution(
-                            result, ScenePackage.from_dict(persisted_scene)
-                        )
+                        replay = True
+                        replay_scene = ScenePackage.from_dict(persisted_scene)
                 else:
                     result = evaluate_service(order, submission)
                     service_event_id = store.append_event(
@@ -1840,9 +2009,23 @@ class WorldSceneService:
                     )
                     store.set_meta(request_key, request_json)
 
-            provider = self.provider_factory()
-            engine = self._engine(store, provider)
+            emit_timing(
+                "order_local_committed",
+                order_id=order.order_id,
+                result_category=result.category.value,
+                service_event_id=service_event_id,
+                income_delta=0,
+                replay=replay,
+                elapsed_ms=round((monotonic_seconds() - local_started) * 1000),
+            )
+            if replay_scene is not None:
+                return OrderResolution(result, replay_scene)
+
+            provider_started = monotonic_seconds()
+            provider_error: Exception | None = None
             try:
+                provider = self.provider_factory()
+                engine = self._engine(store, provider)
                 reaction = self._generated_reaction(
                     order,
                     result,
@@ -1852,6 +2035,7 @@ class WorldSceneService:
                     provider,
                 )
             except Exception as exc:
+                provider_error = exc
                 self._report_error("drink reaction generation", exc)
                 store.append_event(
                     store.current_tick,
@@ -1860,6 +2044,8 @@ class WorldSceneService:
                     payload={
                         "error_type": type(exc).__name__,
                         "source_event_id": service_event_id,
+                        "order_id": order.order_id,
+                        "result_category": result.category.value,
                     },
                 )
                 reaction = self._fallback_reaction(order, result, service_event_id)
@@ -1899,6 +2085,14 @@ class WorldSceneService:
                         sort_keys=True,
                     ),
                 )
+            emit_timing(
+                "order_reaction_fallback" if provider_error is not None else "order_reaction_ready",
+                order_id=order.order_id,
+                result_category=result.category.value,
+                service_event_id=service_event_id,
+                error_type=type(provider_error).__name__ if provider_error is not None else None,
+                elapsed_ms=round((monotonic_seconds() - provider_started) * 1000),
+            )
             return OrderResolution(result, reaction)
 
     def ack_scene(self, request: Mapping[str, Any]) -> None:
@@ -1973,6 +2167,19 @@ class WorldSceneService:
                             node_id,
                             merge.next_node_id,
                         )
+                        next_node_id = merge.next_node_id or ""
+                        if next_node_id.endswith("customer_3_arrival"):
+                            store.set_meta(
+                                f"break_pending_day_{day_index}",
+                                "1",
+                            )
+                    elif node.kind is StoryNodeKind.INTERLUDE:
+                        store.advance_daily_story_cursor(
+                            day_index,
+                            DAILY_STORY_GRAPH_VERSION,
+                            node_id,
+                            node.next_node_id,
+                        )
                 if scene_id.startswith("settlement_day_"):
                     try:
                         completed_day = int(scene_id.removeprefix("settlement_day_"))
@@ -2030,6 +2237,18 @@ class WorldSceneService:
                             "next_story_day": completed_day + 1,
                         },
                     )
+                if scene_id.startswith("break_day_"):
+                    try:
+                        break_day = int(scene_id.removeprefix("break_day_"))
+                    except ValueError:
+                        raise ValueError("break scene day was invalid") from None
+                    store.set_meta(f"break_pending_day_{break_day}", "0")
+                if scene_id.startswith("music_selection_day_"):
+                    try:
+                        music_day = int(scene_id.removeprefix("music_selection_day_"))
+                    except ValueError:
+                        raise ValueError("music selection day was invalid") from None
+                    store.set_meta(f"music_selected_day_{music_day}", "1")
                 if not ambient:
                     self._remember_generated_dialogue(store, scene, event_id)
                 ack_event_id = store.append_event(
@@ -2040,6 +2259,12 @@ class WorldSceneService:
                         "scene_id": scene_id,
                         "client_session_id": request["client_session_id"],
                         "outcome": request["outcome"],
+                        **(
+                            {"music_source": str(request["music_source"])}
+                            if scene_id.startswith("music_selection_day_")
+                            and request.get("music_source") is not None
+                            else {}
+                        ),
                     },
                 )
                 store.set_meta(ack_key, ack_event_id)

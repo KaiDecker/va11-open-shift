@@ -52,6 +52,28 @@
 
 ## Manual game acceptance
 
+### Stage 19 known issues (not release-ready)
+
+Stage 19 currently reuses the original `obj_textbox` lifecycle and the original
+break/save UI, but it does not yet hand the complete flow back to the original
+controller chain. Open Shift still owns the dynamic dialogue queue, portrait
+state, bridge callbacks, scene acknowledgement, and story cursor.
+
+- After closing the original four-portrait break/save UI, the bar can return
+  with an empty textbox or `NO SIGNAL`; the third customer's dialogue/order
+  state may not resume. Suspected causes include return/ACK ordering and a
+  mismatch between `cur_client`/`cur_stage` and the Open Shift story cursor;
+  the single root cause is not confirmed.
+- After a provider `...` wait finishes, a continuing speaker such as Alma can
+  lose its portrait. Suspected causes include wait-box `HIDEALL`/`SHOW` effects,
+  bridge portrait state diverging from native instances, or the next native
+  textbox load clearing the customer object; the single root cause is not
+  confirmed.
+
+These are acceptance blockers. Do not describe Stage 19 as a complete vanilla
+flow until the next stage verifies portrait continuity, break/save return,
+third-customer continuation, and restart/load recovery in a real game process.
+
 - [ ] Jill speaks without a portrait while the active customer remains visible.
 - [ ] Exact, acceptable, wrong, and special drink branches resolve correctly.
 - [ ] Served drinks use the original recipe prices (Moonblast is 180), scalable

@@ -1,5 +1,5 @@
 param(
-    [string] $Version = "0.18.0-rc.1",
+    [string] $Version = "0.19.0-rc.1",
     [string] $Output = (Join-Path (Join-Path $PSScriptRoot "..\work") "open-shift-player-$Version.zip"),
     [string] $Python = "python",
     [string] $WebViewSdk = "",
@@ -9,7 +9,23 @@ param(
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $outputPath = [IO.Path]::GetFullPath($Output)
-$pyinstaller = Join-Path (Split-Path -Parent $Python) "Scripts\pyinstaller.exe"
+function Resolve-PythonExecutable([string] $PythonPath) {
+    $command = @(Get-Command -Name $PythonPath -CommandType Application -ErrorAction SilentlyContinue) |
+        Where-Object { $_.Source } |
+        Select-Object -First 1
+    if ($command) {
+        return [IO.Path]::GetFullPath([string] $command.Source)
+    }
+    try {
+        return [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $PythonPath -ErrorAction Stop).Path)
+    }
+    catch {
+        throw "Python executable was not found: $PythonPath"
+    }
+}
+$pythonExe = Resolve-PythonExecutable $Python
+$pythonDir = Split-Path -Parent $pythonExe
+$pyinstaller = Join-Path $pythonDir "Scripts\pyinstaller.exe"
 if (-not (Test-Path -LiteralPath $pyinstaller -PathType Leaf)) {
     $pyinstaller = "pyinstaller"
 }
@@ -49,7 +65,7 @@ $webViewForms = Join-Path $resolvedWebViewSdk "Microsoft.Web.WebView2.WinForms.d
 $webViewLoader = Join-Path $resolvedWebViewSdk "WebView2Loader.dll"
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "packaging\create-icon.ps1") -Output $iconOut
 if ($LASTEXITCODE -ne 0) { throw "OpenShift.ico build failed" }
-& $Python -m PyInstaller --noconfirm --clean --onefile --name OpenShift (Join-Path $root "packaging\runtime_entry.py") --paths (Join-Path $root "src") --distpath (Split-Path -Parent $runtimeOut) --workpath (Join-Path $root "work\pyinstaller-build") --specpath (Join-Path $root "work\pyinstaller-spec")
+& $pythonExe -m PyInstaller --noconfirm --clean --onefile --name OpenShift (Join-Path $root "packaging\runtime_entry.py") --paths (Join-Path $root "src") --distpath (Split-Path -Parent $runtimeOut) --workpath (Join-Path $root "work\pyinstaller-build") --specpath (Join-Path $root "work\pyinstaller-spec")
 if ($LASTEXITCODE -ne 0) { throw "OpenShift.exe build failed" }
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnet) { throw "The .NET SDK is required to build the WebView2 launcher" }
@@ -58,6 +74,13 @@ Remove-Item -LiteralPath $publishDir -Recurse -Force -ErrorAction SilentlyContin
 & $dotnet.Source publish (Join-Path $root "packaging\OpenShiftSetup.csproj") --configuration Release --output $publishDir --self-contained true --runtime win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:WebViewSdk=$resolvedWebViewSdk -p:ApplicationIcon=$iconOut
 if ($LASTEXITCODE -ne 0) { throw "OpenShiftSetup.exe WebView2 build failed" }
 Copy-Item -LiteralPath (Join-Path $publishDir "OpenShiftSetup.exe") -Destination $guiOut -Force
-& $Python -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --utmt-cli-zip $UtmtCliZip --webview-dll $webViewCore --webview-dll $webViewForms --webview-dll $webViewLoader
+& $pythonExe -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --utmt-cli-zip $UtmtCliZip --webview-dll $webViewCore --webview-dll $webViewForms --webview-dll $webViewLoader
 if ($LASTEXITCODE -ne 0) { throw "Player release package build failed" }
+# Re-open and CRC-check the final archive through Python as an independent
+# guard. Do not leave a corrupt package behind if a write was interrupted.
+& $pythonExe -m zipfile -t $outputPath
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+    throw "Player release package ZIP validation failed; corrupt output was removed: $outputPath"
+}
 Write-Host "Player release package: $outputPath"
