@@ -7,3 +7,9 @@ global.ag_open_shift_intro_seen = 0;
 global.ag_story_day = 1;
 global.ag_story_day_advance_applied = 0;
 global.ag_request_epoch = 0;
+// These globals are read by the replaced vanilla textbox loader for every
+// textbox, including original-campaign dialogue before Open Shift starts.
+global.ag_memory_textbox_active = 0;
+global.ag_memory_textbox_wait = 0;
+global.ag_memory_textbox_line_count = 0;
+global.ag_memory_textbox_lines[0] = "";

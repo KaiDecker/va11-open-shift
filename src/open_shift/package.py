@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Collection
 
 
 class PackageError(ValueError):
@@ -116,6 +117,32 @@ def _forbidden(entries: list[str]) -> tuple[str, ...]:
     )
 
 
+def _validate_archive(path: Path, expected_names: Collection[str]) -> None:
+    """Re-open a newly written archive and verify every member's CRC."""
+    expected = set(expected_names) | {"PACKAGE_MANIFEST.json"}
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            infos = archive.infolist()
+            names = [info.filename for info in infos]
+            if len(names) != len(set(names)):
+                raise PackageError(f"package contained duplicate entries: {path}")
+            actual = set(names)
+            missing = sorted(expected - actual)
+            if missing:
+                raise PackageError(
+                    "package validation found missing entries: " + ", ".join(missing)
+                )
+            bad_name = archive.testzip()
+            if bad_name is not None:
+                raise PackageError(f"package CRC validation failed for {bad_name}: {path}")
+    except PackageError:
+        raise
+    except Exception as exc:
+        # This also catches a truncated central directory and decompression
+        # errors that PowerShell Expand-Archive would report less clearly.
+        raise PackageError(f"package archive validation failed for {path}: {exc}") from exc
+
+
 def build_mod_package(
     *,
     project_root: str | Path,
@@ -167,6 +194,8 @@ def build_mod_package(
     forbidden = _forbidden(names)
     if forbidden:
         raise PackageError("forbidden files would enter package: " + ", ".join(forbidden))
+    if len(names) != len(set(names)):
+        raise PackageError("package contains duplicate output entries")
 
     manifest = {
         "package_id": "open_shift",
@@ -198,6 +227,9 @@ def build_mod_package(
                 "PACKAGE_MANIFEST.json",
                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             )
+        # Validate the closed temporary archive before replacing an existing
+        # release. A build must never report success for a truncated ZIP.
+        _validate_archive(Path(temporary), names)
         os.replace(temporary, output_path)
     except BaseException:
         try:

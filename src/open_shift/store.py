@@ -34,7 +34,10 @@ class WorldStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        # Multiple bridge workers can finish a scene while the next day's
+        # skeleton is being persisted. WAL handles readers, but writers still
+        # need a bounded wait instead of failing the player's READY click.
+        self._conn = sqlite3.connect(self.path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.execute("PRAGMA journal_mode = WAL")

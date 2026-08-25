@@ -27,15 +27,24 @@ string[] requiredResources = new[]
     "gml_Object_extrachapter_text_Draw_0",
     "dialog_control",
     "gml_Object_dialog_control_Create_0",
+    "gml_Object_dialog_control_Step_0",
     "recipebook_bg",
     "order_text",
     "obj_textbox",
+    "gml_Object_obj_textbox_Create_0",
+    "gml_Object_obj_textbox_Step_1",
     "gml_Script_reset_lips",
     "gml_Script_resetmixer_2",
     "gml_Script_mixcontrol",
     "gml_Script_load_slot_script",
+    "gml_Script_textbox_loadbox",
     "save_home",
     "saveloadpage",
+    "break_time",
+    "break_bumper",
+    "break_savereturn",
+    "break_savehome",
+    "oob_bumper",
     "jill_room",
     "tablet_control",
     "gml_Object_tablet_control_Create_0",
@@ -152,7 +161,7 @@ UndertaleGameObject controller = new()
     Visible = false,
     Solid = false,
     Depth = -2000,
-    Persistent = false
+    Persistent = true
 };
 UndertaleGameObject saveController = new()
 {
@@ -292,6 +301,21 @@ if (global.cur_day >= 1001 && !instance_exists(ag_bridge_controller))
     global.block_click = 1;
     instance_create(x, y, ag_bridge_controller);
 }");
+
+// Keep the original jukebox entry point available to Open Shift scenes. The
+// bridge only raises global.jukebox_happens; the game's own dialog controller
+// creates jukebox_bg, so song selection and the ready button remain vanilla.
+UndertaleCode dialogStep = Data.Code.ByName("gml_Object_dialog_control_Step_0");
+importGroup.QueueAppend(dialogStep, ReadSource("ag_dialog_control_step_append.gml"));
+
+// Keep the provider placeholder inert even after the vanilla textbox Step
+// sees a confirm input and marks the instance as closing.
+UndertaleCode textboxCreate = Data.Code.ByName("gml_Object_obj_textbox_Create_0");
+UndertaleCode textboxStep = Data.Code.ByName("gml_Object_obj_textbox_Step_1");
+UndertaleCode textboxLoadbox = Data.Code.ByName("gml_Script_textbox_loadbox");
+importGroup.QueueAppend(textboxCreate, ReadSource("ag_textbox_create_append.gml"));
+importGroup.QueueAppend(textboxStep, ReadSource("ag_textbox_step_append.gml"));
+importGroup.QueueReplace(textboxLoadbox, ReadSource("ag_textbox_loadbox_replace.gml"));
 
 UndertaleCode mixControl = Data.Code.ByName("gml_Script_mixcontrol");
 importGroup.QueueAppend(mixControl, ReadSource("ag_bridge_mixcontrol_append.gml"));

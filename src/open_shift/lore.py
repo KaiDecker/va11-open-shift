@@ -68,6 +68,86 @@ ORIGINAL_DIALOGUE_CHARACTER_LINE_COUNTS: tuple[tuple[str, int], ...] = (
     ("Stella", 567),
 )
 
+# Aggregated from the complete local zh-CN script scan. These are statistical
+# style anchors, not source lines: they guide rhythm without copying original
+# dialogue into prompts or release packages.
+ORIGINAL_DIALOGUE_VOICE_STATS: tuple[
+    tuple[str, tuple[tuple[str, float], ...]], ...
+] = (
+    (
+        "Jill",
+        (
+            ("mean_characters", 13.73),
+            ("median_characters", 11.0),
+            ("max_characters", 73.0),
+            ("ellipsis_ratio", 0.2591),
+            ("question_ratio", 0.2567),
+            ("exclamation_ratio", 0.0279),
+            ("parenthetical_ratio", 0.0496),
+        ),
+    ),
+    (
+        "Dana",
+        (
+            ("mean_characters", 16.88),
+            ("median_characters", 16.0),
+            ("max_characters", 48.0),
+            ("ellipsis_ratio", 0.1457),
+            ("question_ratio", 0.2053),
+            ("exclamation_ratio", 0.1012),
+            ("parenthetical_ratio", 0.0),
+        ),
+    ),
+    (
+        "Alma",
+        (
+            ("mean_characters", 17.43),
+            ("median_characters", 17.0),
+            ("max_characters", 49.0),
+            ("ellipsis_ratio", 0.2079),
+            ("question_ratio", 0.2),
+            ("exclamation_ratio", 0.0562),
+            ("parenthetical_ratio", 0.0),
+        ),
+    ),
+    (
+        "Dorothy",
+        (
+            ("mean_characters", 18.59),
+            ("median_characters", 18.0),
+            ("max_characters", 57.0),
+            ("ellipsis_ratio", 0.1733),
+            ("question_ratio", 0.2141),
+            ("exclamation_ratio", 0.17),
+            ("parenthetical_ratio", 0.0011),
+        ),
+    ),
+    (
+        "Sei",
+        (
+            ("mean_characters", 19.01),
+            ("median_characters", 19.0),
+            ("max_characters", 52.0),
+            ("ellipsis_ratio", 0.2526),
+            ("question_ratio", 0.1649),
+            ("exclamation_ratio", 0.1286),
+            ("parenthetical_ratio", 0.0),
+        ),
+    ),
+    (
+        "Stella",
+        (
+            ("mean_characters", 17.87),
+            ("median_characters", 17.0),
+            ("max_characters", 50.0),
+            ("ellipsis_ratio", 0.2099),
+            ("question_ratio", 0.1499),
+            ("exclamation_ratio", 0.0653),
+            ("parenthetical_ratio", 0.0),
+        ),
+    ),
+)
+
 
 ORIGINAL_DIALOGUE_STYLE: tuple[str, ...] = (
     "一个文本框只承担一个反应节拍；优先短答、追问、纠正或补充，不必在当前轮把观点讲完。",
@@ -77,6 +157,79 @@ ORIGINAL_DIALOGUE_STYLE: tuple[str, ...] = (
     "熟人默认既有亲密程度，会用各自不同的方式接话，不重新介绍关系或复述人物百科。",
     "禁止总结者、客服或心理咨询式措辞；不要替现场提炼主题、升华意义或自动给出圆满安慰。",
 )
+
+# Derived from a complete local pass over the supported daily script
+# collection. The scan covered all 19 numbered daily scripts (alongside the
+# other 9 supported script files), including 33 music-selection markers, 620
+# mixing markers, 449 service-result markers and 318 scene-show transitions.
+# These are scene-direction rules, not quotations: they describe pacing,
+# escalation and callback opportunities without putting source dialogue into a
+# prompt or a release package.
+ORIGINAL_DAILY_SCRIPT_FILE_COUNT = 19
+ORIGINAL_DAILY_MUSIC_SELECTION_MARKER_COUNT = 33
+ORIGINAL_DAILY_MIXING_MARKER_COUNT = 620
+ORIGINAL_DAILY_SERVICE_RESULT_MARKER_COUNT = 449
+ORIGINAL_DAILY_SCENE_SHOW_MARKER_COUNT = 318
+ORIGINAL_SHIFT_BEAT_SEQUENCE: tuple[str, ...] = (
+    "营业前：先处理吧台、库存或卫生等眼前事务，再由店员选择音乐并开门",
+    "客人入场：从一个具体点单或眼前动作开始，允许客人追加规格、纠正或改变要求",
+    "调酒过程：每次出杯都是一个停顿点，顾客反馈会改变下一轮话题，而不是立即结束",
+    "营业话题：从客人的工作、新闻、关系或当晚的小麻烦展开，Jill 用观察或干涩吐槽接住",
+    "回扣与收束：回到点单、吧台动作或客人先前说过的细节，再留下续杯、离场或下次再谈的钩子",
+    "中场与收店：用实际工作节奏切换场景，不用旁白总结角色刚刚学到了什么",
+)
+
+ORIGINAL_SCENE_DIRECTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "pre_opening",
+        (
+            "Dana 直接安排酒吧事务；Jill 回报已经完成或仍需处理的具体事项",
+            "对话从可见的吧台、库存、卫生或灯光细节推进到开门准备",
+            "音乐选择是实际开门步骤，不是抽象的气氛说明",
+        ),
+    ),
+    (
+        "arrival_order",
+        (
+            "先接住客人的点单细节，再让对方透露一个可继续追问的具体话题",
+            "点单可以包含追加要求、改口或对 Jill 的即时反应",
+            "不要用欢迎光临、请稍等、我先找位置等填充句结束场景",
+        ),
+    ),
+    (
+        "service_reaction",
+        (
+            "顾客先针对饮品的具体结果反应，再把反应连接到点单时透露的细节",
+            "Jill 的回应应短而有观察，不替顾客总结情绪或宣布剧情完成",
+            "结尾留下续杯、补充说明、回到工作或稍后再谈的自然钩子",
+        ),
+    ),
+    (
+        "break",
+        (
+            "用疲劳、吧台节奏或当晚发生的小事转入休息，不替玩家概括主题",
+            "休息是营业流程中的停顿，返回后应保留尚未说完的话题",
+        ),
+    ),
+)
+
+
+def scene_direction_rules(scene_type: str) -> tuple[str, ...]:
+    """Return compact, source-derived direction rules for a scene type."""
+
+    for key, rules in ORIGINAL_SCENE_DIRECTION_RULES:
+        if key == scene_type:
+            return rules
+    return ("接住上一句的具体细节，并保留一个可以继续谈下去的未解决话题",)
+
+
+def dialogue_voice_payload(display_name: str) -> dict[str, float]:
+    """Return source-derived rhythm statistics for one visible speaker."""
+
+    for name, values in ORIGINAL_DIALOGUE_VOICE_STATS:
+        if name == display_name:
+            return {key: value for key, value in values}
+    raise ValueError(f"unknown dialogue voice statistics: {display_name}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +293,7 @@ CHARACTER_LORE: dict[str, CharacterLore] = {
         ),
         behavioral_boundaries=(
             "她可以经营、巡视或保护酒吧，但不能代替 Jill 调酒或替玩家操作",
+            "Dana 本人就是酒吧老板；她会直接作决定或安排员工，不会称呼另一个未出现的老板，也不会说要向老板汇报",
             "她不会因为一次闲聊就突然放弃酒吧、朋友或既有责任",
         ),
     ),

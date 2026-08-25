@@ -1,14 +1,27 @@
 ag_state = 0;
 ag_http_request = -1;
+// Fire-and-forget client diagnostics use a separate request handle so they
+// can never consume or block the gameplay HTTP state machine.
+ag_diag_http_request = -1;
+ag_diag_request_sequence = 0;
 ag_scene_job_id = "";
 ag_scene_job_poll_at = 0;
 ag_scene_job_poll_count = 0;
+ag_order_job_id = "";
+ag_order_job_poll_at = 0;
+ag_order_job_poll_count = 0;
 ag_request_sequence = 1;
 global.ag_request_epoch += 1;
 ag_request_scope = string(global.ag_request_epoch);
 ag_scene_id = "";
 ag_line_index = 0;
 ag_line_count = 0;
+ag_portrait[0] = "";
+ag_speaker[0] = "";
+ag_expression[0] = "neutral";
+ag_text[0] = "";
+ag_display_name[0] = "";
+ag_name_color[0] = 13;
 ag_return_to = "";
 ag_timeout_at = current_time + 120000;
 ag_line_active = 0;
@@ -17,11 +30,32 @@ ag_wait_speaker = "";
 ag_wait_started_at = 0;
 ag_portrait_speaker = "";
 ag_error_message = "";
+ag_last_http_status = -1;
+ag_last_transport_status = -1;
+ag_last_phase = "init";
+ag_last_job_id = "";
 ag_order_pending = 0;
 ag_order_started = 0;
 ag_order_id = "";
 ag_order_customer = "";
 ag_order_display_text = "";
+ag_music_gate_active = 0;
+ag_break_wait_logged = 0;
+// A break scene is acknowledged while still in the bar.  Only that ACK's
+// successful callback may enter the vanilla break_time room.
+ag_break_enter_after_ack = 0;
+// Track the native break room so only a real return to the bar clears the
+// Open Shift hand-off and lets dialog_control resume the vanilla cursor.
+ag_break_room_entered = 0;
+ag_break_returned = 0;
+ag_last_room = -1;
+// Dynamic dialogue is supplied to the original textbox through this
+// short-lived memory queue. The queue is consumed synchronously by
+// textbox_loadbox before the flag is cleared by the caller.
+global.ag_memory_textbox_active = 0;
+global.ag_memory_textbox_line_count = 0;
+global.ag_memory_textbox_lines[0] = "";
+global.ag_memory_textbox_wait = 0;
 
 ini_open("open-shift-runtime.ini");
 ag_bridge_port = ini_read_real("bridge", "port", 8711);

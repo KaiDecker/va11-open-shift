@@ -62,3 +62,19 @@ The bridge also exposes a non-blocking scene-job protocol for the newer client:
 migrates to polling, so existing acceptance builds continue to work.
 Pass `-Database <path>` to resume an existing world; omit it to create a new
 timestamped acceptance database.
+
+For local acceptance, omit `-GameCopyDir`. The launcher reads the newest
+`stage-*-acceptance-build/install.json`, selects that verified isolated copy,
+and checks its `data.win` SHA-256 before the game starts. Passing an older copy
+does not bypass the check: a stale hash is rejected before VA-11 HALL-A opens.
+
+Stage 19 daily flow now keeps the original VA-11 rhythm instead of collapsing
+an entire shift into one short exchange: opening preparation dialogue is shown
+before the first customer, the original in-game jukebox is opened for the
+playlist gate, each customer scene contains multiple dialogue turns, and after
+the second customer a persisted `break_day_N` scene provides the mid-shift rest
+and save point before service resumes. The bridge does not acknowledge the
+music scene until the vanilla READY button closes the jukebox, so the story
+cursor cannot advance while song selection is incomplete. Gate state is stored
+in the world database, so leaving the room and returning cannot silently skip
+or reset a day phase.
