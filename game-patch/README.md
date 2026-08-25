@@ -4,7 +4,7 @@ This directory contains original patch metadata and GML source only. It must
 never contain `data.win`, extracted sprites, fonts, audio, or dialogue from the
 game or reference mods.
 
-The Stage 9 patch targets only the Steam Windows baseline recorded in
+The current patch targets only the Steam Windows baseline recorded in
 `manifest.json`. A patcher must fail closed when the hash or any required
 resource name differs. It must write to a temporary copy, verify the result,
 and leave the installed original untouched until an explicit install step.
@@ -39,7 +39,7 @@ GameMaker JSON decoder. Cached scenes then play without per-line API waits.
 Provider-budget exhaustion, safe graph-generation failure/retry, and a
 disconnected service have distinct Chinese messages.
 
-Stage 6 adds Jill as a player-only speaker. Python and SQLite keep her
+The current dialogue bridge keeps Jill as a player-only speaker. Python and SQLite keep her
 `portrait_id` as `null`, while the HTTP transport converts only Jill's value to
 an empty string for the legacy GameMaker JSON decoder. The GameMaker client
 requires that empty string for Jill, strictly matches every Agent to its
@@ -68,7 +68,7 @@ game starts; it must never be committed or logged. The patch validates the
 known Steam Windows `data.win` hash and all injection-point names before making
 changes. Build and installation must always operate on a copy of the game.
 
-Stage 7 persists a bounded graph of at most three customers. Each order has
+The runtime persists a bounded graph of at most three customers. Each order has
 exactly four draft result scenes and a merge node. The rule layer selects and
 commits only the served branch, returns an authoritative `income_delta`, and
 advances the original `global.cashcounter` and `global.barscore` without allowing
@@ -79,7 +79,7 @@ Income uses the original recipe prices, including the 100-gil scalable big-glass
 surcharge, and updates the original short-lived `scorepop_obj` amount after the
 authoritative HTTP response arrives.
 
-Stage 8 keeps the original 24 save slots and native text format. For Open
+The save bridge keeps the original 24 save slots and native text format. For Open
 Shift day 1001, each original save finishes first and then an authenticated
 `/v1/saves/pair` request creates a WAL-safe SQLite backup. Loading an Open
 Shift native slot first calls `/v1/saves/restore`; only a matching native hash,

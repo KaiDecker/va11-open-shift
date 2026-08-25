@@ -26,7 +26,7 @@ TOML persistence, and safely uninstalls the isolated copy.
 The public project name is **OPEN SHIFT**. Community-facing posts are maintained
 outside the player package and may be adapted for local community rules.
 
-The final package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the Open Shift icon,
+The current preview package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the OPEN SHIFT icon,
 the WebView2 host libraries, `OpenShift.ico`, and UTMT CLI. The lower-level
 `install-isolated-copy.ps1` and `launch-open-shift.ps1` scripts remain available
 for maintainer and acceptance workflows.
@@ -68,7 +68,7 @@ For local acceptance, omit `-GameCopyDir`. The launcher reads the newest
 and checks its `data.win` SHA-256 before the game starts. Passing an older copy
 does not bypass the check: a stale hash is rejected before VA-11 HALL-A opens.
 
-Stage 19 daily flow now keeps the original VA-11 rhythm instead of collapsing
+The Stage 19 daily flow keeps the original VA-11 rhythm instead of collapsing
 an entire shift into one short exchange: opening preparation dialogue is shown
 before the first customer, the original in-game jukebox is opened for the
 playlist gate, each customer scene contains multiple dialogue turns, and after
@@ -77,4 +77,5 @@ and save point before service resumes. The bridge does not acknowledge the
 music scene until the vanilla READY button closes the jukebox, so the story
 cursor cannot advance while song selection is incomplete. Gate state is stored
 in the world database, so leaving the room and returning cannot silently skip
-or reset a day phase.
+or reset a day phase. The public target is a Windows x64 preview release; stable-release
+checks remain tracked in `RELEASE_CHECKLIST.md`.

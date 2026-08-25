@@ -1,146 +1,38 @@
-# Open Shift Release Checklist
+# OPEN SHIFT 发布清单
 
-## Build inputs
+这份清单用于维护者在创建 GitHub Release 前逐项验收。历史 RC 故障不记录在这里；复现问题
+应写入 Issue，并附版本、日志和最小复现步骤。
 
-- [ ] Worktree is clean and release commit is identified.
-- [ ] `game-patch/manifest.json` contains the supported Steam Windows hashes.
-- [ ] Steam `data.win` and executable hashes match the manifest.
-- [ ] No `data.win`, original assets, SQLite databases, API keys, archives, or
-      `reference-local` files are staged.
-- [ ] Windows x64 RC ZIP has an explicit prerelease version and SHA-256.
-- [ ] WebView2 SDK build inputs are resolved explicitly or by supported discovery.
+## 版本与输入
 
-## Automated verification
+- [ ] 工作区干净，发布 commit、版本号和目标平台已确定。
+- [ ] `game-patch/manifest.json` 中的 Steam Windows 哈希与受支持版本一致。
+- [ ] Steam 原版 `data.win` 和 EXE 哈希在构建前后不变。
+- [ ] 构建输入不包含 API Key、数据库、存档、原版资源或生成的 `data.win`。
 
-- [ ] `python -m unittest discover -s tests` passes.
-- [ ] The 30-day and 365-day deterministic soak tests pass without rejected
-      actions or provider errors.
-- [ ] UTMT 0.9.1.2 compiles `game-patch/apply_mod.csx` from the verified
-      original into a temporary output.
-- [ ] `verify-patch-output` accepts the temporary output and committed GML
-      source tree.
-- [ ] Two UTMT load/write verification passes produce the same SHA-256.
-- [ ] The Steam original SHA-256 is unchanged after all build steps.
+## 自动验证
 
-## Installation and recovery
+- [ ] `python -m unittest discover -s tests` 全部通过。
+- [ ] 补丁从受支持原版构建，`verify-patch-output` 通过。
+- [ ] UTMT 往返写入两次得到相同哈希。
+- [ ] `git diff --check` 通过，发行包清单无敏感文件。
 
-- [ ] `install-patch` targets an isolated game copy and creates a backup plus
-      install record before replacement.
-- [ ] Launch, bridge health, one complete shift, paired save, restart, and load
-      are verified on the installed copy.
-- [ ] A mismatched native/SQLite pair is rejected without changing live state.
-- [ ] `uninstall-patch` restores the backup when the installed output matches.
-- [ ] Uninstall refuses a file modified after installation.
-- [ ] A clean extraction installs without Python or a separately downloaded UTMT.
-- [ ] A previous Open Shift install upgrades by patch fingerprint and keeps its
-      database, paired saves, API credential, and native save directory.
-- [ ] Re-running the same RC recognizes the verified isolated patch without rebuilding.
-- [ ] WebView2 Runtime absence produces a Chinese actionable diagnostic.
-- [ ] Steam libraries outside the system drive are discovered from `libraryfolders.vdf`.
-- [ ] All mutating GUI controls are disabled while install or launch is active.
-- [ ] GUI uninstall requires confirmation and preserves saves by default.
-- [ ] Window, taskbar, executable, and desktop shortcut use the current OPEN SHIFT icon.
+## 安装与游戏验收
 
-## Secrets and configuration
+- [ ] 全新 Windows x64 环境可用 `OpenShiftSetup.exe` 安装隔离副本。
+- [ ] WebView2 缺失时显示可操作的中文诊断。
+- [ ] 完成至少两天：开店前对白、原版音乐选择、顾客调酒、中场休息/四头像存档、回到酒吧、
+      下一天和 O.S. DAY N 均可操作。
+- [ ] 重启后可从配对存档恢复；provider 失败有可重试提示或本地安全回退。
+- [ ] 卸载可恢复备份并默认保留玩家存档。
 
-- [ ] Runtime TOML passes `validate-config` and contains only an API key
-      environment-variable name, never the key value.
-- [ ] Provider timeout, model, protocol, thinking mode, call budget, and bounded
-      prefetch depth match the intended release defaults.
-- [ ] Logs, SQLite snapshots, paired-save manifests, install records, and test
-      output contain no API keys, bridge tokens, or full private prompts.
+阶段 19 已在 rc23 完成真实流程验收：ACK、原版休息/存档页、回酒吧后的下一场景、跨日和
+立绘连续性均已走通；rc23 包 SHA-256 为 `a570708705baacbcf6fdcf196b7825a7f2d6de6f92cf5f4b5dd2493154a2ba03`。
 
-## Manual game acceptance
+## 发布包与安全
 
-### Stage 19 known issues (not release-ready)
-
-The rc.20 real-game run failed at the first scene acknowledgement even though
-`timing.log` recorded `POST /v1/scenes/ack -> 200`. The cause was a client-side
-GameMaker ACK validator rejecting the response after JSON field coercion; the
-server had already accepted it. The same run also showed GameMaker client
-diagnostic requests returning HTTP 400 because real runtime values included
-`phase=client`, room-transition states, integer-valued floats, uninitialized
-`null` cursors, and engine-sized HTTP handles that were not covered by the
-validator. rc.21 includes the narrow ACK compatibility fix and bounded,
-GameMaker-compatible diagnostic normalization. Real-game acceptance of rc.21
-is still pending.
-
-The rc.21 real-game run still displayed `phase: ack, HTTP -1 / transport 0`
-immediately after entering the bar. The bridge log showed `/v1/scenes/ack ->
-200`, so this was not a server rejection. GameMaker had delivered a callback
-without a usable `http_status` and with a body shape that was neither empty nor
-the canonical accepted envelope. rc.22 narrows the compatibility rule to ACK
-callbacks only: transport success plus missing/negative HTTP status succeeds
-unless the body contains an explicit error envelope. Ordinary scene and order
-responses remain strict. The rc.22 package is pending fresh real-game
-acceptance.
-
-Stage 19 now uses the original `obj_textbox` lifecycle and original break/save
-UI. The break hand-off is ordered as: dynamic break scene finishes in the bar,
-Open Shift sends and waits for `/v1/scenes/ack`, then the successful ACK enters
-`break_time`; vanilla `break_changer` calls `break_return()` and creates the
-save UI; returning to the bar leaves `cur_client`/`cur_stage` untouched and
-queues the next `/v1/scenes/jobs` request through the bridge. Open Shift's
-`cur_day >= 1001` is outside the original `break_return()` switch, so the
-bridge remains the sole dynamic-text owner after the vanilla save page closes.
-The bridge does not send a second ACK after return and does not use a `-99`
-cursor sentinel.
-
-The rc.22 real-game run still showed `phase: ack, HTTP -1 / transport 0`.
-Although the server had accepted the ACK, this exposed the wrong ownership
-boundary: the client entered the native room before the ACK had completed and
-then tried to resume by blocking the vanilla cursor. The fix is to make ACK
-completion the only room-entry gate, preserve vanilla save UI ownership, and
-queue the next bridge scene after return. A fresh real-game package must
-verify this exact sequence before Stage 19 can be called complete.
-
-- The rc.18 acceptance run still returned from the original four-portrait
-  break/save UI with an empty textbox or `NO SIGNAL`; the third customer's
-  dialogue/order state did not resume. The root cause is confirmed as a stale
-  HTTP request id being reused across the break return, so the client could
-  receive an old acknowledgement instead of the next scene. The bridge now
-  rejects stale ids and emits GameMaker `client_event` timing diagnostics;
-  real-game acceptance of the fix is still pending.
-- After a provider `...` wait finishes, a continuing speaker such as Alma can
-  lose its portrait. The root cause is confirmed as a race between the
-  wait-box `HIDEALL` fade and creation of the replacement textbox: the fade
-  could clear the active portrait after the replacement line had restored it.
-  The bridge now orders the fade and portrait restoration safely; real-game
-  acceptance of the fix is still pending.
-
-These are acceptance blockers. Do not describe Stage 19 as a complete vanilla
-flow until the next stage verifies portrait continuity, break/save return,
-third-customer continuation, and restart/load recovery in a real game process.
-
-The latest build also records GameMaker-side `client_event` timing entries for
-scene requests, callbacks, textbox replacement, break return, and resume
-gates. These diagnostics are intended to identify the exact client state and
-request id when a real-game acceptance run diverges.
-
-- [ ] Jill speaks without a portrait while the active customer remains visible.
-- [ ] Exact, acceptable, wrong, and special drink branches resolve correctly.
-- [ ] Served drinks use the original recipe prices (Moonblast is 180), scalable
-      doubled drinks add 100, and wrong drinks add 0.
-- [ ] The short-lived top-right score popup matches the authoritative drink
-      income instead of displaying 0.
-- [ ] Shift income reaches Jill's wallet exactly once.
-- [ ] The tablet shows `O.S. DAY N` and the original 24-slot save UI remains usable.
-- [ ] A paired save enters the next business day and restores after restart.
-- [ ] Provider failure presents a retryable diagnostic instead of hiding forever.
-
-## Publication
-
-- [ ] Release notes describe compatible hashes and supported platform.
-- [ ] Installation, backup, configuration, launch, save recovery, uninstall, and
-      troubleshooting commands are current.
-- [ ] Package contains source, metadata, and scripts only; it contains no
-      copyrighted game data or generated `data.win`.
-- [ ] Player release package contains `OpenShift.exe`, `OpenShiftSetup.exe`, and
-      bundled UTMT CLI, and its
-      manifest has no `data.win`, game executable, SQLite, `reference-local`,
-      or API key.
-- [ ] A fresh Windows user can install from the package without Python, enter a
-      DPAPI-protected DeepSeek key, launch from the desktop shortcut, complete
-      two business days, and uninstall without changing Steam `data.win`.
-- [ ] The Steam original SHA-256 before install, after upgrade, after a complete
-      DeepSeek-backed shift, and after uninstall is identical.
+- [ ] 包含 `OpenShift.exe`、`OpenShiftSetup.exe`、图标、运行时和安装脚本，不包含 `data.win`、
+      游戏 EXE、数据库、`reference-local` 或 API Key。
+- [ ] 安装、备份、配置、启动、读档、卸载和故障排查文档与当前包一致。
+- [ ] GitHub Release 说明兼容 Steam 哈希、Windows x64 范围、安装步骤和 SHA-256。
+- [ ] README、贡献指南和路线图已同步当前版本，并给出 Issue/PR 入口。
