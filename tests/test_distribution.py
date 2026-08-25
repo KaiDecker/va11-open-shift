@@ -135,7 +135,7 @@ class DistributionTests(unittest.TestCase):
                 / "gml",
             )
             self.assertEqual(result["status"], "verified")
-            self.assertEqual(result["gml_source_count"], 30)
+            self.assertEqual(result["gml_source_count"], 34)
             self.assertEqual(original.read_bytes(), game_data(names=("existing",), code=b"original"))
 
 

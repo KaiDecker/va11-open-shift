@@ -158,6 +158,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_popup_room_step.gml",
         "ag_var_controller_create_append.gml",
         "ag_new_day_step_append.gml",
+        "ag_dialog_control_step_append.gml",
+        "ag_textbox_create_append.gml",
+        "ag_textbox_step_append.gml",
+        "ag_textbox_loadbox_replace.gml",
         "ag_aa_button_1_step.gml",
         "ag_aa_button_2_step.gml",
         "ag_aa_button_3_step.gml",
@@ -181,10 +185,12 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "global.mod_aa",
         '"jill"',
         'ag_portrait_id != ""',
+        "ag_portrait[ag_line_index]",
         'ag_current_speaker != "jill"',
-        'ag_current_speaker != "jill" && ag_current_speaker != ""',
         'ag_speaker_id == ""',
         'ag_wait_box.input_text[0] = "..."',
+        "ag_open_shift_wait",
+        "textbox_closing = 0",
         "dialogue_wait",
         "story_generation_failed",
         "ag_was_order_response",
@@ -236,6 +242,10 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         raise PatchContractError("GML used a nonexistent original money variable")
     if "is_undefined(ag_portrait_id)" in combined:
         raise PatchContractError("GML used the incompatible JSON null portrait check")
+    if "ag_portrait_id[ag_line_index]" in combined:
+        raise PatchContractError(
+            "GML indexed the per-line portrait scalar instead of ag_portrait[]"
+        )
     if "save_required_" in combined or "ag_pair_complete" in combined:
         raise PatchContractError("GML still required a paired save before the next day")
     if combined.count("global.ag_story_day = 1") != 1:

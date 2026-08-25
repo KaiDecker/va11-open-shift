@@ -14,7 +14,7 @@ from open_shift.dialogue import (
 )
 from open_shift.bridge import BridgeError
 from open_shift.byok import BYOKTransportError
-from open_shift.drinks import DRINK_RECIPES, ServiceCategory
+from open_shift.drinks import AlcoholRequirement, DRINK_RECIPES, DrinkOrder, ServiceCategory, ServiceResult
 from open_shift.models import DecisionContext
 from open_shift.providers import MockProvider
 from open_shift.scenario import create_demo_world
@@ -51,6 +51,30 @@ class RecordingProvider:
 
 
 class DailyStoryGraphTests(unittest.TestCase):
+    def test_local_fallback_keeps_a_concrete_callback_without_stock_closers(self) -> None:
+        scene = WorldSceneService._fallback_scene(
+            {
+                "event_id": 1,
+                "event_type": "worked",
+                "actor_id": "dana",
+                "target_id": "dorothy",
+            },
+            {"dana": "Dana", "dorothy": "Dorothy"},
+            480,
+        )
+        text = "\n".join(line.text for line in scene.lines)
+        for stock in (
+            "我先找个位置坐",
+            "吧台一直在这儿",
+            "音乐不错",
+            "刚才那件事",
+            "话题不用跟着杯子",
+            "下一轮再接着说",
+        ):
+            self.assertNotIn(stock, text)
+        self.assertIn("收到", text)
+        self.assertEqual(len(scene.lines), 3)
+
     @staticmethod
     def _wait_for_status(db_path: Path, day_index: int, status: str) -> None:
         deadline = time.monotonic() + 5
@@ -81,6 +105,21 @@ class DailyStoryGraphTests(unittest.TestCase):
             "scene_id": scene_id,
             "outcome": outcome,
         }
+
+    @classmethod
+    def _ack_opening_gates(cls, service: WorldSceneService, prefix: str) -> None:
+        """Advance the Stage 19 pre-opening and music gates."""
+        for index in (1, 2):
+            scene = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": f"{prefix}-gate-open-{index}",
+                    "client_session_id": "story-session-0001",
+                }
+            )
+            service.ack_scene(
+                cls._ack(scene.scene_id, f"{prefix}-gate-ack-{index}", "continued_in_bar")
+            )
 
     @staticmethod
     def _exact_drink(drink_id: str) -> dict[str, object]:
@@ -146,6 +185,87 @@ class DailyStoryGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cycle"):
                 DailyStoryGraph.from_dict(cyclic)
 
+    def test_stage19_opens_with_preparation_music_and_midshift_break(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            service.prepare_story_day({"request_id": "stage19-prepare"})
+
+            def open_scene(request_id: str):
+                return service.open_scene(
+                    {
+                        "protocol_version": 1,
+                        "request_id": request_id,
+                        "client_session_id": "stage19-session",
+                    }
+                )
+
+            opening = open_scene("stage19-opening")
+            service.ack_scene(self._ack(opening.scene_id, "stage19-a1", "continued_in_bar"))
+            doorbell = open_scene("stage19-doorbell")
+            service.ack_scene(self._ack(doorbell.scene_id, "stage19-a2", "continued_in_bar"))
+            pre_opening = open_scene("stage19-pre")
+            self.assertEqual(pre_opening.scene_id, "pre_opening_day_1")
+            self.assertGreaterEqual(len(pre_opening.lines), 6)
+            service.ack_scene(self._ack(pre_opening.scene_id, "stage19-a3", "continued_in_bar"))
+            music = open_scene("stage19-music")
+            self.assertEqual(music.scene_id, "music_selection_day_1")
+            # The Python cursor is not advanced by opening the gate; the game
+            # client must acknowledge it only after the vanilla jukebox READY
+            # button closes the native UI.
+            service.ack_scene(self._ack(music.scene_id, "stage19-a4", "continued_in_bar"))
+            first = open_scene("stage19-first")
+            self.assertIsNotNone(first.order)
+            self.assertGreaterEqual(len(first.lines), 3)
+
+    def test_stage19_ignores_stale_break_marker_before_customer_three(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                db_path,
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+            )
+            service.prepare_story_day({"request_id": "stage19-stale-prepare"})
+            with WorldStore(db_path) as store:
+                store.set_meta("break_pending_day_1", "1")
+
+            scene = service.open_scene(
+                {
+                    "protocol_version": 1,
+                    "request_id": "stage19-stale-open",
+                    "client_session_id": "stage19-stale-session",
+                }
+            )
+            self.assertNotEqual(scene.scene_id, "break_day_1")
+            with WorldStore(db_path) as store:
+                self.assertEqual(store.get_meta("break_pending_day_1"), "0")
+
+    def test_stage19_interlude_and_result_closing_use_natural_role_aware_lines(self) -> None:
+        pre_opening = WorldSceneService._daily_interlude_scene(1, "pre_opening")
+        pre_opening_text = "".join(line.text for line in pre_opening.lines)
+        self.assertNotIn("老板我自己", pre_opening_text)
+        self.assertIn("先把吧台准备好，灯光我来处理", pre_opening_text)
+        self.assertNotIn(
+            "下一轮我会听清楚你的要求",
+            WorldSceneService._result_closing(
+                ServiceResult(
+                    "order-1",
+                    "dana",
+                    ServiceCategory.EXACT,
+                    "beer",
+                    "Beer",
+                    True,
+                )
+            ),
+        )
+
     def test_ready_graph_replays_without_constructing_a_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"
@@ -189,12 +309,13 @@ class DailyStoryGraphTests(unittest.TestCase):
                 {"protocol_version": 1, "request_id": "on-demand-open-2", "client_session_id": "story-session-0001"}
             )
             service.ack_scene(self._ack(doorbell.scene_id, "on-demand-ack-2", "continued_in_bar"))
+            self._ack_opening_gates(service, "on-demand")
             self.assertEqual((provider.dialogue_calls, provider.player_calls), (0, 0))
 
             arrival = service.open_scene(
                 {"protocol_version": 1, "request_id": "on-demand-open-3", "client_session_id": "story-session-0001"}
             )
-            self.assertEqual((provider.dialogue_calls, provider.player_calls), (1, 1))
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (2, 1))
             assert arrival.order is not None
             service.ack_scene(self._ack(arrival.scene_id, "on-demand-ack-3", "order_started"))
             service.resolve_order(
@@ -207,7 +328,7 @@ class DailyStoryGraphTests(unittest.TestCase):
                     "drink": self._exact_drink(arrival.order.requested_drink_id),
                 }
             )
-            self.assertEqual((provider.dialogue_calls, provider.player_calls), (2, 2))
+            self.assertEqual((provider.dialogue_calls, provider.player_calls), (4, 2))
 
     def test_failed_generation_reuses_sources_and_records_only_safe_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -411,6 +532,7 @@ class DailyStoryGraphTests(unittest.TestCase):
                     "continued_in_bar",
                 )
             )
+            self._ack_opening_gates(service, "story")
             arrival = service.open_scene(
                 {
                     "protocol_version": 1,
@@ -532,7 +654,9 @@ class DailyStoryGraphTests(unittest.TestCase):
                 provider_factory=provider_factory,
                 advance_minutes=0,
                 daily_story_mode=True,
-                allow_provider_fallback=True,
+                # Dialogue provider failure must not roll back the already
+                # committed local drink result, even in strict provider mode.
+                allow_provider_fallback=False,
             )
             graph = service.prepare_daily_story_graph(1)
             self.assertEqual(graph.day_index, 1)
@@ -556,6 +680,7 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(doorbell.scene_id, "fallback-ack-2", "continued_in_bar")
             )
+            self._ack_opening_gates(service, "fallback")
             arrival = service.open_scene(
                 {
                     "protocol_version": 1,
@@ -580,9 +705,12 @@ class DailyStoryGraphTests(unittest.TestCase):
             self.assertEqual(resolution, replay)
             self.assertEqual(resolution.result.category, ServiceCategory.EXACT)
             self.assertTrue(resolution.scene.scene_id.startswith("day_1_customer_1_exact"))
+            self.assertGreater(resolution.income_delta, 0)
             with WorldStore(db_path) as store:
                 commits = store.list_story_branch_commits()
                 self.assertEqual(len(commits), 1)
+                served = [event for event in store.list_events() if event["event_type"] == "drink_served"]
+                self.assertEqual(len(served), 1)
                 fallback_events = [
                     event
                     for event in store.list_events()
@@ -607,6 +735,23 @@ class DailyStoryGraphTests(unittest.TestCase):
                 restored = DailyStoryGraph.from_dict(record["graph"])
                 self.assertEqual(restored, expected)
                 self.assertEqual(store.list_daily_story_graphs(), [record])
+
+    def test_fallback_reaction_covers_every_service_category(self) -> None:
+        order = DrinkOrder(
+            "order_boomlight",
+            "alma",
+            "boomlight",
+            "Boomlight",
+            ("strong",),
+            AlcoholRequirement.REQUIRED,
+            "Jill，一杯 Boomlight。",
+        )
+        for index, category in enumerate(ServiceCategory, start=1):
+            result = WorldSceneService._candidate_result(order, category)
+            scene = WorldSceneService._fallback_reaction(order, result, index)
+            self.assertEqual(len(scene.lines), 3)
+            self.assertEqual(scene.lines[0].speaker_id, "alma")
+            self.assertTrue(scene.lines[0].text)
 
     def test_first_entry_uses_ambient_text_and_prefetches_only_one_day(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -705,6 +850,7 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(doorbell.scene_id, "failure-ack-2", "continued_in_bar")
             )
+            self._ack_opening_gates(service, "failure")
             with self.assertRaises(RuntimeError):
                 service.open_scene(
                     {
@@ -752,12 +898,23 @@ class DailyStoryGraphTests(unittest.TestCase):
             service.ack_scene(
                 self._ack(doorbell.scene_id, "day-loop-ack-doorbell", "continued_in_bar")
             )
+            self._ack_opening_gates(service, "day-loop")
 
             arrivals = [
                 node for node in graph.nodes if node.kind is StoryNodeKind.ARRIVAL_ORDER
             ]
             expected_income = 0
             for index, _ in enumerate(arrivals, start=1):
+                if index == 3:
+                    break_scene = opened()
+                    self.assertEqual(break_scene.scene_id, "break_day_1")
+                    service.ack_scene(
+                        self._ack(
+                            break_scene.scene_id,
+                            "day-loop-ack-break",
+                            "continued_in_bar",
+                        )
+                    )
                 arrival = opened()
                 assert arrival.order is not None
                 service.ack_scene(

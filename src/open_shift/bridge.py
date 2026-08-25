@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import re
 import threading
 from datetime import datetime, timezone
@@ -23,6 +24,44 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_TEXT_CHARACTERS = 240
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_DIAGNOSTIC_TOKEN = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
+_DIAGNOSTIC_PHASES = frozenset({
+    "request",
+    "queued",
+    "pending",
+    "ready",
+    "validation",
+    "success",
+    "failure",
+    "timeout",
+    "client",
+})
+_DIAGNOSTIC_STATES = frozenset({
+    "scene_open",
+    "order_submit",
+    "order_poll",
+    "order_result",
+    "scene_ack",
+    "client",
+    "room_change",
+    "native_break_pending",
+    "native_break_ack_pending",
+    "native_break_room_enter",
+    "native_break_room_return",
+})
+_DIAGNOSTIC_INTEGER_FIELDS = frozenset({
+    "room_id",
+    "previous_room_id",
+    "bridge_state",
+    "active_http_id",
+    "cur_client",
+    "cur_stage",
+})
+_DIAGNOSTIC_INTEGER_LIMITS = {
+    # GameMaker async HTTP handles are engine-assigned resource ids and may
+    # exceed the small room/cursor range used by the other fields.
+    "active_http_id": (-2147483648, 2147483647),
+}
 
 AGENT_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
 ALLOWED_SPEAKERS = AGENT_SPEAKERS | {"jill"}
@@ -339,6 +378,9 @@ class BridgeApplication:
         # for older clients and as a fallback.
         self._scene_jobs: dict[str, dict[str, Any]] = {}
         self._scene_jobs_by_request: dict[str, str] = {}
+        self._order_jobs: dict[str, dict[str, Any]] = {}
+        self._order_jobs_by_request: dict[str, str] = {}
+        self._order_resolution_locks: dict[str, threading.Lock] = {}
         self._cache_lock = threading.Lock()
 
     def _authenticate(self, headers: Mapping[str, str]) -> None:
@@ -390,6 +432,10 @@ class BridgeApplication:
                     },
                 )
             self._authenticate(headers)
+            if method == "POST" and route == "/v1/diagnostics/client-event":
+                return BridgeResponse(
+                    202, self._record_client_diagnostic(_require_object(body))
+                )
             if method == "GET" and route.startswith("/v1/scenes/jobs/"):
                 if route.endswith("/result"):
                     job_id = route.split("/")[-2]
@@ -397,6 +443,13 @@ class BridgeApplication:
                     return BridgeResponse(result.pop("_http_status", 200), result)
                 job_id = route.rsplit("/", 1)[-1]
                 return BridgeResponse(200, self._scene_job_status(job_id))
+            if method == "GET" and route.startswith("/v1/orders/jobs/"):
+                if route.endswith("/result"):
+                    job_id = route.split("/")[-2]
+                    result = self._order_job_result(job_id)
+                    return BridgeResponse(result.pop("_http_status", 200), result)
+                job_id = route.rsplit("/", 1)[-1]
+                return BridgeResponse(200, self._order_job_status(job_id))
             if method == "POST" and route == "/v1/scenes/jobs":
                 try:
                     return BridgeResponse(202, self._submit_scene_job(_require_object(body)))
@@ -428,6 +481,11 @@ class BridgeApplication:
                     raise
                 except Exception as error:
                     self._report_error("scene acknowledgement", error)
+                    emit_timing(
+                        "scene_ack_error",
+                        scene_id=str(body.get("scene_id", "")) if isinstance(body, dict) else "",
+                        error_type=type(error).__name__,
+                    )
                     raise BridgeError(
                         503,
                         "scene_ack_unavailable",
@@ -444,6 +502,18 @@ class BridgeApplication:
                         503,
                         "order_resolution_unavailable",
                         "the world service could not resolve the served drink",
+                    ) from None
+            if method == "POST" and route == "/v1/orders/jobs":
+                try:
+                    return BridgeResponse(202, self._submit_order_job(_require_object(body)))
+                except BridgeError:
+                    raise
+                except Exception as error:
+                    self._report_error("order job submission", error)
+                    raise BridgeError(
+                        503,
+                        "order_job_unavailable",
+                        "the world service could not start an order job",
                     ) from None
             if method == "POST" and route == "/v1/saves/pair":
                 try:
@@ -519,6 +589,85 @@ class BridgeApplication:
             self._error_reporter(operation, error)
         except Exception:
             pass
+
+    def _record_client_diagnostic(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Persist a bounded, secret-free event emitted by the GameMaker client."""
+
+        required = {"request_id", "phase", "state"}
+        if not required <= set(request):
+            raise BridgeError(
+                400, "invalid_diagnostic", "diagnostic request was missing required fields"
+            )
+        allowed = required | {
+            "http_status",
+            "transport_status",
+            "job_id",
+            "error_reason",
+            "payload_shape",
+        } | _DIAGNOSTIC_INTEGER_FIELDS
+        if set(request) - allowed:
+            raise BridgeError(
+                400, "invalid_diagnostic", "diagnostic request contained unsupported fields"
+            )
+
+        def token(name: str, *, required_value: bool = False) -> str:
+            value = request.get(name, "")
+            if not isinstance(value, str) or not _DIAGNOSTIC_TOKEN.fullmatch(value):
+                if required_value:
+                    raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
+                return ""
+            return value
+
+        request_id = token("request_id", required_value=True)
+        phase = token("phase", required_value=True)
+        state = token("state", required_value=True)
+        if phase not in _DIAGNOSTIC_PHASES or state not in _DIAGNOSTIC_STATES:
+            raise BridgeError(400, "invalid_diagnostic", "diagnostic phase or state was invalid")
+
+        safe: dict[str, Any] = {
+            "request_id": request_id,
+            "phase": phase,
+            "state": state,
+        }
+        for name in ("job_id", "error_reason", "payload_shape"):
+            value = request.get(name)
+            if value is None:
+                continue
+            if not isinstance(value, str) or len(value) > 160 or any(
+                ord(character) < 32 for character in value
+            ):
+                raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
+            safe[name] = value[:160]
+        for name in ("http_status", "transport_status"):
+            if name not in request:
+                continue
+            value = request[name]
+            if isinstance(value, bool) or not isinstance(value, int) or not -1 <= value <= 999:
+                raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
+            safe[name] = value
+        for name in _DIAGNOSTIC_INTEGER_FIELDS:
+            if name not in request:
+                continue
+            value = request[name]
+            # An early room-change callback can run before vanilla initializes
+            # one of its global cursors; GameMaker serializes that undefined
+            # value as JSON null. Keep the field optional and omit unknown
+            # cursor values from the persisted diagnostic.
+            if value is None:
+                continue
+            # These are runtime identifiers/cursors, not unbounded payloads.
+            # Keep the accepted range broad enough for GameMaker resource ids,
+            # while preventing accidental secret/text injection and overflow.
+            # GameMaker's JSON encoder may serialize a real-valued integer as
+            # ``7.0``. Accept only finite integral numbers and normalize them
+            # to an int before writing diagnostics.
+            lower, upper = _DIAGNOSTIC_INTEGER_LIMITS.get(name, (-100000, 100000))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not float(value).is_integer() or not lower <= value <= upper:
+                raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
+            safe[name] = int(value)
+
+        emit_timing("client_event", **safe)
+        return {"status": "accepted", "request_id": request_id}
 
     def _open_scene(self, request: dict[str, Any]) -> dict[str, Any]:
         _require_fields(
@@ -697,6 +846,174 @@ class BridgeApplication:
                 "scene": record["scene"],
             }
 
+    def _validate_order_job_request(self, request: Mapping[str, Any]) -> str:
+        _require_fields(
+            request,
+            {
+                "protocol_version",
+                "request_id",
+                "client_session_id",
+                "scene_id",
+                "order_id",
+                "drink",
+            },
+        )
+        request_id = _require_request_id(request["request_id"])
+        _require_request_id(request["client_session_id"])
+        _require_request_id(request["scene_id"])
+        _require_request_id(request["order_id"])
+        if request["protocol_version"] != PROTOCOL_VERSION:
+            raise BridgeError(409, "protocol_mismatch", "client protocol version was not supported")
+        if not isinstance(request["drink"], dict):
+            raise BridgeError(400, "invalid_drink", "drink must be a JSON object")
+        if self._order_handler is None:
+            raise BridgeError(404, "unknown_order", "order resolution was not enabled")
+        return request_id
+
+    def _submit_order_job(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Queue the potentially slow order resolution and return immediately."""
+
+        request_id = self._validate_order_job_request(request)
+        request_digest = hashlib.sha256(_canonical_json(request)).hexdigest()
+        with self._cache_lock:
+            existing_id = self._order_jobs_by_request.get(request_id)
+            if existing_id is not None:
+                existing = self._order_jobs[existing_id]
+                if not hmac.compare_digest(existing["request_digest"], request_digest):
+                    raise BridgeError(409, "request_id_conflict", "request_id was already used with different content")
+                return self._public_order_job(existing)
+            job_id = "order_job_" + request_id
+            record: dict[str, Any] = {
+                "job_id": job_id,
+                "request_id": request_id,
+                "request": dict(request),
+                "request_digest": request_digest,
+                "status": "queued",
+                "created_at": self._utc_timestamp(),
+                "started_at": None,
+                "completed_at": None,
+                "elapsed_ms": None,
+                "attempt": 1,
+                "result": None,
+                "error": None,
+            }
+            self._order_jobs[job_id] = record
+            self._order_jobs_by_request[request_id] = job_id
+        emit_timing("order_job_queued", request_id=request_id, job_id=job_id, order_id=request["order_id"], attempt=1)
+        worker = threading.Thread(
+            target=self._run_order_job,
+            args=(job_id,),
+            name=f"open-shift-order-{request_id}",
+            daemon=False,
+        )
+        worker.start()
+        return self._public_order_job(record)
+
+    @staticmethod
+    def _public_order_job(record: Mapping[str, Any]) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "job_id": record["job_id"],
+            "request_id": record["request_id"],
+            "status": record["status"],
+            "created_at": record["created_at"],
+            "started_at": record["started_at"],
+            "completed_at": record["completed_at"],
+            "elapsed_ms": record["elapsed_ms"],
+            "attempt": record["attempt"],
+        }
+        if record.get("error") is not None:
+            value["error"] = record["error"]
+        if record.get("result") is not None:
+            value["result"] = record["result"]
+        return value
+
+    def _run_order_job(self, job_id: str) -> None:
+        with self._cache_lock:
+            record = self._order_jobs.get(job_id)
+            if record is None:
+                return
+            record["status"] = "running"
+            record["started_at"] = self._utc_timestamp()
+            request = dict(record["request"])
+            request_id = str(record["request_id"])
+        started = monotonic_seconds()
+        emit_timing("order_job_started", request_id=request_id, job_id=job_id, order_id=request["order_id"], attempt=1)
+        try:
+            response = self._resolve_order(request)
+        except Exception as error:
+            elapsed_ms = round((monotonic_seconds() - started) * 1000)
+            error_code = error.code if isinstance(error, BridgeError) else type(error).__name__
+            with self._cache_lock:
+                record["status"] = "failed"
+                record["completed_at"] = self._utc_timestamp()
+                record["elapsed_ms"] = elapsed_ms
+                record["error"] = {"code": error_code, "message": "order resolution failed"}
+            emit_timing(
+                "order_job_failed",
+                request_id=request_id,
+                job_id=job_id,
+                order_id=request["order_id"],
+                elapsed_ms=elapsed_ms,
+                error_type=type(error).__name__,
+            )
+            self._report_error("order job resolution", error)
+            return
+        elapsed_ms = round((monotonic_seconds() - started) * 1000)
+        result = {
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": request_id,
+            **response,
+        }
+        with self._cache_lock:
+            record["status"] = "ready"
+            record["completed_at"] = self._utc_timestamp()
+            record["elapsed_ms"] = elapsed_ms
+            record["result"] = result
+        emit_timing(
+            "order_job_ready",
+            request_id=request_id,
+            job_id=job_id,
+            order_id=request["order_id"],
+            result_category=result["result"]["category"],
+            elapsed_ms=elapsed_ms,
+        )
+
+    def _order_job_status(self, job_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"order_job_[A-Za-z0-9][A-Za-z0-9._-]{0,63}", job_id):
+            raise BridgeError(400, "invalid_job_id", "order job identifier was invalid")
+        with self._cache_lock:
+            record = self._order_jobs.get(job_id)
+            if record is None:
+                raise BridgeError(404, "unknown_job", "order job was not found")
+            return self._public_order_job(record)
+
+    def _order_job_result(self, job_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"order_job_[A-Za-z0-9][A-Za-z0-9._-]{0,63}", job_id):
+            raise BridgeError(400, "invalid_job_id", "order job identifier was invalid")
+        with self._cache_lock:
+            record = self._order_jobs.get(job_id)
+            if record is None:
+                raise BridgeError(404, "unknown_job", "order job was not found")
+            if record["status"] != "ready":
+                if record["status"] == "failed":
+                    return {
+                        "_http_status": 503,
+                        "protocol_version": PROTOCOL_VERSION,
+                        "request_id": record["request_id"],
+                        "job_id": job_id,
+                        "status": "failed",
+                        "error": record["error"],
+                    }
+                return {
+                    "_http_status": 202,
+                    "protocol_version": PROTOCOL_VERSION,
+                    "request_id": record["request_id"],
+                    "job_id": job_id,
+                    "status": record["status"],
+                }
+            return dict(record["result"])
+
     def _ack_scene(self, request: dict[str, Any]) -> dict[str, Any]:
         _require_fields(
             request,
@@ -767,6 +1084,17 @@ class BridgeApplication:
                 return self._idempotent(
                     self._order_requests, request_id, request, prior[1]
                 )
+            request_lock = self._order_resolution_locks.setdefault(request_id, threading.Lock())
+        # Never hold the application cache lock while the world service calls
+        # the provider. Status/result polling must stay responsive for the
+        # duration of a multi-call director pass.
+        with request_lock:
+            with self._cache_lock:
+                prior = self._order_requests.get(request_id)
+                if prior is not None:
+                    return self._idempotent(
+                        self._order_requests, request_id, request, prior[1]
+                    )
             try:
                 resolution = self._order_handler(request)
             except BridgeError:
@@ -778,9 +1106,10 @@ class BridgeApplication:
                 "request_id": request_id,
                 **resolution.to_gamemaker_dict(),
             }
-            return self._idempotent(
-                self._order_requests, request_id, request, response
-            )
+            with self._cache_lock:
+                return self._idempotent(
+                    self._order_requests, request_id, request, response
+                )
 
     def _save_operation(
         self,
@@ -1002,7 +1331,9 @@ class BridgeHTTPServer(ThreadingHTTPServer):
 
 class BridgeRequestHandler(BaseHTTPRequestHandler):
     server: BridgeHTTPServer
-    protocol_version = "HTTP/1.1"
+    # GameMaker's legacy HTTP client is more reliable when every response
+    # explicitly terminates the connection instead of reusing HTTP/1.1 sockets.
+    protocol_version = "HTTP/1.0"
 
     def do_GET(self) -> None:
         self._dispatch()
@@ -1011,39 +1342,60 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self._dispatch()
 
     def _dispatch(self) -> None:
-        length_header = self.headers.get("Content-Length", "0")
+        started = monotonic_seconds()
+        route = urlsplit(self.path).path
+        status: int | None = None
+        transport_status = "ok"
         try:
-            length = int(length_header)
-        except ValueError:
-            length = -1
-        if length < 0:
-            response = BridgeResponse(
-                400,
-                {"error": {"code": "invalid_length", "message": "Content-Length was invalid"}},
+            length_header = self.headers.get("Content-Length", "0")
+            try:
+                length = int(length_header)
+            except ValueError:
+                length = -1
+            if length < 0:
+                response = BridgeResponse(
+                    400,
+                    {"error": {"code": "invalid_length", "message": "Content-Length was invalid"}},
+                )
+            elif length > MAX_REQUEST_BYTES:
+                response = BridgeResponse(
+                    413,
+                    {
+                        "error": {
+                            "code": "request_too_large",
+                            "message": "request body exceeded size limit",
+                        }
+                    },
+                )
+            else:
+                body = self.rfile.read(length) if length else b""
+                response = self.server.app.handle(
+                    self.command, self.path, dict(self.headers.items()), body
+                )
+            status = response.status
+            encoded = _canonical_json(response.body)
+            self.send_response(response.status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Connection", "close")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            # The game can close a callback socket after receiving enough data.
+            # This is a transport event, not a server failure; never print a
+            # traceback that would obscure the original game-side diagnosis.
+            transport_status = "connection_reset"
+        finally:
+            emit_timing(
+                "http_request",
+                method=self.command,
+                path=route,
+                status=status if status is not None else 0,
+                transport_status=transport_status,
+                elapsed_ms=round((monotonic_seconds() - started) * 1000, 3),
             )
-        elif length > MAX_REQUEST_BYTES:
-            response = BridgeResponse(
-                413,
-                {
-                    "error": {
-                        "code": "request_too_large",
-                        "message": "request body exceeded size limit",
-                    }
-                },
-            )
-        else:
-            body = self.rfile.read(length) if length else b""
-            response = self.server.app.handle(
-                self.command, self.path, dict(self.headers.items()), body
-            )
-        encoded = _canonical_json(response.body)
-        self.send_response(response.status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(encoded)
 
     def log_message(self, format: str, *args: object) -> None:
         # Do not let paths, headers or bridge tokens enter ordinary logs.

@@ -18,6 +18,9 @@ from .lore import (
     CONTINUITY_FACTS,
     PUBLIC_CHARACTER_IDENTITIES,
     character_lore_payload,
+    dialogue_voice_payload,
+    ORIGINAL_SHIFT_BEAT_SEQUENCE,
+    scene_direction_rules,
 )
 from .models import DecisionContext, GoalStatus
 
@@ -51,6 +54,87 @@ class DialogueUtterance:
 
 
 @dataclass(frozen=True, slots=True)
+class SceneDirection:
+    """Small, source-derived director note carried with one dialogue turn.
+
+    The note describes dramatic function rather than supplying dialogue. It is
+    intentionally separate from the bridge wire schema so the GameMaker side
+    continues to receive only ScenePackage lines.
+    """
+
+    scene_type: str
+    beat: str
+    topic: str
+    relationship_tone: str
+    unresolved_threads: tuple[str, ...] = ()
+    avoid_patterns: tuple[str, ...] = ()
+    source_derived_rules: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        fields = (self.scene_type, self.beat, self.topic, self.relationship_tone)
+        if any(not isinstance(value, str) or not value.strip() for value in fields):
+            raise ValueError("scene direction fields were invalid")
+        if len(self.topic) > 240 or len(self.beat) > 80:
+            raise ValueError("scene direction text was too long")
+        for values in (
+            self.unresolved_threads,
+            self.avoid_patterns,
+            self.source_derived_rules,
+        ):
+            if not isinstance(values, tuple) or any(
+                not isinstance(value, str) or not value.strip() for value in values
+            ):
+                raise ValueError("scene direction list was invalid")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "scene_type": self.scene_type,
+            "current_beat": self.beat,
+            "topic": self.topic,
+            "relationship_tone": self.relationship_tone,
+            "unresolved_threads": list(self.unresolved_threads),
+            "avoid_patterns": list(self.avoid_patterns),
+            "source_derived_rules": list(self.source_derived_rules),
+        }
+
+
+def _inferred_scene_direction(
+    scene_id: str,
+    premise: str,
+    turn_index: int,
+    turn_count: int,
+    transcript: tuple[DialogueUtterance, ...],
+) -> SceneDirection:
+    """Give legacy callers the same structured direction as new scenes."""
+
+    lowered = scene_id.lower()
+    if "pre_open" in lowered or "preopen" in lowered:
+        scene_type = "pre_opening"
+    elif "break" in lowered:
+        scene_type = "break"
+    elif "result" in lowered or "exact" in lowered or "wrong" in lowered:
+        scene_type = "service_reaction"
+    else:
+        scene_type = "arrival_order"
+    if turn_index == 0:
+        beat = "具体开场：接住眼前动作或点单"
+    elif turn_index >= turn_count - 1:
+        beat = "回扣并留下下一步钩子"
+    else:
+        beat = "承接上一句，推进一个具体细节"
+    unresolved = ("当前话题尚未收束",) if transcript else ("等待对方透露一个具体细节",)
+    return SceneDirection(
+        scene_type,
+        beat,
+        premise[:240],
+        "熟人之间自然接话，保留各自的距离和习惯",
+        unresolved,
+        ("欢迎光临", "请稍等", "我先找个位置坐", "吧台一直在这儿", "音乐不错"),
+        scene_direction_rules(scene_type),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class DialogueTurnContext:
     scene_id: str
     turn_index: int
@@ -60,6 +144,7 @@ class DialogueTurnContext:
     participant_ids: tuple[str, ...]
     transcript: tuple[DialogueUtterance, ...] = ()
     service_result: ServiceResult | None = None
+    scene_direction: SceneDirection | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.turn_index < self.turn_count:
@@ -97,6 +182,7 @@ class PlayerDialogueTurnContext:
     participant_ids: tuple[str, ...]
     transcript: tuple[DialogueUtterance, ...] = ()
     service_result: ServiceResult | None = None
+    scene_direction: SceneDirection | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.turn_index < self.turn_count:
@@ -153,6 +239,10 @@ private_relevant_memories 是角色后来亲历的成长，不得用新经历覆
 声称知道其他角色的私有记忆。当前输出只对应一个文本框、一个反应节拍，不必在这一句里
 讲完整个观点。必须先接住上一句中的一个具体词、动作或细节；没有上一句时才从当前事件
 中的具体事物开口，避免把对话写成轮流问候或整齐发言。
+scene.scene_direction 是内部导演提示：scene_type 表示当前场景，current_beat 表示这一
+轮的戏剧作用，topic 是要落到台词里的具体话题，unresolved_threads 是不能凭空解决的
+悬而未决细节。优先完成 current_beat，并让台词为下一轮留下可接的具体词；avoid_patterns
+中的句型不要使用。source_derived_rules 只描述节奏，不是要复述的文本。
 不要反复使用“最近怎么样”“工作顺利吗”“注意休息”“一起想办法”等通用客服式句型，
 也不要使用总结者、心理咨询师或百科作者的口气，不要让每段谈话自动收束成互相安慰。
 严格遵循 speaker.canon 中的 speech_cadence 和 interaction_patterns；角色之间的接话方式
@@ -162,7 +252,9 @@ selected_timeline_facts 是 OPEN SHIFT 选择的结局后分支，二者都必�
 讨论作品、结局版本、时间线或模组，也不得用元叙事描述自己所处的世界。内部
 状态名、分类标签和数值不是角色台词，禁止
 猜测或说出金钱余额、目标数值、数据库时间、Classy 等英文分类词。保持角色设定，并
-遵循 original_dialogue_style 的结构规律，但不得复述或仿写原作台词。
+遵循 original_dialogue_style 的结构规律，并把 original_dialogue_voice_stats 当作当前
+角色的软性节奏参考：优先接近该角色的平均和中位文本长度、停顿/反问/感叹比例，不能
+为了追统计数字机械插入省略号或感叹号。不得复述或仿写原作台词。
 输出简体中文，不要旁白、舞台说明、
 说话者姓名前缀、Markdown 或对玩家的操作说明。Jill 是吧台后的玩家角色，也是当前
 值班中唯一执行调酒的人。只有 Jill 能选择或操作配料、调制、摇制、搅拌和出杯；当前
@@ -180,8 +272,12 @@ PLAYER_DIALOGUE_SYSTEM_INSTRUCTION = """你只负责玩家角色 Jill 在当前�
 根据 service_result 回应规则层已经确认的调酒结果。只读取公开对话、角色公开身份、
 Jill 的固定核心和刚完成的服务结果，不得读取或猜测其他 Agent 的私有记忆。当前输出只
 对应一个文本框、一个反应节拍：优先接住上一句的具体词或细节，不必讲完整个观点。严格
+使用 scene.scene_direction 中的 current_beat 和 topic，接住 unresolved_threads 中的
+一个具体细节；avoid_patterns 中的句型不要使用。source_derived_rules 只描述节奏，不是
+要复述的文本。
 遵循 speaker.canon 中的 speech_cadence 和 interaction_patterns，使用简短、克制、略带
-干涩吐槽的自然口语，不要写成长篇安慰、客服话术、心理咨询或百科解释。continuity 是
+干涩吐槽的自然口语，不要写成长篇安慰、客服话术、心理咨询或百科解释。原版对白统计
+只作为 Jill 的软性节奏参考，不是必须达到的数字。continuity 是
 生活事实，不得讨论作品、结局版本、时间线或模组。不得输出旁白、动作说明、姓名前缀、
 Markdown 或玩家操作提示。回复必须是一个 JSON 对象，只包含 expression_id 和 text；
 expression_id 必须是 neutral，text 为简体中文且最多 72 个字符。"""
@@ -207,6 +303,13 @@ def _service_result_payload(result: ServiceResult | None) -> dict[str, Any] | No
 
 def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
     actor = context.speaker.actor
+    direction = context.scene_direction or _inferred_scene_direction(
+        context.scene_id,
+        context.premise,
+        context.turn_index,
+        context.turn_count,
+        context.transcript,
+    )
     participant_set = set(context.participant_ids)
     visible_names = {
         item.agent_id: item.display_name
@@ -218,11 +321,14 @@ def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
         "original_canon_facts": list(ORIGINAL_CANON_FACTS),
         "selected_timeline_facts": list(SELECTED_TIMELINE_FACTS),
         "original_dialogue_style": list(ORIGINAL_DIALOGUE_STYLE),
+        "original_dialogue_voice_stats": dialogue_voice_payload(actor.display_name),
+        "original_shift_beat_sequence": list(ORIGINAL_SHIFT_BEAT_SEQUENCE),
         "scene": {
             "scene_id": context.scene_id,
             "turn_number": context.turn_index + 1,
             "turn_count": context.turn_count,
             "premise": context.premise,
+            "scene_direction": direction.to_payload(),
         },
         "speaker": {
             "agent_id": actor.agent_id,
@@ -299,16 +405,26 @@ def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
 def player_dialogue_observation(
     context: PlayerDialogueTurnContext,
 ) -> dict[str, Any]:
+    direction = context.scene_direction or _inferred_scene_direction(
+        context.scene_id,
+        context.premise,
+        context.turn_index,
+        context.turn_count,
+        context.transcript,
+    )
     return {
         "continuity": list(CONTINUITY_FACTS),
         "original_canon_facts": list(ORIGINAL_CANON_FACTS),
         "selected_timeline_facts": list(SELECTED_TIMELINE_FACTS),
         "original_dialogue_style": list(ORIGINAL_DIALOGUE_STYLE),
+        "original_dialogue_voice_stats": dialogue_voice_payload("Jill"),
+        "original_shift_beat_sequence": list(ORIGINAL_SHIFT_BEAT_SEQUENCE),
         "scene": {
             "scene_id": context.scene_id,
             "turn_number": context.turn_index + 1,
             "turn_count": context.turn_count,
             "premise": context.premise,
+            "scene_direction": direction.to_payload(),
         },
         "speaker": {
             "speaker_id": "jill",
@@ -417,6 +533,8 @@ def validate_dialogue_output(
         raise ValueError("dialogue text included a speaker prefix")
     if any(pattern.search(text) for pattern in _NON_PLAYER_BARTENDING_PATTERNS):
         raise ValueError("non-player dialogue claimed Jill's bartending action")
+    if context.speaker.actor.agent_id == "dana" and re.search(r"老板[，,]?\s*我", text):
+        raise ValueError("Dana dialogue addressed herself as the boss")
     return DialogueLineDraft(expression, text)
 
 

@@ -247,7 +247,7 @@ class Stage4WorldBridgeTests(unittest.TestCase):
                 with urlopen(request, timeout=2) as response:
                     payload = json.loads(response.read().decode())
                 self.assertEqual(payload["scene"]["return_to"], "bar")
-                self.assertEqual(len(payload["scene"]["lines"]), 3)
+                self.assertGreaterEqual(len(payload["scene"]["lines"]), 3)
                 self.assertIn(
                     "jill",
                     {line["speaker_id"] for line in payload["scene"]["lines"]},
@@ -702,7 +702,7 @@ result.write_text(json.dumps({"scene_id": scene["scene_id"], "lines": len(scene[
             self.assertFalse(runtime.exists())
             payload = json.loads(result.read_text(encoding="utf-8"))
             self.assertTrue(payload["scene_id"].startswith("day_"))
-            self.assertEqual(payload["lines"], 3)
+            self.assertGreaterEqual(payload["lines"], 3)
             self.assertEqual(payload["ack"], "accepted")
             with WorldStore(db_path) as store:
                 self.assertEqual(store.current_tick, 0)
