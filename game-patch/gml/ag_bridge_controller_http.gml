@@ -1,7 +1,14 @@
 if (ds_map_find_value(async_load, "id") == ag_http_request)
 {
+    // Consume the callback id immediately. Every branch below either leaves
+    // the request idle, or assigns a new request for the next poll/ack. A
+    // stale positive id must never block the native break room's return-to-bar
+    // hand-off after a successful scene result.
+    ag_http_request = -1;
     var ag_status;
     var ag_http_status;
+    var ag_status_number;
+    var ag_http_status_number;
     var ag_result;
     var ag_was_order_response;
     var ag_error_code;
@@ -12,8 +19,12 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     var ag_result_is_json;
     var ag_result_has_job_id;
     var ag_result_has_scene;
+    var ag_result_is_ack;
     var ag_result_empty;
+    var ag_ack_explicit_error;
     var ag_http_compat;
+    var ag_ack_compat;
+    var ag_ack_http_ok;
     var ag_http_ready;
     var ag_result_probe;
     var ag_safe_error_code;
@@ -29,10 +40,17 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         ag_http_status = ds_map_find_value(async_load, "http_status");
     if (ag_has_result)
         ag_result = ds_map_find_value(async_load, "result");
+    // GameMaker versions differ in whether async_load serializes numeric
+    // status fields as reals or strings. Normalize before comparing them so a
+    // successful transport reported as "0" is not rejected as a failed ACK.
+    ag_status_number = real(string(ag_status));
+    ag_http_status_number = real(string(ag_http_status));
     ag_result_is_json = 0;
     ag_result_has_job_id = 0;
     ag_result_has_scene = 0;
+    ag_result_is_ack = 0;
     ag_result_empty = (string_length(string(ag_result)) == 0);
+    ag_ack_explicit_error = 0;
     if (string_length(string(ag_result)) > 0)
     {
         ag_result_probe = json_decode(ag_result);
@@ -41,6 +59,19 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
             ag_result_is_json = 1;
             ag_result_has_job_id = ds_map_exists(ag_result_probe, "job_id");
             ag_result_has_scene = ds_map_exists(ag_result_probe, "scene");
+            // ACK responses are intentionally checked more narrowly than
+            // scene/order payloads. This guards against treating an arbitrary
+            // JSON object as a successful scene acknowledgement.
+            if (ag_state == 3 && ds_map_exists(ag_result_probe, "protocol_version") && ds_map_find_value(ag_result_probe, "protocol_version") == 1 && ds_map_exists(ag_result_probe, "request_id") && ds_map_find_value(ag_result_probe, "request_id") == ag_request_id && ds_map_exists(ag_result_probe, "scene_id") && ds_map_find_value(ag_result_probe, "scene_id") == ag_scene_id && ds_map_exists(ag_result_probe, "status") && ds_map_find_value(ag_result_probe, "status") == "accepted")
+                ag_result_is_ack = 1;
+            // ACK is a local completion notification. Some GameMaker builds
+            // lose the response body or expose a non-standard body after a
+            // native break/save room return. Only an explicit error envelope
+            // is authoritative failure in the missing/-1 HTTP-status path;
+            // malformed or unrelated bodies must not strand the original
+            // bar flow after the server accepted the notification.
+            if (ag_state == 3 && ds_map_exists(ag_result_probe, "error"))
+                ag_ack_explicit_error = 1;
         }
         if (ds_exists(ag_result_probe, ds_type_map))
             ds_map_destroy(ag_result_probe);
@@ -51,8 +82,22 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
     // A few older runtimes include http_status but leave it at -1 even when
     // transport succeeded. Treat a valid JSON response as usable in that
     // case; malformed/error payloads still go through normal validation.
-    ag_http_compat = (ag_status == 0 && ag_result_is_json && (!ag_has_http_status || ag_http_status <= 0));
-    ag_http_ready = (ag_status == 0 && (ag_http_status == 200 || ag_http_compat));
+    // Keep the generic compatibility path away from ACK state; ACKs use the
+    // exact accepted envelope check below.
+    ag_http_compat = (ag_state != 3 && ag_status_number == 0 && ag_result_is_json && (!ag_has_http_status || ag_http_status_number <= 0));
+    // Some GameMaker builds deliver a successful native ACK callback with no
+    // body, a malformed body, or http_status=-1. ACK is only a local
+    // completion notification, so accept that compatibility shape unless the
+    // response explicitly contains an error envelope. Scene and order
+    // results remain strict and still require their JSON envelopes.
+    ag_ack_compat = (ag_state == 3 && ag_status_number == 0 && (!ag_has_http_status || ag_http_status_number <= 0) && !ag_ack_explicit_error);
+    // A real HTTP 200 is authoritative for ACKs.  GameMaker's json_decode
+    // can coerce numeric fields and some runtimes omit/alter the response
+    // body, so re-validating the echoed envelope here can reject a server
+    // response that was already accepted.  Keep the body check only for the
+    // legacy missing/-1 HTTP status compatibility path below.
+    ag_ack_http_ok = (ag_state == 3 && ag_status_number == 0 && ((ag_http_status_number == 200) || ag_ack_compat));
+    ag_http_ready = (ag_state == 3 ? ag_ack_http_ok : (ag_status_number == 0 && (ag_http_status_number == 200 || ag_http_compat)));
     ag_last_http_status = ag_http_status;
     ag_last_transport_status = ag_status;
     if (ag_state == 7 || ag_state == 11)
@@ -219,21 +264,21 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     ag_ack_error_code = string(ds_map_find_value(ag_ack_error_object, "code"));
                     if (string_count("[", ag_ack_error_code) > 0 || string_count("]", ag_ack_error_code) > 0)
                         ag_ack_error_code = "invalid_error_code";
-                    ag_error_message = "O.S.：场景确认被拒绝（" + ag_ack_error_code + "）。";
+                    ag_error_message = "O.S.：场景确认被拒绝（" + ag_ack_error_code + "）。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
                 }
                 else
-                    ag_error_message = "O.S.：本地世界服务拒绝了场景确认。";
+                    ag_error_message = "O.S.：本地世界服务拒绝了场景确认。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
                 if (ds_exists(ag_ack_error_root, ds_type_map))
                     ds_map_destroy(ag_ack_error_root);
             }
             else
-                ag_error_message = "O.S.：本地世界服务拒绝了场景确认。";
+                ag_error_message = "O.S.：本地世界服务拒绝了场景确认。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
         }
         else
         {
             ag_state = 4;
             if (ag_http_status == 429)
-                ag_error_message = "O.S.：API调用额度已用完，请用更高额度重新启动。";
+                ag_error_message = "O.S.：API调用额度已用完，请用更高额度重新启动。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
             else if (ag_was_order_response)
             {
                 ag_safe_error_code = ag_error_code;
@@ -245,16 +290,34 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     ag_error_message = "O.S.：本轮调酒结果无法确认（" + ag_safe_error_code + "）。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
             }
             else if (ag_http_status == 503)
-                ag_error_message = "O.S.：剧情生成失败（story_generation_failed）。关闭本段后重新进入即可重试。";
+                ag_error_message = "O.S.：剧情生成失败（story_generation_failed）。关闭本段后重新进入即可重试。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
             else if (ag_http_status <= 0)
-                ag_error_message = "O.S.：本地服务连接中断，请确认启动命令仍在运行。";
+                ag_error_message = "O.S.：本地服务连接中断，请确认启动命令仍在运行。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
             else
-                ag_error_message = "O.S.：本地世界服务拒绝了请求。";
+                ag_error_message = "O.S.：本地世界服务拒绝了请求。\n阶段：" + string(ag_last_phase) + "，HTTP " + string(ag_last_http_status) + " / 传输 " + string(ag_last_transport_status) + "\n请求：" + string(ag_request_id) + "\nJob：" + string(ag_last_job_id);
         }
     }
     else if (ag_scene_job_deferred == 0 && ag_state == 3)
     {
-        if (ag_order_pending && !ag_order_started)
+        if (ag_break_enter_after_ack == 1)
+        {
+            // The break scene is committed before entering the vanilla room.
+            // Once that ACK succeeds, hand ownership to break_changer; it
+            // calls break_return() and creates the original save page.
+            ag_break_enter_after_ack = 0;
+            ag_break_wait_logged = 0;
+            ag_break_room_entered = 0;
+            ag_break_returned = 0;
+            global.cur_data = "";
+            global.cur_datapage = 1;
+            audio_stop_all();
+            global.block_click = 0;
+            ag_timeout_at = current_time + 900000;
+            ag_state = 10;
+            room_goto(break_time);
+            show_debug_message("[OPEN SHIFT] native_break_room_ack scene=" + ag_scene_id + " state=10 room_goto=break_time cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+        }
+        else if (ag_order_pending && !ag_order_started)
         {
             resetmixer_2();
             global.slotamount = 1;
@@ -300,7 +363,11 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                 ds_map_add(ag_next_body, "protocol_version", 1);
                 ds_map_add(ag_next_body, "request_id", ag_request_id);
                 ds_map_add(ag_next_body, "client_session_id", ag_session_id);
-                ag_http_request = http_request(ag_bridge_url + "/v1/scenes/open", "POST", ag_next_headers, json_encode(ag_next_body));
+                // Keep every dynamic scene on the non-blocking job protocol.
+                // The legacy synchronous endpoint can outlive GameMaker's
+                // HTTP callback window while DeepSeek is generating, causing
+                // the client to reset a perfectly valid HTTP 200 response.
+                ag_http_request = http_request(ag_bridge_url + "/v1/scenes/jobs", "POST", ag_next_headers, json_encode(ag_next_body));
                 ds_map_destroy(ag_next_body);
                 ds_map_destroy(ag_next_headers);
                 ag_timeout_at = current_time + 120000;
@@ -560,15 +627,18 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
                     with (ag_scorepop_instance) add = ag_income_delta;
                 }
             }
-            // Portrait state belongs to one scene only. Clear it before the
-            // first line so a new customer cannot inherit the previous scene's
-            // portrait when the first line is Jill or ambient text.
-            ag_portrait_speaker = "";
+            // Keep the counterpart selected by the native waiting textbox.
+            // Clearing this unconditionally makes the first generated line
+            // look like a customer switch, emitting HIDEALL while the old
+            // sprite is still fading out. Only scenes without a known waiting
+            // speaker may start with a blank portrait state.
+            if (ag_wait_speaker == "")
+                ag_portrait_speaker = "";
             ag_line_index = 0;
             if (ag_is_order_response)
                 ag_order_started = 0;
             ag_state = 2;
-            show_debug_message("[OPEN SHIFT] dialogue_ready scene=" + ag_scene_id + " lines=" + string(ag_line_count) + " elapsed_ms=" + string(current_time - ag_wait_started_at));
+            show_debug_message("[OPEN SHIFT] dialogue_ready scene=" + ag_scene_id + " lines=" + string(ag_line_count) + " portrait=" + ag_portrait_speaker + " wait_speaker=" + ag_wait_speaker + " elapsed_ms=" + string(current_time - ag_wait_started_at));
         }
         else
         {

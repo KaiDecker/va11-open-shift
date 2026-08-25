@@ -54,25 +54,68 @@
 
 ### Stage 19 known issues (not release-ready)
 
-Stage 19 currently reuses the original `obj_textbox` lifecycle and the original
-break/save UI, but it does not yet hand the complete flow back to the original
-controller chain. Open Shift still owns the dynamic dialogue queue, portrait
-state, bridge callbacks, scene acknowledgement, and story cursor.
+The rc.20 real-game run failed at the first scene acknowledgement even though
+`timing.log` recorded `POST /v1/scenes/ack -> 200`. The cause was a client-side
+GameMaker ACK validator rejecting the response after JSON field coercion; the
+server had already accepted it. The same run also showed GameMaker client
+diagnostic requests returning HTTP 400 because real runtime values included
+`phase=client`, room-transition states, integer-valued floats, uninitialized
+`null` cursors, and engine-sized HTTP handles that were not covered by the
+validator. rc.21 includes the narrow ACK compatibility fix and bounded,
+GameMaker-compatible diagnostic normalization. Real-game acceptance of rc.21
+is still pending.
 
-- After closing the original four-portrait break/save UI, the bar can return
-  with an empty textbox or `NO SIGNAL`; the third customer's dialogue/order
-  state may not resume. Suspected causes include return/ACK ordering and a
-  mismatch between `cur_client`/`cur_stage` and the Open Shift story cursor;
-  the single root cause is not confirmed.
+The rc.21 real-game run still displayed `phase: ack, HTTP -1 / transport 0`
+immediately after entering the bar. The bridge log showed `/v1/scenes/ack ->
+200`, so this was not a server rejection. GameMaker had delivered a callback
+without a usable `http_status` and with a body shape that was neither empty nor
+the canonical accepted envelope. rc.22 narrows the compatibility rule to ACK
+callbacks only: transport success plus missing/negative HTTP status succeeds
+unless the body contains an explicit error envelope. Ordinary scene and order
+responses remain strict. The rc.22 package is pending fresh real-game
+acceptance.
+
+Stage 19 now uses the original `obj_textbox` lifecycle and original break/save
+UI. The break hand-off is ordered as: dynamic break scene finishes in the bar,
+Open Shift sends and waits for `/v1/scenes/ack`, then the successful ACK enters
+`break_time`; vanilla `break_changer` calls `break_return()` and creates the
+save UI; returning to the bar leaves `cur_client`/`cur_stage` untouched and
+queues the next `/v1/scenes/jobs` request through the bridge. Open Shift's
+`cur_day >= 1001` is outside the original `break_return()` switch, so the
+bridge remains the sole dynamic-text owner after the vanilla save page closes.
+The bridge does not send a second ACK after return and does not use a `-99`
+cursor sentinel.
+
+The rc.22 real-game run still showed `phase: ack, HTTP -1 / transport 0`.
+Although the server had accepted the ACK, this exposed the wrong ownership
+boundary: the client entered the native room before the ACK had completed and
+then tried to resume by blocking the vanilla cursor. The fix is to make ACK
+completion the only room-entry gate, preserve vanilla save UI ownership, and
+queue the next bridge scene after return. A fresh real-game package must
+verify this exact sequence before Stage 19 can be called complete.
+
+- The rc.18 acceptance run still returned from the original four-portrait
+  break/save UI with an empty textbox or `NO SIGNAL`; the third customer's
+  dialogue/order state did not resume. The root cause is confirmed as a stale
+  HTTP request id being reused across the break return, so the client could
+  receive an old acknowledgement instead of the next scene. The bridge now
+  rejects stale ids and emits GameMaker `client_event` timing diagnostics;
+  real-game acceptance of the fix is still pending.
 - After a provider `...` wait finishes, a continuing speaker such as Alma can
-  lose its portrait. Suspected causes include wait-box `HIDEALL`/`SHOW` effects,
-  bridge portrait state diverging from native instances, or the next native
-  textbox load clearing the customer object; the single root cause is not
-  confirmed.
+  lose its portrait. The root cause is confirmed as a race between the
+  wait-box `HIDEALL` fade and creation of the replacement textbox: the fade
+  could clear the active portrait after the replacement line had restored it.
+  The bridge now orders the fade and portrait restoration safely; real-game
+  acceptance of the fix is still pending.
 
 These are acceptance blockers. Do not describe Stage 19 as a complete vanilla
 flow until the next stage verifies portrait continuity, break/save return,
 third-customer continuation, and restart/load recovery in a real game process.
+
+The latest build also records GameMaker-side `client_event` timing entries for
+scene requests, callbacks, textbox replacement, break return, and resume
+gates. These diagnostics are intended to identify the exact client state and
+request id when a real-game acceptance run diverges.
 
 - [ ] Jill speaks without a portrait while the active customer remains visible.
 - [ ] Exact, acceptable, wrong, and special drink branches resolve correctly.

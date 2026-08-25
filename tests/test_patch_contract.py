@@ -358,11 +358,92 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("ag_state == 8", controller)
         self.assertIn("ag_state == 10", controller)
         self.assertIn("room == break_time", controller)
-        self.assertIn("native_break_room_wait", controller)
+        self.assertIn("native_break_room_enter room=break_time", controller)
         self.assertIn("ag_break_room_entered", controller)
         self.assertIn("ag_break_returned", controller)
         self.assertIn("native_break_room_return", controller)
-        self.assertIn("resume_index=end", controller)
+        # break_changer already runs vanilla break_return(). The bridge must
+        # acknowledge before room_goto, then queue the next bridge scene after
+        # returning because OS cur_day values are outside vanilla's switch.
+        self.assertIn("ag_break_enter_after_ack", controller_create)
+        self.assertIn("ag_break_enter_after_ack = 1", controller)
+        self.assertNotIn("global.cur_client = -99", controller)
+        self.assertNotIn("global.cur_client = -2", controller)
+        self.assertNotIn("global.cur_stage = 1", controller)
+        self.assertNotIn("resetmixer_2();", controller)
+        self.assertNotIn("textbox_destroyed=1", controller)
+        self.assertIn("next_scene=bridge", controller)
+        self.assertIn("native_break_room_enter room=break_time", controller)
+        self.assertIn("native_break_room_return room=bar", controller)
+        self.assertIn("room_change room=", controller)
+        self.assertIn("http_id=", controller)
+        self.assertIn("ag_diag_http_request", controller_create)
+        self.assertIn("/v1/diagnostics/client-event", controller)
+        self.assertIn('"native_break_ack_pending"', controller)
+        self.assertIn('"native_break_room_enter"', controller)
+        self.assertIn('"native_break_room_return"', controller)
+        self.assertIn('"room_change"', controller)
+        self.assertIn('"room_id"', controller)
+        self.assertIn('"previous_room_id"', controller)
+        self.assertIn('"bridge_state"', controller)
+        self.assertIn('"active_http_id"', controller)
+        self.assertNotIn('ag_bridge_url + "/v1/scenes/open"', controller)
+        self.assertGreaterEqual(controller_http.count('ag_bridge_url + "/v1/scenes/jobs"'), 1)
+        self.assertIn(
+            "ag_break_room_entered == 1 && room == bar)",
+            controller,
+        )
+        self.assertNotIn("!instance_exists(save_home) && !instance_exists(break_savereturn)", controller)
+        return_branch = controller.split(
+            "else if (ag_break_room_entered == 1 && room == bar)",
+            1,
+        )[1].split("\n    }\n}", 1)[0]
+        self.assertNotIn("global.cur_client = -99", return_branch)
+        self.assertNotIn("global.cur_stage = 1", return_branch)
+        self.assertNotIn("resetmixer_2();", return_branch)
+        self.assertNotIn("instance_destroy()", return_branch)
+        self.assertIn("ag_state = 1", return_branch)
+        self.assertIn('ag_resume_body, "request_id", ag_request_id', return_branch)
+        self.assertIn('ag_bridge_url + "/v1/scenes/jobs"', return_branch)
+        self.assertIn("global.block_click = 1", return_branch)
+        self.assertNotIn("/v1/scenes/ack", return_branch)
+        self.assertIn("next_scene=bridge", return_branch)
+        callback_body = controller_http.split(
+            'if (ds_map_find_value(async_load, "id") == ag_http_request)', 1
+        )[1]
+        self.assertIn("ag_http_request = -1", callback_body[:500])
+        self.assertIn(
+            'ag_memory_line += "[SHOW:185," + string(ag_portrait[ag_line_index]) + "]";',
+            controller,
+        )
+        # Each native textbox has its own cut-in state. Waiting placeholders
+        # must therefore re-emit the current customer's portrait even when
+        # ag_portrait_speaker still names that same customer, and Jill's reply
+        # must restore the counterpart cut-in on its new textbox.
+        self.assertIn(
+            'if (ag_wait_speaker == "dana") { if (ag_portrait_speaker != "dana") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "dana"; } global.danahide = 0; ag_wait_line += "[SHOW:185,sprite_dana]";',
+            controller,
+        )
+        self.assertIn(
+            'else if (ag_wait_speaker == "stella") { if (ag_portrait_speaker != "stella") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "stella"; } global.stelhide = 0; ag_wait_line += "[SHOW:185,sprite_stella]";',
+            controller,
+        )
+        # The first real response must cancel the vanilla fade flag before
+        # SHOWSPRITE, which otherwise skips an existing sprite object.
+        self.assertIn('if (ag_current_speaker == "dana") global.danahide = 0;', controller)
+        self.assertIn('else if (ag_current_speaker == "alma") global.almahide = 0;', controller)
+        self.assertIn('else if (ag_current_speaker == "stella") global.stelhide = 0;', controller)
+        self.assertIn('else if (ag_current_speaker == "sei") global.seihide = 0;', controller)
+        self.assertIn('if (ag_wait_speaker == "")\n                ag_portrait_speaker = "";', controller_http)
+        self.assertIn('portrait=" + ag_portrait_speaker', controller_http)
+        self.assertIn(
+            'if (ag_portrait_speaker == "dana")\n            {\n                global.danahide = 0;\n                ag_memory_line += "[SHOW:185,sprite_dana]";\n            }',
+            controller,
+        )
+        self.assertIn(
+            'else if (ag_portrait_speaker == "sei")\n            {\n                global.seihide = 0;\n                ag_memory_line += "[SHOW:185,sprite_sei]";\n            }',
+            controller,
+        )
         self.assertNotIn("synthetic_lines_skipped=1", controller)
         self.assertIn("ag_line_index < ag_line_count", controller)
         break_branch = controller.split(
@@ -370,13 +451,24 @@ class PatchContractTests(unittest.TestCase):
             1,
         )[1]
         self.assertGreater(
-            break_branch.find("room_goto(break_time)"),
+            break_branch.find('ag_break_body, "scene_id", ag_scene_id'),
             break_branch.find("ag_line_index < ag_line_count"),
         )
+        self.assertIn('ag_break_body, "scene_id", ag_scene_id', break_branch)
+        self.assertIn('ag_break_enter_after_ack = 1', break_branch)
+        self.assertIn('ag_state = 3', break_branch)
+        self.assertIn('ag_break_enter_after_ack == 1', controller_http)
+        ack_handoff = controller_http.split('if (ag_break_enter_after_ack == 1)', 1)[1].split('else if (ag_order_pending', 1)[0]
+        self.assertIn('ag_state = 10', ack_handoff)
+        self.assertIn('room_goto(break_time)', ack_handoff)
+        self.assertIn('audio_stop_all()', ack_handoff)
+        self.assertIn('global.cur_data = ""', ack_handoff)
+        self.assertIn('global.cur_datapage = 1', ack_handoff)
         world_bridge = (root / "src" / "open_shift" / "world_bridge.py").read_text(encoding="utf-8")
+        self.assertIn("break_return()", controller)
         self.assertIn("我要去休息一下了。", world_bridge)
-        self.assertIn("audio_stop_all()", controller)
-        self.assertIn("room_goto(break_time)", controller)
+        self.assertIn("audio_stop_all()", controller_http)
+        self.assertIn("room_goto(break_time)", controller_http)
         self.assertIn('ag_error_message = "O.S.：本地世界服务没有返回调酒结果。"', controller)
         self.assertIn("with (ag_wait_box) instance_destroy();", controller)
         self.assertIn("Persistent = true", patch)
@@ -513,7 +605,7 @@ class PatchContractTests(unittest.TestCase):
             "validation_failed reason=",
         ):
             self.assertIn(marker, controller_http)
-        for marker in ("ag_last_http_status", "ag_last_transport_status", "ag_last_phase", "阶段：", "Job："):
+        for marker in ("ag_last_http_status", "ag_last_transport_status", "ag_last_phase", "ag_status_number = real(string(ag_status))", "ag_http_status_number = real(string(ag_http_status))", "阶段：", "Job："):
             self.assertIn(marker, controller_http)
         for marker in (
             'ds_map_exists(async_load, "status")',
@@ -521,12 +613,25 @@ class PatchContractTests(unittest.TestCase):
             'ds_map_exists(async_load, "result")',
             'ag_status = -1',
             'ag_http_status = -1',
-            'ag_http_compat = (ag_status == 0 && ag_result_is_json && (!ag_has_http_status || ag_http_status <= 0))',
+            'ag_http_compat = (ag_state != 3 && ag_status_number == 0 && ag_result_is_json && (!ag_has_http_status || ag_http_status_number <= 0))',
+            'ag_ack_explicit_error = 0',
+            'if (ag_state == 3 && ds_map_exists(ag_result_probe, "error"))',
+            'ag_ack_compat = (ag_state == 3 && ag_status_number == 0 && (!ag_has_http_status || ag_http_status_number <= 0) && !ag_ack_explicit_error)',
+            'ag_ack_http_ok = (ag_state == 3 && ag_status_number == 0 && ((ag_http_status_number == 200) || ag_ack_compat))',
+            'ag_http_ready = (ag_state == 3 ? ag_ack_http_ok : (ag_status_number == 0 && (ag_http_status_number == 200 || ag_http_compat)))',
+            'ag_result_is_ack = 1',
             'fields=status:',
         ):
             self.assertIn(marker, controller_http)
         self.assertIn("ag_http_compat && ag_result_has_job_id", controller_http)
         self.assertIn('ag_result_empty = (string_length(string(ag_result)) == 0)', controller_http)
+        self.assertIn("ACK is a local completion notification", controller_http)
+        self.assertIn("!ag_ack_explicit_error", controller_http)
+        self.assertIn("ag_http_status_number == 200", controller_http)
+        # The compatibility exception must remain scoped to ACK callbacks;
+        # generic scene/order responses still use the strict JSON path.
+        self.assertIn("ag_state != 3 && ag_status_number == 0 && ag_result_is_json", controller_http)
+        self.assertIn("ag_state == 3 ? ag_ack_http_ok", controller_http)
         self.assertIn('ag_state == 7 && ag_status == 0 && ag_result_empty', controller_http)
         self.assertIn('ag_order_job_id = "order_job_" + ag_request_id', controller_http)
         self.assertIn("order_job_compat_accepted", controller_http)
@@ -542,6 +647,35 @@ class PatchContractTests(unittest.TestCase):
             "ds_map_size(ag_line) != 5",
         ):
             self.assertNotIn(strict_check, controller_http)
+
+    def test_ack_compatibility_matrix_is_transport_scoped(self) -> None:
+        controller_http = (
+            Path(__file__).resolve().parents[1]
+            / "game-patch"
+            / "gml"
+            / "ag_bridge_controller_http.gml"
+        ).read_text(encoding="utf-8")
+        # State 3 is the only callback where a successful transport with a
+        # missing/negative HTTP status may proceed without a canonical body.
+        self.assertIn(
+            "ag_ack_compat = (ag_state == 3 && ag_status_number == 0 && (!ag_has_http_status || ag_http_status_number <= 0) && !ag_ack_explicit_error)",
+            controller_http,
+        )
+        # A positive non-200 HTTP status and every non-zero transport status
+        # remain failures through the explicit 200/status==0 gate.
+        self.assertIn(
+            "ag_ack_http_ok = (ag_state == 3 && ag_status_number == 0 && ((ag_http_status_number == 200) || ag_ack_compat))",
+            controller_http,
+        )
+        self.assertIn(
+            "ag_http_ready = (ag_state == 3 ? ag_ack_http_ok :",
+            controller_http,
+        )
+        # Ordinary scene/order callbacks cannot use the ACK exception.
+        self.assertIn(
+            "ag_http_compat = (ag_state != 3 && ag_status_number == 0",
+            controller_http,
+        )
 
 
 if __name__ == "__main__":

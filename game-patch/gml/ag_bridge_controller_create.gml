@@ -1,5 +1,9 @@
 ag_state = 0;
 ag_http_request = -1;
+// Fire-and-forget client diagnostics use a separate request handle so they
+// can never consume or block the gameplay HTTP state machine.
+ag_diag_http_request = -1;
+ag_diag_request_sequence = 0;
 ag_scene_job_id = "";
 ag_scene_job_poll_at = 0;
 ag_scene_job_poll_count = 0;
@@ -37,9 +41,14 @@ ag_order_customer = "";
 ag_order_display_text = "";
 ag_music_gate_active = 0;
 ag_break_wait_logged = 0;
-// Track the native break room so only a real return to the bar resumes text.
+// A break scene is acknowledged while still in the bar.  Only that ACK's
+// successful callback may enter the vanilla break_time room.
+ag_break_enter_after_ack = 0;
+// Track the native break room so only a real return to the bar clears the
+// Open Shift hand-off and lets dialog_control resume the vanilla cursor.
 ag_break_room_entered = 0;
 ag_break_returned = 0;
+ag_last_room = -1;
 // Dynamic dialogue is supplied to the original textbox through this
 // short-lived memory queue. The queue is consumed synchronously by
 // textbox_loadbox before the flag is cleared by the caller.

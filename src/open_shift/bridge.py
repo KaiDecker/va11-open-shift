@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import re
 import threading
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ _DIAGNOSTIC_PHASES = frozenset({
     "success",
     "failure",
     "timeout",
+    "client",
 })
 _DIAGNOSTIC_STATES = frozenset({
     "scene_open",
@@ -41,7 +43,25 @@ _DIAGNOSTIC_STATES = frozenset({
     "order_result",
     "scene_ack",
     "client",
+    "room_change",
+    "native_break_pending",
+    "native_break_ack_pending",
+    "native_break_room_enter",
+    "native_break_room_return",
 })
+_DIAGNOSTIC_INTEGER_FIELDS = frozenset({
+    "room_id",
+    "previous_room_id",
+    "bridge_state",
+    "active_http_id",
+    "cur_client",
+    "cur_stage",
+})
+_DIAGNOSTIC_INTEGER_LIMITS = {
+    # GameMaker async HTTP handles are engine-assigned resource ids and may
+    # exceed the small room/cursor range used by the other fields.
+    "active_http_id": (-2147483648, 2147483647),
+}
 
 AGENT_SPEAKERS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
 ALLOWED_SPEAKERS = AGENT_SPEAKERS | {"jill"}
@@ -584,7 +604,7 @@ class BridgeApplication:
             "job_id",
             "error_reason",
             "payload_shape",
-        }
+        } | _DIAGNOSTIC_INTEGER_FIELDS
         if set(request) - allowed:
             raise BridgeError(
                 400, "invalid_diagnostic", "diagnostic request contained unsupported fields"
@@ -625,6 +645,26 @@ class BridgeApplication:
             if isinstance(value, bool) or not isinstance(value, int) or not -1 <= value <= 999:
                 raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
             safe[name] = value
+        for name in _DIAGNOSTIC_INTEGER_FIELDS:
+            if name not in request:
+                continue
+            value = request[name]
+            # An early room-change callback can run before vanilla initializes
+            # one of its global cursors; GameMaker serializes that undefined
+            # value as JSON null. Keep the field optional and omit unknown
+            # cursor values from the persisted diagnostic.
+            if value is None:
+                continue
+            # These are runtime identifiers/cursors, not unbounded payloads.
+            # Keep the accepted range broad enough for GameMaker resource ids,
+            # while preventing accidental secret/text injection and overflow.
+            # GameMaker's JSON encoder may serialize a real-valued integer as
+            # ``7.0``. Accept only finite integral numbers and normalize them
+            # to an int before writing diagnostics.
+            lower, upper = _DIAGNOSTIC_INTEGER_LIMITS.get(name, (-100000, 100000))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not float(value).is_integer() or not lower <= value <= upper:
+                raise BridgeError(400, "invalid_diagnostic", f"diagnostic {name} was invalid")
+            safe[name] = int(value)
 
         emit_timing("client_event", **safe)
         return {"status": "accepted", "request_id": request_id}
@@ -1291,7 +1331,9 @@ class BridgeHTTPServer(ThreadingHTTPServer):
 
 class BridgeRequestHandler(BaseHTTPRequestHandler):
     server: BridgeHTTPServer
-    protocol_version = "HTTP/1.1"
+    # GameMaker's legacy HTTP client is more reliable when every response
+    # explicitly terminates the connection instead of reusing HTTP/1.1 sockets.
+    protocol_version = "HTTP/1.0"
 
     def do_GET(self) -> None:
         self._dispatch()
@@ -1300,39 +1342,60 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         self._dispatch()
 
     def _dispatch(self) -> None:
-        length_header = self.headers.get("Content-Length", "0")
+        started = monotonic_seconds()
+        route = urlsplit(self.path).path
+        status: int | None = None
+        transport_status = "ok"
         try:
-            length = int(length_header)
-        except ValueError:
-            length = -1
-        if length < 0:
-            response = BridgeResponse(
-                400,
-                {"error": {"code": "invalid_length", "message": "Content-Length was invalid"}},
+            length_header = self.headers.get("Content-Length", "0")
+            try:
+                length = int(length_header)
+            except ValueError:
+                length = -1
+            if length < 0:
+                response = BridgeResponse(
+                    400,
+                    {"error": {"code": "invalid_length", "message": "Content-Length was invalid"}},
+                )
+            elif length > MAX_REQUEST_BYTES:
+                response = BridgeResponse(
+                    413,
+                    {
+                        "error": {
+                            "code": "request_too_large",
+                            "message": "request body exceeded size limit",
+                        }
+                    },
+                )
+            else:
+                body = self.rfile.read(length) if length else b""
+                response = self.server.app.handle(
+                    self.command, self.path, dict(self.headers.items()), body
+                )
+            status = response.status
+            encoded = _canonical_json(response.body)
+            self.send_response(response.status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Connection", "close")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            # The game can close a callback socket after receiving enough data.
+            # This is a transport event, not a server failure; never print a
+            # traceback that would obscure the original game-side diagnosis.
+            transport_status = "connection_reset"
+        finally:
+            emit_timing(
+                "http_request",
+                method=self.command,
+                path=route,
+                status=status if status is not None else 0,
+                transport_status=transport_status,
+                elapsed_ms=round((monotonic_seconds() - started) * 1000, 3),
             )
-        elif length > MAX_REQUEST_BYTES:
-            response = BridgeResponse(
-                413,
-                {
-                    "error": {
-                        "code": "request_too_large",
-                        "message": "request body exceeded size limit",
-                    }
-                },
-            )
-        else:
-            body = self.rfile.read(length) if length else b""
-            response = self.server.app.handle(
-                self.command, self.path, dict(self.headers.items()), body
-            )
-        encoded = _canonical_json(response.body)
-        self.send_response(response.status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(encoded)
 
     def log_message(self, format: str, *args: object) -> None:
         # Do not let paths, headers or bridge tokens enter ordinary logs.

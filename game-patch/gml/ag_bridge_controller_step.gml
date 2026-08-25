@@ -69,6 +69,63 @@ if (instance_exists(ag_wait_box) && ag_wait_box.ag_open_shift_wait == 1)
     global.block_click = 1;
 }
 
+// Client-side room/break diagnostics are fire-and-forget. Keep their handle
+// separate from ag_http_request so a diagnostic callback cannot advance or
+// block the gameplay state machine. The event is sent once at the end of this
+// Step after the native transition fields have been captured.
+var ag_diag_should_emit;
+var ag_diag_state_name;
+var ag_diag_previous_room;
+var ag_diag_error_reason;
+ag_diag_should_emit = 0;
+ag_diag_state_name = "";
+ag_diag_previous_room = ag_last_room;
+ag_diag_error_reason = "";
+
+// Persistent controller diagnostics: log each room transition once with the
+// bridge and vanilla cursor state. This makes a failed native break hand-off
+// distinguishable from a missing HTTP callback in the next acceptance run.
+if (ag_last_room != room)
+{
+    show_debug_message("[OPEN SHIFT] room_change room=" + string(room) + " previous=" + string(ag_last_room) + " state=" + string(ag_state) + " http_id=" + string(ag_http_request) + " cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+    ag_diag_should_emit = 1;
+    ag_diag_state_name = "room_change";
+    ag_diag_error_reason = "room_change";
+    ag_last_room = room;
+}
+
+if (ag_diag_should_emit == 1)
+{
+    ag_diag_request_sequence += 1;
+    var ag_diag_headers;
+    var ag_diag_body;
+    var ag_diag_request_id;
+    ag_diag_headers = ds_map_create();
+    ds_map_add(ag_diag_headers, "Content-Type", "application/json");
+    ini_open("open-shift-runtime.ini");
+    ds_map_add(ag_diag_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+    ini_close();
+    ag_diag_request_id = "diag_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_diag_request_sequence);
+    ag_diag_body = ds_map_create();
+    ds_map_add(ag_diag_body, "request_id", ag_diag_request_id);
+    ds_map_add(ag_diag_body, "phase", "client");
+    ds_map_add(ag_diag_body, "state", ag_diag_state_name);
+    ds_map_add(ag_diag_body, "room_id", room);
+    ds_map_add(ag_diag_body, "previous_room_id", ag_diag_previous_room);
+    ds_map_add(ag_diag_body, "bridge_state", ag_state);
+    ds_map_add(ag_diag_body, "active_http_id", ag_http_request);
+    ds_map_add(ag_diag_body, "cur_client", global.cur_client);
+    ds_map_add(ag_diag_body, "cur_stage", global.cur_stage);
+    ds_map_add(ag_diag_body, "error_reason", ag_diag_error_reason);
+    ag_diag_http_request = http_request(ag_bridge_url + "/v1/diagnostics/client-event", "POST", ag_diag_headers, json_encode(ag_diag_body));
+    // The diagnostics callback is intentionally ignored by the gameplay HTTP
+    // event. Release the slot immediately so a later transition can report.
+    ag_diag_http_request = -1;
+    ds_map_destroy(ag_diag_body);
+    ds_map_destroy(ag_diag_headers);
+    ag_diag_should_emit = 0;
+}
+
 if (ag_state == 10)
 {
     // Use the original break_time room. Its break_changer creates save_home,
@@ -77,45 +134,86 @@ if (ag_state == 10)
     if (room == break_time)
     {
         ag_break_room_entered = 1;
+        // break_changer already called the vanilla break_return() while the
+        // room was created. Never overwrite cur_client/cur_stage here: the
+        // original save UI owns those values and will restore them on return.
         global.block_click = 0;
         if (ag_break_wait_logged == 0)
         {
             ag_break_wait_logged = 1;
-            show_debug_message("[OPEN SHIFT] native_break_room_wait");
+            show_debug_message("[OPEN SHIFT] native_break_room_enter room=break_time state=" + string(ag_state) + " http_id=" + string(ag_http_request) + " cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+            ag_diag_should_emit = 1;
+            ag_diag_state_name = "native_break_room_enter";
+            ag_diag_error_reason = "native_break_room_enter";
         }
     }
-    else if (ag_break_room_entered == 1 && room == bar && ag_http_request == -1 && !instance_exists(saveloadpage) && !instance_exists(save_home) && !instance_exists(break_savereturn) && !instance_exists(break_savehome) && !instance_exists(oob_bumper))
+    else if (ag_break_room_entered == 1 && room == bar)
     {
         // The native break room owns the save page and its transition back to
-        // the bar. Do not replay synthetic post-break dialogue here; resume
-        // the bridge cursor directly and clear the vanilla mixer state first.
+        // the bar. Do not replay synthetic post-break dialogue here. The
+        // vanilla break_changer/break_return chain ran on room creation. The
         ag_break_returned = 1;
-        audio_stop_all();
-        resetmixer_2();
-        // Match the original break_return() contract before the persistent
-        // bridge resumes its graph. The vanilla bar objects use these values
-        // to start at the post-break customer, and an old textbox can survive
-        // the room transition with an empty output buffer.
-        global.cur_client = -2;
-        global.cur_stage = 1;
-        global.cur_data = "";
-        global.cur_datapage = 1;
-        global.mixhappens = 0;
-        global.keeptext = 0;
-        global.clickable = 1;
-        global.output_text = "";
-        if (instance_exists(obj_textbox))
-        {
-            with (obj_textbox) instance_destroy();
-            show_debug_message("[OPEN SHIFT] native_break_room_cleanup textbox_destroyed=1");
-        }
+        // Open Shift days use cur_day >= 1001, which is outside the original
+        // break_return() switch. The vanilla room still owns save UI and room
+        // lifetime, but the bridge remains the sole dialogue owner after the
+        // return. Queue the next scene directly; do not create a textbox here.
+        ag_request_sequence += 1;
+        ag_request_id = "open_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
+        var ag_resume_headers;
+        var ag_resume_body;
+        ag_resume_headers = ds_map_create();
+        ds_map_add(ag_resume_headers, "Content-Type", "application/json");
+        ini_open("open-shift-runtime.ini");
+        ds_map_add(ag_resume_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+        ini_close();
+        ag_resume_body = ds_map_create();
+        ds_map_add(ag_resume_body, "protocol_version", 1);
+        ds_map_add(ag_resume_body, "request_id", ag_request_id);
+        ds_map_add(ag_resume_body, "client_session_id", ag_session_id);
+        ag_http_request = http_request(ag_bridge_url + "/v1/scenes/jobs", "POST", ag_resume_headers, json_encode(ag_resume_body));
+        ds_map_destroy(ag_resume_body);
+        ds_map_destroy(ag_resume_headers);
+        ag_state = 1;
         global.block_click = 1;
-        ag_line_index = ag_line_count;
-        ag_line_active = 0;
-        ag_timeout_at = current_time + 3000;
-        ag_state = 2;
-        show_debug_message("[OPEN SHIFT] native_break_room_return scene=" + ag_scene_id + " resume_index=end mixer_reset=1");
+        ag_timeout_at = current_time + 120000;
+        ag_break_room_entered = 0;
+        ag_break_returned = 0;
+        ag_break_wait_logged = 0;
+        show_debug_message("[OPEN SHIFT] native_break_room_return room=bar state=1 next_scene=bridge http_id=" + string(ag_http_request) + " cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+        ag_diag_should_emit = 1;
+        ag_diag_state_name = "native_break_room_return";
+        ag_diag_error_reason = "native_break_room_return";
     }
+}
+
+if (ag_diag_should_emit == 1)
+{
+    ag_diag_request_sequence += 1;
+    var ag_break_diag_headers;
+    var ag_break_diag_body;
+    var ag_break_diag_request_id;
+    ag_break_diag_headers = ds_map_create();
+    ds_map_add(ag_break_diag_headers, "Content-Type", "application/json");
+    ini_open("open-shift-runtime.ini");
+    ds_map_add(ag_break_diag_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+    ini_close();
+    ag_break_diag_request_id = "diag_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_diag_request_sequence);
+    ag_break_diag_body = ds_map_create();
+    ds_map_add(ag_break_diag_body, "request_id", ag_break_diag_request_id);
+    ds_map_add(ag_break_diag_body, "phase", "client");
+    ds_map_add(ag_break_diag_body, "state", ag_diag_state_name);
+    ds_map_add(ag_break_diag_body, "room_id", room);
+    ds_map_add(ag_break_diag_body, "previous_room_id", ag_diag_previous_room);
+    ds_map_add(ag_break_diag_body, "bridge_state", ag_state);
+    ds_map_add(ag_break_diag_body, "active_http_id", ag_http_request);
+    ds_map_add(ag_break_diag_body, "cur_client", global.cur_client);
+    ds_map_add(ag_break_diag_body, "cur_stage", global.cur_stage);
+    ds_map_add(ag_break_diag_body, "error_reason", ag_diag_error_reason);
+    ag_diag_http_request = http_request(ag_bridge_url + "/v1/diagnostics/client-event", "POST", ag_break_diag_headers, json_encode(ag_break_diag_body));
+    ag_diag_http_request = -1;
+    ds_map_destroy(ag_break_diag_body);
+    ds_map_destroy(ag_break_diag_headers);
+    ag_diag_should_emit = 0;
 }
 
 if ((ag_state == 1 || ag_state == 3 || ag_state == 7 || ag_state == 8 || ag_state == 9 || ag_state == 10 || ag_state == 11) && current_time > ag_timeout_at)
@@ -178,11 +276,18 @@ if ((ag_state == 1 || ag_state == 7 || ag_state == 8 || ag_state == 11) && !inst
     // real dialogue. It is still inert until the provider callback arrives.
     var ag_wait_line;
     ag_wait_line = "";
-    if (ag_wait_speaker == "dana") { if (ag_portrait_speaker != "dana") { ag_wait_line += "[HIDEALL:][SHOW:185,sprite_dana]"; ag_portrait_speaker = "dana"; } ag_wait_line += "[XS:danaface,][XS:dantalk,1][C:15]Dana：[C:C]... [XS:dantalk,0][STOPLIP:]"; }
-    else if (ag_wait_speaker == "dorothy") { if (ag_portrait_speaker != "dorothy") { ag_wait_line += "[HIDEALL:][SHOW:185,sprite_doro]"; ag_portrait_speaker = "dorothy"; } ag_wait_line += "[XS:doroface,][XS:dorotalk,1][C:18]Dorothy：[C:C]... [XS:dorotalk,0][STOPLIP:]"; }
-    else if (ag_wait_speaker == "alma") { if (ag_portrait_speaker != "alma") { ag_wait_line += "[HIDEALL:][SHOW:185,sprite_alma]"; ag_portrait_speaker = "alma"; } ag_wait_line += "[XS:almaface,][XS:almatalk,1][C:14]Alma：[C:C]... [XS:almatalk,0][STOPLIP:]"; }
-    else if (ag_wait_speaker == "stella") { if (ag_portrait_speaker != "stella") { ag_wait_line += "[HIDEALL:][SHOW:185,sprite_stella]"; ag_portrait_speaker = "stella"; } ag_wait_line += "[XS:stelface,][XS:steltalk,1][C:16]Stella：[C:C]... [XS:steltalk,0][STOPLIP:]"; }
-    else if (ag_wait_speaker == "sei") { if (ag_portrait_speaker != "sei") { ag_wait_line += "[HIDEALL:][SHOW:185,sprite_sei]"; ag_portrait_speaker = "sei"; } ag_wait_line += "[XS:seiface,][XS:seitalk,1][C:17]Sei：[C:C]... [XS:seitalk,0][STOPLIP:]"; }
+    // Every textbox owns its own SHOW/cutin state. Re-emit the customer's
+    // portrait for every placeholder, even when the scalar speaker cache is
+    // unchanged, because the preceding native textbox may have hidden it.
+    // hideall() only sets the vanilla global hide flags; the sprite object
+    // fades out and is destroyed on a later Step. Reset the active customer's
+    // flag before every placeholder SHOW so an old textbox cannot make the
+    // customer disappear while the provider request is pending.
+    if (ag_wait_speaker == "dana") { if (ag_portrait_speaker != "dana") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "dana"; } global.danahide = 0; ag_wait_line += "[SHOW:185,sprite_dana]"; ag_wait_line += "[XS:danaface,][XS:dantalk,1][C:15]Dana：[C:C]... [XS:dantalk,0][STOPLIP:]"; }
+    else if (ag_wait_speaker == "dorothy") { if (ag_portrait_speaker != "dorothy") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "dorothy"; } global.dorohide = 0; ag_wait_line += "[SHOW:185,sprite_doro]"; ag_wait_line += "[XS:doroface,][XS:dorotalk,1][C:18]Dorothy：[C:C]... [XS:dorotalk,0][STOPLIP:]"; }
+    else if (ag_wait_speaker == "alma") { if (ag_portrait_speaker != "alma") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "alma"; } global.almahide = 0; ag_wait_line += "[SHOW:185,sprite_alma]"; ag_wait_line += "[XS:almaface,][XS:almatalk,1][C:14]Alma：[C:C]... [XS:almatalk,0][STOPLIP:]"; }
+    else if (ag_wait_speaker == "stella") { if (ag_portrait_speaker != "stella") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "stella"; } global.stelhide = 0; ag_wait_line += "[SHOW:185,sprite_stella]"; ag_wait_line += "[XS:stelface,][XS:steltalk,1][C:16]Stella：[C:C]... [XS:steltalk,0][STOPLIP:]"; }
+    else if (ag_wait_speaker == "sei") { if (ag_portrait_speaker != "sei") { ag_wait_line += "[HIDEALL:]"; ag_portrait_speaker = "sei"; } global.seihide = 0; ag_wait_line += "[SHOW:185,sprite_sei]"; ag_wait_line += "[XS:seiface,][XS:seitalk,1][C:17]Sei：[C:C]... [XS:seitalk,0][STOPLIP:]"; }
     else if (ag_wait_speaker == "jill") ag_wait_line += "[XS:jilltalk,1][C:13]Jill：[C:C]... [STOPLIP:]";
     else ag_wait_line += "...";
     global.ag_memory_textbox_lines[0] = ag_wait_line;
@@ -228,14 +333,24 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         else { ag_face = ""; ag_talk = ""; }
         if (ag_current_speaker != "" && ag_current_speaker != "jill")
         {
-            // Keep the current customer's portrait across Jill's replies and
-            // repeated lines. The original scripts only HIDEALL when the
-            // speaker actually changes.
+            // A native waiting textbox may execute HIDEALL before the provider
+            // response replaces it. Always issue SHOW for a speaking customer
+            // so the real portrait state is restored instead of trusting the
+            // bridge's scalar cache.
             if (ag_portrait_speaker != ag_current_speaker)
             {
-            ag_memory_line += "[HIDEALL:][SHOW:185," + string(ag_portrait[ag_line_index]) + "]";
+                ag_memory_line += "[HIDEALL:]";
                 ag_portrait_speaker = ag_current_speaker;
             }
+            // SHOWSPRITE skips an already existing sprite. The vanilla
+            // sprite Step also respects the global hide flag, so clear the
+            // flag explicitly before SHOW on the first real response.
+            if (ag_current_speaker == "dana") global.danahide = 0;
+            else if (ag_current_speaker == "dorothy") global.dorohide = 0;
+            else if (ag_current_speaker == "alma") global.almahide = 0;
+            else if (ag_current_speaker == "stella") global.stelhide = 0;
+            else if (ag_current_speaker == "sei") global.seihide = 0;
+            ag_memory_line += "[SHOW:185," + string(ag_portrait[ag_line_index]) + "]";
             ag_memory_line += "[XS:" + ag_face + ",";
         }
         if (ag_current_speaker != "" && ag_current_speaker != "jill")
@@ -262,9 +377,35 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         }
         else if (ag_current_speaker == "jill")
         {
-            // Jill's first line in a new scene should not inherit yesterday's
-            // customer, while later Jill lines keep the current counterpart.
-            if (ag_portrait_speaker == "")
+            // A new textbox must restore the counterpart cut-in before Jill's
+            // reply. The native textbox owns SHOW state, so retaining only the
+            // scalar speaker is insufficient after the waiting textbox closes.
+            if (ag_portrait_speaker == "dana")
+            {
+                global.danahide = 0;
+                ag_memory_line += "[SHOW:185,sprite_dana]";
+            }
+            else if (ag_portrait_speaker == "dorothy")
+            {
+                global.dorohide = 0;
+                ag_memory_line += "[SHOW:185,sprite_doro]";
+            }
+            else if (ag_portrait_speaker == "alma")
+            {
+                global.almahide = 0;
+                ag_memory_line += "[SHOW:185,sprite_alma]";
+            }
+            else if (ag_portrait_speaker == "stella")
+            {
+                global.stelhide = 0;
+                ag_memory_line += "[SHOW:185,sprite_stella]";
+            }
+            else if (ag_portrait_speaker == "sei")
+            {
+                global.seihide = 0;
+                ag_memory_line += "[SHOW:185,sprite_sei]";
+            }
+            else if (ag_portrait_speaker == "")
             {
                 ag_memory_line += "[HIDEALL:]";
                 ag_portrait_speaker = "jill";
@@ -332,20 +473,38 @@ if (ag_state == 2 && !instance_exists(obj_textbox))
         }
         else if (string_copy(ag_scene_id, 1, 10) == "break_day_" && ag_break_returned == 0)
         {
-            // Leave the bridge scene unacknowledged while the native break
-            // room owns the save UI.  The persistent controller resumes the
-            // acknowledgement after the player closes that UI.
-            global.block_click = 0;
-            global.cur_data = "";
-            global.cur_datapage = 1;
-            audio_stop_all();
-            ag_timeout_at = current_time + 900000;
+            // Commit progression before entering break_time. The native room
+            // then performs break_return() and creates the original save UI.
+            // This keeps the server state and paired vanilla save in order.
+            ag_request_sequence += 1;
+            ag_request_id = "ack_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
+            var ag_break_headers;
+            var ag_break_body;
+            ag_break_headers = ds_map_create();
+            ds_map_add(ag_break_headers, "Content-Type", "application/json");
+            ini_open("open-shift-runtime.ini");
+            ds_map_add(ag_break_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+            ini_close();
+            ag_break_body = ds_map_create();
+            ds_map_add(ag_break_body, "protocol_version", 1);
+            ds_map_add(ag_break_body, "request_id", ag_request_id);
+            ds_map_add(ag_break_body, "client_session_id", ag_session_id);
+            ds_map_add(ag_break_body, "scene_id", ag_scene_id);
+            ds_map_add(ag_break_body, "outcome", "continued_in_bar");
+            ag_http_request = http_request(ag_bridge_url + "/v1/scenes/ack", "POST", ag_break_headers, json_encode(ag_break_body));
+            ds_map_destroy(ag_break_body);
+            ds_map_destroy(ag_break_headers);
+            ag_break_enter_after_ack = 1;
             ag_break_wait_logged = 0;
             ag_break_room_entered = 0;
             ag_break_returned = 0;
-            ag_state = 10;
-            room_goto(break_time);
-            show_debug_message("[OPEN SHIFT] native_break_pending scene=" + ag_scene_id);
+            ag_timeout_at = current_time + 3000;
+            ag_state = 3;
+            show_debug_message("[OPEN SHIFT] native_break_ack_pending scene=" + ag_scene_id + " state=3 http_id=" + string(ag_http_request) + " cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+            ag_diag_should_emit = 1;
+            ag_diag_state_name = "native_break_ack_pending";
+            ag_diag_previous_room = ag_last_room;
+            ag_diag_error_reason = "native_break_ack_pending";
         }
         else
         {

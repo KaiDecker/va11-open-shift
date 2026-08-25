@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using UndertaleModLib.Models;
 using UndertaleModLib.Util;
 EnsureDataLoaded();
@@ -56,10 +57,11 @@ string textboxLoadbox = Decompile("gml_Script_textbox_loadbox");
 if (!dialogStep.Contains("global.jukebox_happens == 1") || !dialogStep.Contains("instance_create(x, y, jukebox_bg)")) throw new Exception("Native jukebox hand-off was missing");
 if (!controllerStep.Contains("continued_in_bar")) throw new Exception("Continuous bar outcome was missing");
 if (!controllerStep.Contains("draw_set_font(global.fnt_textbox)")) throw new Exception("Original textbox font wrapping was missing");
-if (!controllerStep.Contains("string_width(ag_wrap_candidate) > 380")) throw new Exception("Textbox pixel-width limit was missing");
+if (!Regex.IsMatch(controllerStep, @"string_width\s*\(\s*ag_wrap_candidate\s*\+\s*ag_wrap_char\s*\)\s*>\s*380")) throw new Exception("Textbox pixel-width limit was missing");
 if (!controllerStep.Contains("ag_wrapped_text += \"#\"")) throw new Exception("Textbox line break insertion was missing");
 if (controllerStep.Contains("正在准备下一段对话")) throw new Exception("Legacy dialogue waiting label remained");
-if (!controllerHttp.Contains("/v1/scenes/open")) throw new Exception("Next-scene request was missing");
+if (!controllerHttp.Contains("/v1/scenes/jobs")) throw new Exception("Next-scene job request was missing");
+if (controllerHttp.Contains("ag_bridge_url + \"/v1/scenes/open\"")) throw new Exception("Legacy synchronous next-scene request remained");
 if (!controllerHttp.Contains("ag_line_count = ds_list_size(ag_lines)")) throw new Exception("Dynamic scene length was missing");
 if (!controllerHttp.Contains("120000")) throw new Exception("Dialogue generation timeout was missing");
 if (!controllerHttp.Contains("string_length(ag_line_text) > 72") || !controllerHttp.Contains("string_count(\"[\", ag_line_text) > 0") || !controllerHttp.Contains("string_count(\"]\", ag_line_text) > 0") || !controllerHttp.Contains("ag_safe_error_code") || !controllerHttp.Contains("string_count(\"[\", ag_safe_error_code")) throw new Exception("Dialogue command injection guard was missing");
@@ -101,7 +103,12 @@ if (!showRoomCreate.Contains("global.shop_casitas = 1") || !showRoomCreate.Conta
 if (!variableControllerCreate.Contains("global.ag_open_shift_intro_pending = 0") || !variableControllerCreate.Contains("global.ag_story_day = 1") || !variableControllerCreate.Contains("global.ag_request_epoch = 0")) throw new Exception("O.S. apartment state or request epoch initialization was missing");
 if (!variableControllerCreate.Contains("global.ag_memory_textbox_active = 0") || !variableControllerCreate.Contains("global.ag_memory_textbox_wait = 0") || !variableControllerCreate.Contains("global.ag_memory_textbox_lines[0] = \"\"")) throw new Exception("Vanilla textbox adapter globals were not initialized before original dialogue");
 if (!newDayStep.Contains("global.ag_story_day += 1") || !newDayStep.Contains("global.cur_day >= 1001") || !newDayStep.Contains("ag_story_day_advance_applied")) throw new Exception("Original new-day transition did not advance the Open Shift day");
-if (!controllerStep.Contains("ag_state == 10") || !controllerStep.Contains("room == break_time") || !controllerStep.Contains("native_break_room_wait") || !controllerStep.Contains("native_break_room_ack") || !controllerStep.Contains("room_goto(break_time)")) throw new Exception("Native mid-shift save room hand-off was missing");
+if (!controllerStep.Contains("ag_state == 10") || !controllerStep.Contains("room == break_time") || !controllerStep.Contains("native_break_room_enter room=break_time") || !controllerStep.Contains("native_break_ack_pending") || !controllerStep.Contains("ag_break_enter_after_ack = 1") || !controllerStep.Contains("native_break_room_return room=bar")) throw new Exception("Native mid-shift save room hand-off was missing");
+if (!controllerStep.Contains("room_change room=") || !controllerStep.Contains("http_id=") || !controllerStep.Contains("next_scene=bridge")) throw new Exception("Native break diagnostics or single-owner hand-off was missing");
+if (!controllerHttp.Contains("ag_break_enter_after_ack == 1") || !controllerHttp.Contains("ag_state = 10") || !controllerHttp.Contains("room_goto(break_time)")) throw new Exception("ACK-before-room transition contract was missing");
+if (controllerStep.Contains("global.cur_client = -2") || controllerStep.Contains("resetmixer_2();") || controllerStep.Contains("textbox_destroyed=1")) throw new Exception("Bridge still replayed vanilla post-break state");
+if (!controllerStep.Contains("ag_break_room_entered == 1 && room == bar)")) throw new Exception("Native break return was incorrectly tied to a stale HTTP id");
+if (!controllerHttp.Contains("ag_http_request = -1")) throw new Exception("Consumed HTTP callback id was not cleared");
 if (!aaButton1Step.Contains("global.cur_day >= 1001") || !aaButton1Step.Contains("global.cur_news = 52") || !aaButton2Step.Contains("global.cur_day >= 1001") || !aaButton2Step.Contains("global.cur_news = 53") || !aaButton3Step.Contains("global.cur_day >= 1001") || !aaButton3Step.Contains("global.cur_news = 54")) throw new Exception("Later O.S. days did not use the last readable original Augmented Eye articles");
 if (Data.Code.ByName("gml_Object_aa_art1_Draw_0") is not null) throw new Exception("Legacy article Draw overlay remained");
 for (int slot = 1; slot <= 24; slot++)

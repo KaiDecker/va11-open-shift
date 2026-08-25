@@ -1,5 +1,5 @@
 param(
-    [string] $Version = "0.19.0-rc.1",
+    [string] $Version = "0.19.0-rc.23",
     [string] $Output = (Join-Path (Join-Path $PSScriptRoot "..\work") "open-shift-player-$Version.zip"),
     [string] $Python = "python",
     [string] $WebViewSdk = "",

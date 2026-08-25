@@ -60,6 +60,126 @@ class BridgeApplicationTests(unittest.TestCase):
         self.assertNotIn(TOKEN, json.dumps(response.body))
         self.assertNotIn(TOKEN, repr(self.app.config))
 
+    def test_client_diagnostic_accepts_bounded_runtime_state_fields(self) -> None:
+        request = {
+            "request_id": "diag-room-1",
+            "phase": "client",
+            "state": "native_break_room_return",
+            "room_id": 7,
+            "previous_room_id": 6,
+            "bridge_state": 2,
+            "active_http_id": -1,
+            "cur_client": -99,
+            "cur_stage": 1,
+            "error_reason": "native_break_room_return",
+        }
+        response = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(request)
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.body, {"status": "accepted", "request_id": "diag-room-1"})
+
+        invalid = dict(request)
+        invalid["request_id"] = "diag-room-2"
+        invalid["bridge_state"] = 100001
+        rejected = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(invalid)
+        )
+        self.assertEqual(rejected.status, 400)
+        self.assertEqual(rejected.body["error"]["code"], "invalid_diagnostic")
+
+    def test_client_diagnostic_accepts_break_ack_pending_state(self) -> None:
+        request = {
+            "request_id": "diag-break-ack-pending-1",
+            "phase": "client",
+            "state": "native_break_ack_pending",
+            "room_id": 7,
+            "previous_room_id": 7,
+            "bridge_state": 3,
+            "active_http_id": 42,
+            "cur_client": 2,
+            "cur_stage": 1,
+            "error_reason": "native_break_ack_pending",
+        }
+        response = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(request)
+        )
+        self.assertEqual(response.status, 202)
+        self.assertEqual(
+            response.body,
+            {"status": "accepted", "request_id": "diag-break-ack-pending-1"},
+        )
+
+    def test_client_diagnostic_accepts_gamemaker_real_integer_fields(self) -> None:
+        # json_encode on GameMaker can emit resource/cursor values as JSON
+        # numbers with a fractional representation (for example 7.0). The
+        # wire values remain bounded integer state, so normalize them safely.
+        request = {
+            "request_id": "diag-gml-real-1",
+            "phase": "client",
+            "state": "native_break_room_return",
+            "room_id": 7.0,
+            "previous_room_id": 6.0,
+            "bridge_state": 2.0,
+            "active_http_id": -1.0,
+            "cur_client": -99.0,
+            "cur_stage": 1.0,
+            "error_reason": "native_break_room_return",
+        }
+        response = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(request)
+        )
+        self.assertEqual(response.status, 202)
+
+        invalid = dict(request)
+        invalid["request_id"] = "diag-gml-real-2"
+        invalid["bridge_state"] = 2.5
+        rejected = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(invalid)
+        )
+        self.assertEqual(rejected.status, 400)
+        self.assertEqual(rejected.body["error"]["code"], "invalid_diagnostic")
+
+    def test_client_diagnostic_accepts_uninitialized_gamemaker_cursors(self) -> None:
+        # An early controller Step can observe an undefined vanilla global;
+        # GameMaker serializes that optional diagnostic field as JSON null.
+        request = {
+            "request_id": "diag-gml-null-1",
+            "phase": "client",
+            "state": "room_change",
+            "room_id": 7.0,
+            "previous_room_id": -1.0,
+            "bridge_state": 1.0,
+            "active_http_id": -1.0,
+            "cur_client": None,
+            "cur_stage": None,
+            "error_reason": "room_change",
+        }
+        response = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(request)
+        )
+        self.assertEqual(response.status, 202)
+
+    def test_client_diagnostic_accepts_large_gamemaker_http_handle(self) -> None:
+        # http_request() handles are engine ids, not room/cursor ids; a valid
+        # handle can be larger than the bounded gameplay-state range.
+        request = {
+            "request_id": "diag-gml-http-1",
+            "phase": "client",
+            "state": "room_change",
+            "room_id": 7,
+            "previous_room_id": 6,
+            "bridge_state": 1,
+            "active_http_id": 100001,
+            "cur_client": -2,
+            "cur_stage": 1,
+            "error_reason": "room_change",
+        }
+        response = self.app.handle(
+            "POST", "/v1/diagnostics/client-event", self.headers, encoded(request)
+        )
+        self.assertEqual(response.status, 202)
+
     def test_scene_provider_failure_reports_diagnostic_only_locally(self) -> None:
         reports: list[tuple[str, Exception]] = []
         failure = RuntimeError("private diagnostic")
@@ -231,6 +351,15 @@ class BridgeApplicationTests(unittest.TestCase):
             "POST", "/v1/scenes/ack", self.headers, encoded(acknowledgement)
         )
         self.assertEqual(first_ack.status, 200)
+        self.assertEqual(
+            first_ack.body,
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": "same-ack",
+                "scene_id": first.body["scene"]["scene_id"],
+                "status": "accepted",
+            },
+        )
         self.assertEqual(first_ack.body, second_ack.body)
 
     def test_reusing_request_id_with_different_content_is_rejected(self) -> None:
@@ -691,6 +820,8 @@ class BridgeHTTPTests(unittest.TestCase):
                 payload = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(response.status, 200)
                 self.assertGreaterEqual(len(payload["scene"]["lines"]), 3)
+                self.assertEqual(response.version, 10)
+                self.assertEqual(response.headers["Connection"].lower(), "close")
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
 
             unauthorized = urllib.request.Request(
