@@ -141,7 +141,7 @@ $steamBadge.SetBounds(405, 30, 100, 30)
 $form.Controls.Add($steamBadge)
 
 $version = New-Object Windows.Forms.Label
-$version.Text = "PLAYER 0.19 RC.19"
+$version.Text = "PLAYER 0.19 RC.23"
 $version.Font = New-Object Drawing.Font("Consolas", 8)
 $version.ForeColor = [Drawing.Color]::FromArgb(121, 130, 149)
 $version.TextAlign = "MiddleRight"
