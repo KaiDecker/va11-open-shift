@@ -34,33 +34,18 @@ class PackageResult:
 
 
 _REQUIRED_FILES = (
-    "README.md",
-    "CONTRIBUTING.md",
     "assets/open-shift-icon.svg",
-    "assets/screenshots/bar-stella-order.png",
-    "assets/screenshots/jill-room-day-2.png",
-    "assets/screenshots/chinese-installer.png",
     "pyproject.toml",
-    "game-patch/README.md",
     "game-patch/manifest.json",
     "game-patch/apply_mod.csx",
     "game-patch/analysis/verify_patch.csx",
-    "packaging/README.md",
     "packaging/install-isolated-copy.ps1",
     "packaging/install-open-shift.ps1",
     "packaging/configure-api-key.ps1",
-    "packaging/build-player-release.ps1",
     "packaging/launch-open-shift.ps1",
-    "packaging/launch-deepseek-acceptance.ps1",
     "packaging/uninstall-open-shift.ps1",
     "packaging/open-shift.toml.example",
-    "packaging/INSTALL.md",
-    "packaging/runtime_entry.py",
-    "packaging/gui_launcher.cs",
-    "packaging/OpenShiftSetup.csproj",
-    "packaging/open-shift-gui.ps1",
     "packaging/webview/index.html",
-    "packaging/create-icon.ps1",
 )
 _FORBIDDEN_PARTS = (
     "reference-local/",

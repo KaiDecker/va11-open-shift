@@ -1,6 +1,6 @@
 # OPEN SHIFT
 
-![OPEN SHIFT 实机画面：Stella 在酒吧点单](assets/screenshots/bar-stella-order.png)
+![OPEN SHIFT 实机画面：第一天世界状态](assets/screenshots/acceptance-day1-world-state.png)
 
 OPEN SHIFT 是一个基于 VA-11 HALL-A Windows 版的社区 Mod。它发生在原版结局之后：Jill 继续在酒吧工作，而每天遇到的人和城市里的事情会慢慢发生变化。
 
@@ -17,7 +17,23 @@ OPEN SHIFT 是一个基于 VA-11 HALL-A Windows 版的社区 Mod。它发生在�
 这是一个仍在开发中的 Windows 公开预览版。对话数量和人物关系还会继续调整，当前版本适合体验和反馈，不代表最终完成度。
 
 <p align="center">
-  <img src="assets/screenshots/jill-room-day-2.png" alt="OPEN SHIFT 实机画面：Jill 房间与 O.S. DAY 2" width="68%">
+  <img src="assets/screenshots/acceptance-day2-world-state.png" alt="OPEN SHIFT 实机画面：Jill 房间与 O.S. DAY 2" width="68%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/acceptance-dana-opening.png" alt="OPEN SHIFT 实机画面：Dana 开店前对白" width="68%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/acceptance-music-selection.png" alt="OPEN SHIFT 实机画面：原版音乐选择" width="68%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/acceptance-order-details.png" alt="OPEN SHIFT 实机画面：顾客订单与调酒" width="68%">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/acceptance-break-save.png" alt="OPEN SHIFT 实机画面：中场休息存档页面" width="68%">
 </p>
 
 ## 开始游戏

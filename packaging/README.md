@@ -1,81 +1,42 @@
 # OPEN SHIFT 玩家发行包
 
-This package contains the OPEN SHIFT bridge, patch source and safe launcher
-scripts. It does **not** contain VA-11 HALL-A's executable, `data.win`, Steam
-assets, saves, databases, runtime INI files or API keys.
+这是 OPEN SHIFT 的 Windows x64 预览版发行包。它包含安装器、启动器、补丁源和运行所需的
+脚本，但不包含 VA-11 HALL-A 的可执行文件、`data.win`、原版资源、存档、数据库或 API Key。
 
-The installer takes a user-owned Steam game directory, verifies its original
-`data.win` hash, creates an isolated game copy, and applies the patch there.
-The Steam installation is never used as the installation destination.
+## 玩家使用
 
-Requirements for the source/maintainer workflow:
+玩家只需双击 `OpenShiftSetup.exe`。安装器会检查你拥有的 Steam 游戏目录，在另一个目录创建
+隔离副本，并在隔离副本中应用补丁。Steam 原版目录不会作为写入目标。
 
-- Windows PowerShell 5+;
-- Python 3.11+;
-- UndertaleModTool CLI 0.9.1.2;
-- a user-owned VA-11 HALL-A installation;
-- a DeepSeek API key supplied only through `OPEN_SHIFT_API_KEY`.
+安装完成后，启动器会创建桌面快捷方式。玩家可以在界面中输入自己的 DeepSeek API Key，选择
+“快速”“平衡”或“深度”生成模式，然后准备当天剧情并启动游戏。
 
-For the final player package, double-click `OpenShiftSetup.exe`. Its WebView2-based
-Windows GUI detects the Steam library, validates the original hash, creates or repairs the
-patched isolated copy, stores the DeepSeek key with current-user DPAPI, and
-creates a desktop `Open Shift` shortcut. The same GUI prepares the next day,
-starts the game, opens diagnostics, switches DeepSeek Thinking with validated
-TOML persistence, and safely uninstalls the isolated copy.
+## 发行包内容
 
-The public project name is **OPEN SHIFT**. Community-facing posts are maintained
-outside the player package and may be adapted for local community rules.
+- `OpenShift.exe`：本地 bridge 运行程序；
+- `OpenShiftSetup.exe`：WebView2 图形安装器；
+- `OpenShift.ico` 和 WebView2 运行库；
+- `game-patch/`：补丁源和 GameMaker 注入脚本；
+- `packaging/`：安装、启动、卸载和配置脚本；
+- `src/open_shift/`：bridge 和规则层源代码；
+- `tools/utmt/UndertaleModCli.zip`：安装隔离副本所需的 UTMT CLI；
+- 安装、配置和贡献说明。
 
-The current preview package contains `OpenShift.exe`, `OpenShiftSetup.exe` with the OPEN SHIFT icon,
-the WebView2 host libraries, `OpenShift.ico`, and UTMT CLI. The lower-level
-`install-isolated-copy.ps1` and `launch-open-shift.ps1` scripts remain available
-for maintainer and acceptance workflows.
+实机截图和宣传素材不放进玩家发行 ZIP；它们只保存在仓库的素材目录中。
 
-For a strict real-DeepSeek acceptance run, use
-`launch-deepseek-acceptance.ps1`. It reads the API key with hidden input,
-probes DeepSeek, creates a new timestamped database, and generates the first
-day before opening the copied game. The acceptance script intentionally keeps
-provider failures strict so a real API problem is visible during verification.
-The normal player launcher keeps deterministic local fallbacks enabled: if a
-dialogue or drink reaction request fails after the local rules have evaluated
-the action, the order result, income and story cursor still commit and the
-game receives a local reaction scene.
+## 生成模式
 
-Players can switch the DeepSeek generation mode in the GUI after installation:
-快速 keeps ordinary dialogue fast, 平衡 enables Thinking only for world
-decisions, and 深度 enables it for every generation. Maintainers can pass
-`-Thinking enabled` or `-Thinking balanced` to the acceptance script. Day entry prepares only
-a local deterministic skeleton; provider calls are made on demand for the scene
-and drink branch the player actually reaches. The default remains `disabled`
-because thinking increases generation time and token use.
-Installed launchers also write secret-free JSONL timing records to
-`timing.log`, including each provider request, thinking mode, elapsed
-milliseconds, fallback events, and the total daily graph preparation time. This makes it
-possible to compare thinking with non-thinking before changing the generation
-strategy.
+- **快速**：普通对白不启用 Thinking，响应最快；
+- **平衡**：只在世界决策中启用 Thinking；
+- **深度**：所有生成请求都启用 Thinking，耗时和 token 消耗最高。
 
-The bridge also exposes a non-blocking scene-job protocol for the newer client:
-`POST /v1/scenes/jobs` returns a `job_id` immediately, and
-`GET /v1/scenes/jobs/<job_id>` reports `queued`, `running`, `ready`, or
-`failed`, together with UTC timestamps and elapsed milliseconds. The legacy
-`POST /v1/scenes/open` endpoint remains available while the GameMaker client
-migrates to polling, so existing acceptance builds continue to work.
-Pass `-Database <path>` to resume an existing world; omit it to create a new
-timestamped acceptance database.
+玩家版默认允许本地规则回退。DeepSeek 临时失败时，已经完成规则判断的调酒结果、收入和
+剧情游标仍会安全提交。严格的真实 API 验收请使用 `launch-deepseek-acceptance.ps1`。
 
-For local acceptance, omit `-GameCopyDir`. The launcher reads the newest
-`stage-*-acceptance-build/install.json`, selects that verified isolated copy,
-and checks its `data.win` SHA-256 before the game starts. Passing an older copy
-does not bypass the check: a stale hash is rejected before VA-11 HALL-A opens.
+## 开发者验收
 
-The Stage 19 daily flow keeps the original VA-11 rhythm instead of collapsing
-an entire shift into one short exchange: opening preparation dialogue is shown
-before the first customer, the original in-game jukebox is opened for the
-playlist gate, each customer scene contains multiple dialogue turns, and after
-the second customer a persisted `break_day_N` scene provides the mid-shift rest
-and save point before service resumes. The bridge does not acknowledge the
-music scene until the vanilla READY button closes the jukebox, so the story
-cursor cannot advance while song selection is incomplete. Gate state is stored
-in the world database, so leaving the room and returning cannot silently skip
-or reset a day phase. The public target is a Windows x64 preview release; stable-release
-checks remain tracked in `RELEASE_CHECKLIST.md`.
+维护者可以使用 PowerShell、Python 3.11+、UTMT CLI 0.9.1.2 和正版 Steam 游戏进行验收。
+运行日志写入 `timing.log`，包含请求 ID、状态码、生成模式、耗时和回退事件，不包含 API Key。
+
+阶段 19 已验证原版开店流程、音乐选择、调酒、中场休息存档、回到酒吧和跨日流程。发布前的
+最终门槛见仓库根目录的 `RELEASE_CHECKLIST.md`。
