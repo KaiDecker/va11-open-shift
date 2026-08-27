@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from open_shift.diagnostics import emit_timing
+from open_shift.diagnostics import emit_dialogue_transcript, emit_timing
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -22,6 +22,18 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(record["thinking"], "enabled")
             self.assertIn("T", record["timestamp"])
             self.assertNotIn("secret", path.read_text(encoding="utf-8"))
+
+    def test_dialogue_transcript_writes_full_lines_without_prompt_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "dialogue.log"
+            lines = [{"line_id": "dialogue_1", "speaker_id": "alma", "text": "交通线路改了。"}]
+            with patch.dict(os.environ, {"OPEN_SHIFT_DIALOGUE_LOG": str(path)}):
+                emit_dialogue_transcript(2, "day_2_customer_1_order", lines)
+            record = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(record["event"], "dialogue_transcript")
+            self.assertEqual(record["story_day"], 2)
+            self.assertEqual(record["lines"], lines)
+            self.assertNotIn("prompt", path.read_text(encoding="utf-8").lower())
 
 
 if __name__ == "__main__":

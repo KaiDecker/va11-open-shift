@@ -15,6 +15,41 @@ from typing import Any
 _LOCK = threading.Lock()
 
 
+def emit_dialogue_transcript(
+    story_day: int,
+    scene_id: str,
+    lines: list[dict[str, str]],
+) -> None:
+    """Append the displayed scene transcript without prompts or secrets.
+
+    This is deliberately separate from timing.log: a player can share the
+    dialogue trace while keeping provider credentials and request payloads
+    private.  The bridge calls it only for the first acknowledgement of a
+    scene, so retries cannot duplicate a transcript.
+    """
+
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "event": "dialogue_transcript",
+        "story_day": story_day,
+        "scene_id": scene_id,
+        "lines": lines,
+    }
+    line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+    with _LOCK:
+        path_value = os.environ.get("OPEN_SHIFT_DIALOGUE_LOG", "").strip()
+        if not path_value:
+            return
+        try:
+            path = Path(path_value)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            # Diagnostics must never break gameplay.
+            pass
+
+
 def emit_timing(event: str, **fields: Any) -> None:
     """Write one secret-free timestamped timing event.
 

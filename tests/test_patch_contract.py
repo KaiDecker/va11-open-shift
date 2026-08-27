@@ -362,8 +362,13 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn("ag_break_room_entered", controller)
         self.assertIn("ag_break_returned", controller)
         self.assertIn("native_break_room_return", controller)
+        self.assertIn("native_jukebox_resume_pending", controller)
+        self.assertIn("native_jukebox_resume_complete", controller)
+        self.assertIn("ag_music_resume_pending", controller_create)
+        self.assertIn("ag_state == 12", controller)
+        self.assertIn("playlist=reused", controller)
         # break_changer already runs vanilla break_return(). The bridge must
-        # acknowledge before room_goto, then queue the next bridge scene after
+        # acknowledge before room_goto, then reopen the vanilla jukebox after
         # returning because OS cur_day values are outside vanilla's switch.
         self.assertIn("ag_break_enter_after_ack", controller_create)
         self.assertIn("ag_break_enter_after_ack = 1", controller)
@@ -372,7 +377,7 @@ class PatchContractTests(unittest.TestCase):
         self.assertNotIn("global.cur_stage = 1", controller)
         self.assertNotIn("resetmixer_2();", controller)
         self.assertNotIn("textbox_destroyed=1", controller)
-        self.assertIn("next_scene=bridge", controller)
+        self.assertNotIn("native_break_room_return room=bar state=1", controller)
         self.assertIn("native_break_room_enter room=break_time", controller)
         self.assertIn("native_break_room_return room=bar", controller)
         self.assertIn("room_change room=", controller)
@@ -402,12 +407,30 @@ class PatchContractTests(unittest.TestCase):
         self.assertNotIn("global.cur_stage = 1", return_branch)
         self.assertNotIn("resetmixer_2();", return_branch)
         self.assertNotIn("instance_destroy()", return_branch)
-        self.assertIn("ag_state = 1", return_branch)
-        self.assertIn('ag_resume_body, "request_id", ag_request_id', return_branch)
-        self.assertIn('ag_bridge_url + "/v1/scenes/jobs"', return_branch)
-        self.assertIn("global.block_click = 1", return_branch)
+        # Returning from the vanilla break room must reopen the original
+        # jukebox first.  The next scene request is intentionally deferred
+        # until READY closes that UI, so the existing playlist can be reused.
+        self.assertIn("ag_state = 12", return_branch)
+        self.assertIn("global.jukebox_happens = 1", return_branch)
+        self.assertIn("ag_music_resume_pending = 1", return_branch)
+        self.assertIn("ag_music_gate_active = 1", return_branch)
+        self.assertIn("playlist=reused", return_branch)
+        self.assertIn("global.block_click = 0", return_branch)
+        self.assertNotIn('ag_resume_body, "request_id", ag_request_id', return_branch)
+        self.assertNotIn('ag_bridge_url + "/v1/scenes/jobs"', return_branch)
         self.assertNotIn("/v1/scenes/ack", return_branch)
-        self.assertIn("next_scene=bridge", return_branch)
+        self.assertNotIn("next_scene=bridge", return_branch)
+        # The resume gate must be one-shot and the deferred scene request must
+        # carry the same protocol/session fields as the normal opening request.
+        resume_gate = controller.split("if (ag_state == 12)", 1)[1].split(
+            "if (ag_state == 11", 1
+        )[0]
+        self.assertIn("ag_music_resume_pending == 1", resume_gate)
+        self.assertIn('ag_resume_body, "request_id", ag_request_id', resume_gate)
+        self.assertIn(
+            'ag_resume_body, "client_session_id", ag_session_id', resume_gate
+        )
+        self.assertIn("ag_music_resume_pending = 0", resume_gate)
         callback_body = controller_http.split(
             'if (ds_map_find_value(async_load, "id") == ag_http_request)', 1
         )[1]
