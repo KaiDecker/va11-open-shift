@@ -44,6 +44,37 @@ if (ag_state == 9)
     }
 }
 
+if (ag_state == 12)
+{
+    // After break_time the original game reopens the existing playlist. READY
+    // closes jukebox_bg and restarts music_obj; only then may customer 3 load.
+    if (ag_music_resume_pending == 1 && global.jukebox_happens == 0 && !instance_exists(jukebox_bg) && !instance_exists(obj_textbox))
+    {
+        var ag_resume_headers;
+        var ag_resume_body;
+        ag_resume_headers = ds_map_create();
+        ds_map_add(ag_resume_headers, "Content-Type", "application/json");
+        ini_open("open-shift-runtime.ini");
+        ds_map_add(ag_resume_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
+        ini_close();
+        ag_resume_body = ds_map_create();
+        ag_request_sequence += 1;
+        ag_request_id = "open_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
+        ds_map_add(ag_resume_body, "protocol_version", 1);
+        ds_map_add(ag_resume_body, "request_id", ag_request_id);
+        ds_map_add(ag_resume_body, "client_session_id", ag_session_id);
+        ag_http_request = http_request(ag_bridge_url + "/v1/scenes/jobs", "POST", ag_resume_headers, json_encode(ag_resume_body));
+        ds_map_destroy(ag_resume_body);
+        ds_map_destroy(ag_resume_headers);
+        ag_music_resume_pending = 0;
+        ag_music_gate_active = 0;
+        ag_state = 1;
+        global.block_click = 1;
+        ag_timeout_at = current_time + 120000;
+        show_debug_message("[OPEN SHIFT] native_jukebox_resume_complete playlist=reused next_scene=bridge http_id=" + string(ag_http_request));
+    }
+}
+
 if (ag_state == 11 && ag_http_request == -1 && current_time >= ag_order_job_poll_at)
 {
     var ag_order_poll_headers;
@@ -153,36 +184,21 @@ if (ag_state == 10)
         // the bar. Do not replay synthetic post-break dialogue here. The
         // vanilla break_changer/break_return chain ran on room creation. The
         ag_break_returned = 1;
-        // Open Shift days use cur_day >= 1001, which is outside the original
-        // break_return() switch. The vanilla room still owns save UI and room
-        // lifetime, but the bridge remains the sole dialogue owner after the
-        // return. Queue the next scene directly; do not create a textbox here.
-        ag_request_sequence += 1;
-        ag_request_id = "open_" + ag_session_id + "_" + ag_request_scope + "_" + string(ag_request_sequence);
-        var ag_resume_headers;
-        var ag_resume_body;
-        ag_resume_headers = ds_map_create();
-        ds_map_add(ag_resume_headers, "Content-Type", "application/json");
-        ini_open("open-shift-runtime.ini");
-        ds_map_add(ag_resume_headers, "X-Open-Shift-Token", ini_read_string("bridge", "token", ""));
-        ini_close();
-        ag_resume_body = ds_map_create();
-        ds_map_add(ag_resume_body, "protocol_version", 1);
-        ds_map_add(ag_resume_body, "request_id", ag_request_id);
-        ds_map_add(ag_resume_body, "client_session_id", ag_session_id);
-        ag_http_request = http_request(ag_bridge_url + "/v1/scenes/jobs", "POST", ag_resume_headers, json_encode(ag_resume_body));
-        ds_map_destroy(ag_resume_body);
-        ds_map_destroy(ag_resume_headers);
-        ag_state = 1;
-        global.block_click = 1;
-        ag_timeout_at = current_time + 120000;
+        // Keep the vanilla save lifecycle, then reopen the native jukebox
+        // using the existing global.playlist before requesting customer 3.
+        global.jukebox_happens = 1;
+        ag_music_resume_pending = 1;
+        ag_music_gate_active = 1;
+        ag_state = 12;
+        global.block_click = 0;
+        ag_timeout_at = current_time + 900000;
         ag_break_room_entered = 0;
         ag_break_returned = 0;
         ag_break_wait_logged = 0;
-        show_debug_message("[OPEN SHIFT] native_break_room_return room=bar state=1 next_scene=bridge http_id=" + string(ag_http_request) + " cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
+        show_debug_message("[OPEN SHIFT] native_break_room_return room=bar bridge_state=12 native_jukebox_resume_pending=1 playlist=reused cur_client=" + string(global.cur_client) + " cur_stage=" + string(global.cur_stage));
         ag_diag_should_emit = 1;
         ag_diag_state_name = "native_break_room_return";
-        ag_diag_error_reason = "native_break_room_return";
+        ag_diag_error_reason = "native_jukebox_resume_pending";
     }
 }
 
@@ -216,7 +232,7 @@ if (ag_diag_should_emit == 1)
     ag_diag_should_emit = 0;
 }
 
-if ((ag_state == 1 || ag_state == 3 || ag_state == 7 || ag_state == 8 || ag_state == 9 || ag_state == 10 || ag_state == 11) && current_time > ag_timeout_at)
+if ((ag_state == 1 || ag_state == 3 || ag_state == 7 || ag_state == 8 || ag_state == 9 || ag_state == 10 || ag_state == 11 || ag_state == 12) && current_time > ag_timeout_at)
 {
     if (ag_state == 3)
     {
@@ -257,6 +273,14 @@ if ((ag_state == 1 || ag_state == 3 || ag_state == 7 || ag_state == 8 || ag_stat
         ag_state = 4;
         global.block_click = 0;
         ag_error_message = "O.S.：中场存档页面在限定时间内没有关闭，请查看 timing.log。";
+    }
+    else if (ag_state == 12)
+    {
+        ag_state = 4;
+        ag_music_resume_pending = 0;
+        global.jukebox_happens = 0;
+        global.block_click = 0;
+        ag_error_message = "O.S.：中场后的原版点唱机在限定时间内没有完成，请查看 timing.log。";
     }
     else
     {

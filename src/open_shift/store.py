@@ -317,6 +317,152 @@ class WorldStore:
             "attempt_count": int(row["attempt_count"]),
         }
 
+    def migrate_incompatible_daily_story(
+        self, day_index: int, generation_version: str
+    ) -> dict[str, Any] | None:
+        """Discard only an interrupted old-version shift and reset its gates.
+
+        Story graphs are executable cursors, so replaying one from an older
+        generation can skip the current opening/music flow.  The world events
+        which produced the graph remain intact; only bridge-owned scenes,
+        service effects, and dialogue memories for the active day are removed.
+        Completed prior days are never touched.
+        """
+        old_rows = self._conn.execute(
+            "SELECT * FROM daily_story_graphs WHERE day_index = ? AND generation_version <> ?",
+            (day_index, generation_version),
+        ).fetchall()
+        if not old_rows:
+            return None
+        active_old = False
+        for row in old_rows:
+            progress = self._conn.execute(
+                "SELECT status FROM daily_story_progress WHERE day_index = ? AND generation_version = ?",
+                (day_index, row["generation_version"]),
+            ).fetchone()
+            if progress is None or progress[0] == "active":
+                active_old = True
+                break
+        if not active_old:
+            return None
+
+        day_token = f"day_{day_index}_"
+        scene_tokens = (
+            f"opening_day_{day_index}",
+            f"doorbell_day_{day_index}",
+            f"pre_opening_day_{day_index}",
+            f"music_selection_day_{day_index}",
+            f"break_day_{day_index}",
+            f"closing_day_{day_index}",
+            f"settlement_day_{day_index}",
+            day_token,
+        )
+        delete_event_ids: set[int] = set()
+        for row in self._conn.execute(
+            "SELECT service_event_id FROM story_branch_commits WHERE day_index = ?",
+            (day_index,),
+        ).fetchall():
+            delete_event_ids.add(int(row[0]))
+        event_rows = self._conn.execute(
+            "SELECT event_id, event_type, payload_json FROM events"
+        ).fetchall()
+        for row in event_rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                payload = {}
+            scene_id = str(payload.get("scene_id", "")) if isinstance(payload, dict) else ""
+            if (
+                isinstance(payload, dict)
+                and payload.get("story_day") == day_index
+                and row["event_type"] in {
+                    "drink_served",
+                    "agent_dialogue_completed",
+                    "player_scene_ack",
+                    "dialogue_provider_error",
+                    "dialogue_provider_fallback",
+                    "dialogue_transcript",
+                }
+            ) or any(token in scene_id for token in scene_tokens):
+                delete_event_ids.add(int(row["event_id"]))
+        # Remove the referencing commits before their service events; foreign
+        # keys are enabled on every WorldStore connection.
+        self._conn.execute("DELETE FROM story_branch_commits WHERE day_index = ?", (day_index,))
+        if delete_event_ids:
+            marks = ",".join("?" for _ in delete_event_ids)
+            self._conn.execute(
+                f"DELETE FROM memories WHERE event_id IN ({marks})",
+                tuple(delete_event_ids),
+            )
+            self._conn.execute(
+                f"DELETE FROM events WHERE event_id IN ({marks})",
+                tuple(delete_event_ids),
+            )
+        # Remove every executable graph for this interrupted day, including a
+        # partially-created target-version graph.  Keeping that graph while
+        # deleting its progress would leave a ready graph with no cursor and
+        # make the next launch ambiguous.
+        self._conn.execute("DELETE FROM daily_story_progress WHERE day_index = ?", (day_index,))
+        self._conn.execute("DELETE FROM daily_story_graphs WHERE day_index = ?", (day_index,))
+
+        meta_rows = self._conn.execute("SELECT key FROM world_meta").fetchall()
+        for row in meta_rows:
+            key = str(row[0])
+            raw_value = self.get_meta(key, "") or ""
+            if key.startswith("bridge_ack_request:"):
+                # ACK request ids are client-session scoped.  Keep receipts
+                # from completed days, but remove current-day requests when
+                # their scene id or payload identifies this migration.
+                if any(token in raw_value for token in scene_tokens) or f'"story_day":{day_index}' in raw_value:
+                    self._conn.execute("DELETE FROM world_meta WHERE key = ?", (key,))
+                continue
+            try:
+                parsed_value = json.loads(raw_value)
+            except (TypeError, ValueError):
+                parsed_value = None
+            parsed_text = json.dumps(parsed_value, ensure_ascii=False, separators=(",", ":")) if parsed_value is not None else raw_value
+            if key.startswith((
+                "bridge_ack:", "bridge_ack_request:", "bridge_open:",
+                "bridge_scene:", "bridge_scene_payload:", "bridge_order:",
+                "bridge_order_request:", "story_scene_node:",
+                "story_materialized_scene:",
+            )):
+                value = key.split(":", 1)[1]
+                contains_day = (
+                    f'"story_day":{day_index}' in raw_value
+                    or f'"day_index":{day_index}' in raw_value
+                )
+                if (
+                    any(token in value for token in scene_tokens)
+                    or any(token in raw_value for token in scene_tokens)
+                    or any(token in parsed_text for token in scene_tokens)
+                    or contains_day
+                    or f"order_day_{day_index}_" in value
+                    or f"order_day_{day_index}_" in raw_value
+                ):
+                    self._conn.execute("DELETE FROM world_meta WHERE key = ?", (key,))
+            elif key in {
+                f"break_pending_day_{day_index}",
+                f"music_selected_day_{day_index}",
+            }:
+                self._conn.execute("DELETE FROM world_meta WHERE key = ?", (key,))
+
+        self._conn.execute(
+            "INSERT INTO world_meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("player_shift_income", "0"),
+        )
+        self._conn.execute(
+            "INSERT INTO world_meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            ("shift_phase", "playing"),
+        )
+        return {
+            "day": day_index,
+            "old_versions": [str(row["generation_version"]) for row in old_rows],
+            "deleted_event_count": len(delete_event_ids),
+        }
+
     def list_daily_story_graphs(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
