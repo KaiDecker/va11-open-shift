@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from .diagnostics import emit_timing
 from .models import (
     AgentState,
     Commitment,
@@ -20,7 +21,7 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _ERROR_CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
@@ -141,7 +142,12 @@ class WorldStore:
                     event_id INTEGER NOT NULL REFERENCES events(event_id),
                     importance REAL NOT NULL CHECK (importance >= 0 AND importance <= 1),
                     summary TEXT NOT NULL,
-                    tags_json TEXT NOT NULL
+                    tags_json TEXT NOT NULL,
+                    source_type TEXT NOT NULL DEFAULT 'direct',
+                    confidence REAL NOT NULL DEFAULT 0.8 CHECK (confidence >= 0 AND confidence <= 1),
+                    visibility TEXT NOT NULL DEFAULT 'private',
+                    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+                    canonical_key TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_memories_agent
@@ -256,6 +262,27 @@ class WorldStore:
                     FOREIGN KEY (day_index, generation_version)
                         REFERENCES daily_story_graphs(day_index, generation_version)
                 );
+                """
+            )
+            # Additive migration keeps Stage 21 databases readable in place.
+            columns = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(memories)")}
+            for name, definition in (
+                ("source_type", "TEXT NOT NULL DEFAULT 'legacy'"),
+                ("confidence", "REAL NOT NULL DEFAULT 0.5"),
+                ("visibility", "TEXT NOT NULL DEFAULT 'private'"),
+                ("archived", "INTEGER NOT NULL DEFAULT 0"),
+                ("canonical_key", "TEXT"),
+            ):
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {definition}")
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_agent_active ON memories(agent_id, archived, memory_id)"
+            )
+            self._conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_active_canonical
+                ON memories(agent_id, canonical_key)
+                WHERE canonical_key IS NOT NULL AND archived = 0
                 """
             )
             self._conn.execute(
@@ -950,17 +977,59 @@ class WorldStore:
         importance: float,
         summary: str,
         tags: Iterable[str],
+        *,
+        source_type: str = "direct",
+        confidence: float = 0.8,
+        visibility: str = "private",
+        canonical_key: str | None = None,
     ) -> int:
+        if source_type not in {"direct", "heard", "rumor", "inferred", "legacy"}:
+            raise ValueError("unsupported memory source_type")
+        if not 0 <= confidence <= 1:
+            raise ValueError("memory confidence must be between 0 and 1")
+        if visibility not in {"private", "participants", "public"}:
+            raise ValueError("unsupported memory visibility")
         with self._write_scope():
             cursor = self._conn.execute(
                 """
                 INSERT INTO memories(
-                    agent_id, event_id, importance, summary, tags_json
-                ) VALUES(?, ?, ?, ?, ?)
+                    agent_id, event_id, importance, summary, tags_json,
+                    source_type, confidence, visibility, archived, canonical_key
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(agent_id, canonical_key)
+                    WHERE canonical_key IS NOT NULL AND archived = 0
+                DO NOTHING
                 """,
-                (agent_id, event_id, importance, summary, _json_dump(sorted(tags))),
+                (agent_id, event_id, importance, summary, _json_dump(sorted(tags)),
+                 source_type, confidence, visibility, canonical_key),
             )
-            return int(cursor.lastrowid)
+            if cursor.rowcount == 0:
+                existing = self._conn.execute(
+                    """
+                    SELECT memory_id FROM memories
+                    WHERE agent_id = ? AND canonical_key = ? AND archived = 0
+                    """,
+                    (agent_id, canonical_key),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError("canonical memory insert was ignored without an active match")
+                return int(existing["memory_id"])
+            memory_id = int(cursor.lastrowid)
+        emit_timing(
+            "memory_appended", memory_id=memory_id, agent_id=agent_id,
+            event_id=event_id, source_type=source_type,
+            confidence=round(confidence, 3), visibility=visibility,
+            importance=round(importance, 3), canonical=bool(canonical_key),
+        )
+        # Counting uses the active-memory index; the more expensive compaction
+        # only runs after the per-character bound is exceeded.
+        active_count = int(self._conn.execute(
+            "SELECT COUNT(*) AS count FROM memories WHERE agent_id = ? AND archived = 0",
+            (agent_id,),
+        ).fetchone()["count"])
+        if active_count > 260:
+            self.compact_memories(agent_id, max_active=240)
+        return memory_id
 
     def list_memories(self, agent_id: str | None = None) -> list[dict[str, Any]]:
         if agent_id is None:
@@ -982,6 +1051,11 @@ class WorldStore:
                 "importance": float(row["importance"]),
                 "summary": row["summary"],
                 "tags": json.loads(row["tags_json"]),
+                "source_type": str(row["source_type"]),
+                "confidence": float(row["confidence"]),
+                "visibility": str(row["visibility"]),
+                "archived": bool(row["archived"]),
+                "canonical_key": row["canonical_key"],
             }
             for row in rows
         ]
@@ -1003,7 +1077,7 @@ class WorldStore:
             SELECT m.*, e.tick
             FROM memories AS m
             JOIN events AS e ON e.event_id = m.event_id
-            WHERE m.agent_id = ? AND e.tick <= ?
+            WHERE m.agent_id = ? AND e.tick <= ? AND m.archived = 0
             ORDER BY m.memory_id
             """,
             (agent_id, tick),
@@ -1014,7 +1088,12 @@ class WorldStore:
             age_days = max(0.0, (tick - int(row["tick"])) / 1_440)
             recency = 1.0 / (1.0 + age_days)
             relevance = len(wanted.intersection(memory_tags))
-            score = float(row["importance"]) * 2.0 + recency + relevance
+            confidence = float(row["confidence"])
+            source_weight = {"direct": 1.0, "heard": 0.9, "rumor": 0.65, "inferred": 0.55, "legacy": 0.7}.get(
+                str(row["source_type"]), 0.7
+            )
+            unresolved = int(bool({"promise", "commitment", "unresolved", "follow_up"}.intersection(memory_tags)))
+            score = float(row["importance"]) * 2.0 + recency + relevance + confidence * source_weight + unresolved * 0.75
             scored.append((score, int(row["memory_id"]), row, memory_tags))
         scored.sort(key=lambda item: (-item[0], -item[1]))
 
@@ -1022,6 +1101,7 @@ class WorldStore:
         used = 0
         for _, _, row, memory_tags in scored:
             summary = str(row["summary"])
+            row_confidence = float(row["confidence"])
             if selected and used + len(summary) > character_budget:
                 continue
             if not selected and len(summary) > character_budget:
@@ -1034,12 +1114,74 @@ class WorldStore:
                     importance=float(row["importance"]),
                     summary=summary,
                     tags=memory_tags,
+                    source_type=str(row["source_type"]),
+                    confidence=row_confidence,
+                    visibility=str(row["visibility"]),
+                    archived=bool(row["archived"]),
+                    canonical_key=row["canonical_key"],
                 )
             )
             used += len(summary)
             if len(selected) >= limit:
                 break
+        emit_timing(
+            "memory_retrieval_selected", agent_id=agent_id, tick=tick,
+            requested_tags=sorted(wanted), selected_ids=[item.memory_id for item in selected],
+            selected_count=len(selected), character_budget=character_budget,
+        )
         return selected
+
+    def compact_memories(self, agent_id: str | None = None, *, max_active: int = 240) -> dict[str, int]:
+        """Archive duplicate and low-value recollections, retaining key facts."""
+        if max_active < 1:
+            raise ValueError("max_active must be positive")
+        if agent_id is None:
+            rows = self._conn.execute("SELECT * FROM memories WHERE archived = 0 ORDER BY agent_id, importance DESC, memory_id").fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM memories WHERE agent_id = ? AND archived = 0 ORDER BY agent_id, importance DESC, memory_id", (agent_id,)).fetchall()
+        seen: set[tuple[str, str]] = set()
+        archive_ids: list[int] = []
+        duplicate_ids: set[int] = set()
+        active_counts: dict[str, int] = {}
+        protected_tags = {"promise", "commitment", "unresolved", "milestone"}
+        for row in rows:
+            owner = str(row["agent_id"])
+            key = (owner, str(row["summary"]).strip().casefold())
+            tags = set(json.loads(row["tags_json"]))
+            important = float(row["importance"]) >= 0.7 or bool(protected_tags.intersection(tags))
+            if key in seen and not important:
+                duplicate_ids.add(int(row["memory_id"]))
+                archive_ids.append(int(row["memory_id"]))
+                continue
+            seen.add(key)
+            active_counts[owner] = active_counts.get(owner, 0) + 1
+        for row in rows:
+            if int(row["memory_id"]) in duplicate_ids:
+                continue
+            owner = str(row["agent_id"])
+            if active_counts.get(owner, 0) <= max_active or float(row["importance"]) >= 0.7:
+                continue
+            tags = set(json.loads(row["tags_json"]))
+            if protected_tags.intersection(tags):
+                continue
+            archive_ids.append(int(row["memory_id"]))
+            active_counts[owner] -= 1
+        unique_ids = set(archive_ids)
+        if unique_ids:
+            with self._write_scope():
+                self._conn.executemany("UPDATE memories SET archived = 1 WHERE memory_id = ?", ((item,) for item in unique_ids))
+        if agent_id is None:
+            remaining = int(self._conn.execute(
+                "SELECT COUNT(*) AS count FROM memories WHERE archived = 0"
+            ).fetchone()["count"])
+        else:
+            remaining = int(self._conn.execute(
+                "SELECT COUNT(*) AS count FROM memories WHERE agent_id = ? AND archived = 0",
+                (agent_id,),
+            ).fetchone()["count"])
+        result = {"archived_count": len(unique_ids), "remaining_count": remaining}
+        emit_timing("memory_compacted", agent_id=agent_id or "*", **result, max_active=max_active)
+        return result
 
     @staticmethod
     def _invitation_from_row(row: sqlite3.Row) -> Invitation:

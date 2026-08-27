@@ -343,7 +343,7 @@ internal sealed class OpenShiftLauncherForm : Form
         pendingKey = key;
         string log = Path.Combine(Path.GetTempPath(), "open-shift-install.log");
         completionMarker = Path.Combine(Path.GetTempPath(), "open-shift-install-" + Guid.NewGuid().ToString("N") + ".complete");
-        StartPowerShell(Path.Combine(root, "packaging", "install-open-shift.ps1"), "-SteamGameDir " + Quote(selectedSteamGame) + " -InstallDir " + Quote(installDir) + " -GameCopyDir " + Quote(gameCopyDir) + " -CompletionMarker " + Quote(completionMarker) + " -SkipCredential", log);
+        StartPowerShell(Path.Combine(root, "packaging", "install-open-shift.ps1"), "-SteamGameDir " + Quote(selectedSteamGame) + " -InstallDir " + Quote(installDir) + " -GameCopyDir " + Quote(gameCopyDir) + " -CompletionMarker " + Quote(completionMarker) + " -SkipCredential -SkipShortcut", log);
         SendState("正在校验 Steam 文件并生成隔离副本...", true);
     }
 

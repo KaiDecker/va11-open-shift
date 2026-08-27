@@ -6,11 +6,17 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from io import StringIO
 
 from open_shift.diagnostics import emit_dialogue_transcript, emit_timing
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_timing_without_log_path_is_quiet_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch("sys.stderr", new_callable=StringIO) as stderr:
+            emit_timing("memory_retrieval_selected", selected_count=0)
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_timing_event_has_wall_timestamp_and_writes_secret_free_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "timing.log"

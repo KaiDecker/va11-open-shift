@@ -141,7 +141,7 @@ $steamBadge.SetBounds(405, 30, 100, 30)
 $form.Controls.Add($steamBadge)
 
 $version = New-Object Windows.Forms.Label
-$version.Text = "PLAYER 0.19 RC.30"
+$version.Text = "PLAYER 0.19 RC.32"
 $version.Font = New-Object Drawing.Font("Consolas", 8)
 $version.ForeColor = [Drawing.Color]::FromArgb(121, 130, 149)
 $version.TextAlign = "MiddleRight"
@@ -340,7 +340,6 @@ $browseButton.Add_Click({
 $saveKeyButton.Add_Click({
     try {
         Save-ApiKey $keyBox.Text
-        $keyBox.Clear()
         $status.Text = "DeepSeek API Key 已为当前 Windows 用户加密保存。"
     } catch {
         [Windows.Forms.MessageBox]::Show($_.Exception.Message, "Open Shift", "OK", "Error") | Out-Null
@@ -359,7 +358,7 @@ $installButton.Add_Click({
         $marker = Join-Path $env:TEMP ("open-shift-install-" + [guid]::NewGuid().ToString("N") + ".complete")
         $script:activeProcess = Start-HiddenPowerShell `
             (Join-Path $packageRoot "packaging\install-open-shift.ps1") `
-            @("-SteamGameDir", $steam, "-InstallDir", $installDir, "-GameCopyDir", $gameCopyDir, "-CompletionMarker", $marker, "-SkipCredential") `
+            @("-SteamGameDir", $steam, "-InstallDir", $installDir, "-GameCopyDir", $gameCopyDir, "-CompletionMarker", $marker, "-SkipCredential", "-SkipShortcut") `
             $log
         $script:activeMode = "install"
         $script:activeLog = $log
@@ -472,7 +471,6 @@ $timer.Add_Tick({
             return
         }
         $script:pendingKey = ""
-        $keyBox.Clear()
         $startButton.Enabled = $true
         $status.Text = "安装完成。Steam 原版文件未被修改。"
     } else {

@@ -245,7 +245,9 @@ prefetch_days = 0
     Write-Utf8NoBom $config $configText
 }
 
-$shortcutPath = if ($SkipShortcut) { "" } else { Join-Path ([Environment]::GetFolderPath("Desktop")) "Open Shift.lnk" }
+# Keep the legacy switch for compatibility, but new installs never create a
+# desktop shortcut. Launchers are started from the installation directory.
+$shortcutPath = ""
 $state = [ordered]@{
     schema_version = 1
     package_version = $packageVersion
@@ -288,33 +290,6 @@ if (`$state.runtime_is_python) { `$env:PYTHONPATH = Join-Path `$root "src"; & `$
 exit `$LASTEXITCODE
 "@
 Write-Utf8NoBom $launcher $launcherText
-if (-not $SkipShortcut) {
-    $shortcut = $shortcutPath
-    Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
-    $shell = New-Object -ComObject WScript.Shell
-    $link = $shell.CreateShortcut($shortcut)
-    $installedGui = Join-Path $installRoot "OpenShiftSetup.exe"
-    if (Test-Path -LiteralPath $installedGui -PathType Leaf) {
-        $link.TargetPath = $installedGui
-        $link.Arguments = ""
-        if (Test-Path -LiteralPath $installedIcon -PathType Leaf) {
-            $link.IconLocation = "$installedIcon,0"
-        } else {
-            $link.IconLocation = "$installedGui,0"
-        }
-    } else {
-        $link.TargetPath = "powershell.exe"
-        $link.Arguments = "-ExecutionPolicy Bypass -File `"$launcher`""
-    }
-    $link.WorkingDirectory = $installRoot
-    $link.Description = "Start VA-11 HALL-A Open Shift"
-    $link.Save()
-    $iconRefresh = Join-Path $env:SystemRoot "System32\ie4uinit.exe"
-    if (Test-Path -LiteralPath $iconRefresh -PathType Leaf) {
-        & $iconRefresh -show
-    }
-}
-
 Write-Host "Open Shift installed. Start it with: $installRoot\Start-Open-Shift.ps1"
 Write-Host "Steam original was not modified; the patched copy is: $copyRoot"
 if ($CompletionMarker) {

@@ -44,7 +44,7 @@
     <section class="hero">
       <img class="brand-icon" id="brand" src="../../assets/open-shift-icon.svg" alt="OPEN SHIFT">
       <div><h1>OPEN SHIFT</h1><div class="tagline">VA-11 HALL-A · 结局之后的本地世界</div></div>
-      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.19 RC.30</div></div>
+      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.19 RC.32</div></div>
     </section>
     <section class="card">
       <div class="field"><label>Steam 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="sub small" data-action="browse">选择</button></div><div class="copy" id="copy"></div></div>
@@ -63,7 +63,7 @@
     function applyAvailability() { document.querySelectorAll('[data-action]').forEach(button=>{ button.disabled=busy && button.dataset.action!=='logs'; }); steam.disabled=busy; key.disabled=busy; document.querySelector('[data-action="start"]').disabled=busy||startDisabled; thinkingToggle.disabled=busy||!thinkingAvailable; }
     function setState(s) { if(s.steam!==undefined) steam.value=s.steam; if(s.copy!==undefined) copy.textContent='隔离副本 · '+s.copy; if(s.status) status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;app.classList.toggle('busy',busy);} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; applyThinking(); applyAvailability(); }
     window.setState=setState;
-    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});key.value='';} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else send(a); }));
+    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else send(a); }));
     thinkingToggle.addEventListener('change',()=>send('thinking',{value:thinkingToggle.value}));
     steam.addEventListener('change',()=>send('steamChanged',{value:steam.value}));
     applyThinking(); applyAvailability();
