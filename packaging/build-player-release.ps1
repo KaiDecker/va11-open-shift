@@ -1,6 +1,6 @@
 param(
-    [string] $Version = "0.19.0-rc.23",
-    [string] $Output = (Join-Path (Join-Path $PSScriptRoot "..\work") "open-shift-player-$Version.zip"),
+    [string] $Version = "0.19.0-rc.30",
+    [string] $Output = "",
     [string] $Python = "python",
     [string] $WebViewSdk = "",
     [Parameter(Mandatory = $true)] [string] $UtmtCliZip
@@ -8,6 +8,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ([string]::IsNullOrWhiteSpace($Output)) {
+    $Output = Join-Path (Join-Path $root "work") "open-shift-player-$Version.zip"
+}
 $outputPath = [IO.Path]::GetFullPath($Output)
 function Resolve-PythonExecutable([string] $PythonPath) {
     $command = @(Get-Command -Name $PythonPath -CommandType Application -ErrorAction SilentlyContinue) |

@@ -8,7 +8,11 @@ from pathlib import Path
 from open_shift.bridge import BridgeApplication, BridgeConfig, BridgeError
 from open_shift.providers import MockProvider
 from open_shift.world_bridge import WorldSceneService
-from open_shift.world_events import PublicWorldEvent
+from open_shift.world_events import (
+    CHARACTER_STORY_ARCS,
+    PublicWorldEvent,
+    character_story_arcs_for_day,
+)
 
 
 TOKEN = "world-event-test-token"
@@ -133,7 +137,25 @@ class WorldEventTests(unittest.TestCase):
             arrival_topics = [
                 node.topic for node in graph.nodes if node.kind.value == "arrival_order"
             ]
-            self.assertTrue(any("市中心交通线路临时调整" in topic for topic in arrival_topics))
+            self.assertTrue(any("客户资料" in topic for topic in arrival_topics))
+
+    def test_character_story_catalogue_has_distinct_multi_day_arcs(self) -> None:
+        self.assertGreaterEqual(len(CHARACTER_STORY_ARCS), 6)
+        self.assertGreaterEqual(
+            {arc.owner_id for arc in CHARACTER_STORY_ARCS},
+            {"alma", "sei", "stella", "dorothy", "dana"},
+        )
+        self.assertTrue(all(len(arc.stages) >= 2 for arc in CHARACTER_STORY_ARCS))
+        day_one = character_story_arcs_for_day(1)
+        self.assertEqual(len(day_one), len(CHARACTER_STORY_ARCS))
+        self.assertEqual(len({arc.owner_id for arc, _ in day_one}), 5)
+
+    def test_character_story_stage_is_safe_for_dialogue(self) -> None:
+        arc, stage = character_story_arcs_for_day(1)[0]
+        payload = __import__("open_shift.world_events", fromlist=["character_story_event"]).character_story_event(arc, stage)
+        self.assertEqual(payload["event_key"], "alma_client_file_day_1")
+        self.assertNotIn("story_arc_started", repr(payload))
+        self.assertIn("facts", payload)
 
     def test_tablet_feed_deduplicates_event_keys_and_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -40,6 +40,9 @@ ag_order_id = "";
 ag_order_customer = "";
 ag_order_display_text = "";
 ag_music_gate_active = 0;
+// The vanilla break flow stops music and reopens the jukebox after the save
+// page. This flag distinguishes that second gate from the first selection.
+ag_music_resume_pending = 0;
 ag_break_wait_logged = 0;
 // A break scene is acknowledged while still in the bar.  Only that ACK's
 // successful callback may enter the vanilla break_time room.

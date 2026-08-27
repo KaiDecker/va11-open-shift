@@ -171,21 +171,50 @@ ORIGINAL_DAILY_MIXING_MARKER_COUNT = 620
 ORIGINAL_DAILY_SERVICE_RESULT_MARKER_COUNT = 449
 ORIGINAL_DAILY_SCENE_SHOW_MARKER_COUNT = 318
 ORIGINAL_SHIFT_BEAT_SEQUENCE: tuple[str, ...] = (
-    "营业前：先处理吧台、库存或卫生等眼前事务，再由店员选择音乐并开门",
+    "营业前：围绕当天具体的城市事件或人物延续话题自然交谈，然后用短句过渡到原生点唱机",
     "客人入场：从一个具体点单或眼前动作开始，允许客人追加规格、纠正或改变要求",
     "调酒过程：每次出杯都是一个停顿点，顾客反馈会改变下一轮话题，而不是立即结束",
     "营业话题：从客人的工作、新闻、关系或当晚的小麻烦展开，Jill 用观察或干涩吐槽接住",
+    "中场前：完成上半场最后一位客人的对话与出杯，再由 Jill 说要休息",
+    "中场保存：进入既有 break_time 和四人头像存档页；保存页关闭后才算休息结束",
+    "中场后：回到酒吧并沿用已经选好的音乐，不凭空再次开店或重置当前顾客进度",
     "回扣与收束：回到点单、吧台动作或客人先前说过的细节，再留下续杯、离场或下次再谈的钩子",
-    "中场与收店：用实际工作节奏切换场景，不用旁白总结角色刚刚学到了什么",
+    "收店：最后一位客人离开后再结算当晚营业，不用旁白总结角色刚刚学到了什么",
+)
+
+# These names are deliberately semantic rather than implementation state
+# names.  They are included in provider observations so a generated line can
+# distinguish the original bar rhythm without exposing GameMaker globals.
+SHIFT_PHASES: tuple[str, ...] = (
+    "pre_opening",
+    "first_half",
+    "break_before_save",
+    "break_save",
+    "second_half",
+    "closing",
+)
+
+MUSIC_POLICIES: tuple[str, ...] = (
+    "select_before_opening",
+    "continue_selected_shift_music",
+    "reuse_playlist_after_break",
+    "not_applicable",
+)
+
+BREAK_SAVE_POLICIES: tuple[str, ...] = (
+    "not_applicable",
+    "announce_then_native_save",
+    "native_save_page_active",
+    "resume_after_native_save",
 )
 
 ORIGINAL_SCENE_DIRECTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "pre_opening",
         (
-            "Dana 直接安排酒吧事务；Jill 回报已经完成或仍需处理的具体事项",
-            "对话从可见的吧台、库存、卫生或灯光细节推进到开门准备",
-            "音乐选择是实际开门步骤，不是抽象的气氛说明",
+            "Dana 和 Jill 从当天的具体城市消息或延续事件开口，保留熟人之间的自然接话",
+            "不要把对白写成吧台检查、库存、卫生或灯光清单，也不要解释酒吧如何开门",
+            "音乐选择由原生点唱机承接，台词只做短暂收尾，不讲操作步骤",
         ),
     ),
     (
@@ -208,10 +237,85 @@ ORIGINAL_SCENE_DIRECTION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "break",
         (
             "用疲劳、吧台节奏或当晚发生的小事转入休息，不替玩家概括主题",
-            "休息是营业流程中的停顿，返回后应保留尚未说完的话题",
+            "Jill 先用一句自然对白宣布要休息，随后才进入既有 break_time 和存档页",
+            "存档页关闭、回到酒吧后才算休息结束；返回后保留尚未说完的话题",
+        ),
+    ),
+    (
+        "music_selection",
+        (
+            "音乐选择是既有开店步骤；让玩家通过点唱机完成选择，不替玩家写歌名",
+            "点唱机关闭并确认后才开始接待客人，音乐是当晚营业的连续背景",
+        ),
+    ),
+    (
+        "second_half",
+        (
+            "从既有存档页返回后不重播开店前对白；再次打开原生点唱机并保留已有歌单",
+            "返回酒吧后再次打开原生点唱机，但保留上半场已经选择的歌单",
+            "玩家点击 READY 后重建原版音乐对象，再进入下一位客人的场景",
+            "承接休息前没有说完的具体话题，再进入下一位客人的点单和调酒",
+        ),
+    ),
+    (
+        "closing",
+        (
+            "最后一位客人离开后才进入收店与结算",
+            "收束回到杯子、吧台或当晚发生的具体细节，不替角色总结成长",
         ),
     ),
 )
+
+
+def scene_direction_metadata(scene_type: str) -> dict[str, str]:
+    """Return the original-flow semantics for a generated scene.
+
+    The values are prompt metadata only.  They do not drive the vanilla room,
+    jukebox, mixer, or save interfaces.
+    """
+
+    metadata = {
+        "pre_opening": {
+            "shift_phase": "pre_opening",
+            "music_policy": "select_before_opening",
+            "break_save": "not_applicable",
+        },
+        "music_selection": {
+            "shift_phase": "pre_opening",
+            "music_policy": "select_before_opening",
+            "break_save": "not_applicable",
+        },
+        "arrival_order": {
+            "shift_phase": "first_half",
+            "music_policy": "continue_selected_shift_music",
+            "break_save": "not_applicable",
+        },
+        "service_reaction": {
+            "shift_phase": "first_half",
+            "music_policy": "continue_selected_shift_music",
+            "break_save": "not_applicable",
+        },
+        "break": {
+            "shift_phase": "break_before_save",
+            "music_policy": "continue_selected_shift_music",
+            "break_save": "announce_then_native_save",
+        },
+        "second_half": {
+            "shift_phase": "second_half",
+            "music_policy": "reuse_playlist_after_break",
+            "break_save": "resume_after_native_save",
+        },
+        "closing": {
+            "shift_phase": "closing",
+            "music_policy": "reuse_playlist_after_break",
+            "break_save": "not_applicable",
+        },
+    }
+    return dict(metadata.get(scene_type, {
+        "shift_phase": "first_half",
+        "music_policy": "continue_selected_shift_music",
+        "break_save": "not_applicable",
+    }))
 
 
 def scene_direction_rules(scene_type: str) -> tuple[str, ...]:

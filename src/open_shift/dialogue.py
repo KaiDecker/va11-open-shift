@@ -20,6 +20,10 @@ from .lore import (
     character_lore_payload,
     dialogue_voice_payload,
     ORIGINAL_SHIFT_BEAT_SEQUENCE,
+    BREAK_SAVE_POLICIES,
+    MUSIC_POLICIES,
+    SHIFT_PHASES,
+    scene_direction_metadata,
     scene_direction_rules,
 )
 from .models import DecisionContext, GoalStatus
@@ -69,6 +73,14 @@ class SceneDirection:
     unresolved_threads: tuple[str, ...] = ()
     avoid_patterns: tuple[str, ...] = ()
     source_derived_rules: tuple[str, ...] = ()
+    shift_phase: str = "first_half"
+    music_policy: str = "continue_selected_shift_music"
+    break_save: str = "not_applicable"
+    # Explicit narrative anchors keep the provider focused on the person's
+    # situation rather than making every scene a tasting note.
+    event_topic: str = ""
+    personal_stake: str = ""
+    unresolved_question: str = ""
 
     def __post_init__(self) -> None:
         fields = (self.scene_type, self.beat, self.topic, self.relationship_tone)
@@ -76,6 +88,14 @@ class SceneDirection:
             raise ValueError("scene direction fields were invalid")
         if len(self.topic) > 240 or len(self.beat) > 80:
             raise ValueError("scene direction text was too long")
+        if any(len(value) > 240 for value in (self.event_topic, self.personal_stake, self.unresolved_question)):
+            raise ValueError("scene direction narrative anchor was too long")
+        if self.shift_phase not in SHIFT_PHASES:
+            raise ValueError("scene direction shift phase was invalid")
+        if self.music_policy not in MUSIC_POLICIES:
+            raise ValueError("scene direction music policy was invalid")
+        if self.break_save not in BREAK_SAVE_POLICIES:
+            raise ValueError("scene direction break/save policy was invalid")
         for values in (
             self.unresolved_threads,
             self.avoid_patterns,
@@ -95,6 +115,12 @@ class SceneDirection:
             "unresolved_threads": list(self.unresolved_threads),
             "avoid_patterns": list(self.avoid_patterns),
             "source_derived_rules": list(self.source_derived_rules),
+            "shift_phase": self.shift_phase,
+            "music_policy": self.music_policy,
+            "break_save": self.break_save,
+            "event_topic": self.event_topic or self.topic,
+            "personal_stake": self.personal_stake or self.relationship_tone,
+            "unresolved_question": self.unresolved_question or (self.unresolved_threads[0] if self.unresolved_threads else "当前话题还没有结论"),
         }
 
 
@@ -110,8 +136,14 @@ def _inferred_scene_direction(
     lowered = scene_id.lower()
     if "pre_open" in lowered or "preopen" in lowered:
         scene_type = "pre_opening"
+    elif "music_selection" in lowered:
+        scene_type = "music_selection"
     elif "break" in lowered:
         scene_type = "break"
+    elif "closing" in lowered or "settlement" in lowered:
+        scene_type = "closing"
+    elif "customer_3" in lowered or "second_half" in lowered:
+        scene_type = "second_half"
     elif "result" in lowered or "exact" in lowered or "wrong" in lowered:
         scene_type = "service_reaction"
     else:
@@ -123,6 +155,7 @@ def _inferred_scene_direction(
     else:
         beat = "承接上一句，推进一个具体细节"
     unresolved = ("当前话题尚未收束",) if transcript else ("等待对方透露一个具体细节",)
+    metadata = scene_direction_metadata(scene_type)
     return SceneDirection(
         scene_type,
         beat,
@@ -131,6 +164,12 @@ def _inferred_scene_direction(
         unresolved,
         ("欢迎光临", "请稍等", "我先找个位置坐", "吧台一直在这儿", "音乐不错"),
         scene_direction_rules(scene_type),
+        metadata["shift_phase"],
+        metadata["music_policy"],
+        metadata["break_save"],
+        event_topic=premise[:240],
+        personal_stake="这件事会影响角色今晚的选择或与对方的关系",
+        unresolved_question=unresolved[0],
     )
 
 
@@ -239,10 +278,15 @@ private_relevant_memories 是角色后来亲历的成长，不得用新经历覆
 声称知道其他角色的私有记忆。当前输出只对应一个文本框、一个反应节拍，不必在这一句里
 讲完整个观点。必须先接住上一句中的一个具体词、动作或细节；没有上一句时才从当前事件
 中的具体事物开口，避免把对话写成轮流问候或整齐发言。
-scene.scene_direction 是内部导演提示：scene_type 表示当前场景，current_beat 表示这一
-轮的戏剧作用，topic 是要落到台词里的具体话题，unresolved_threads 是不能凭空解决的
-悬而未决细节。优先完成 current_beat，并让台词为下一轮留下可接的具体词；avoid_patterns
-中的句型不要使用。source_derived_rules 只描述节奏，不是要复述的文本。
+当 event_topic 存在且当前是开场，或此前 transcript 还没有提到事件时，台词要说出其中一个具体名词或事件锚点（例如地点、人物、物件或正在发生的变化）；事件已经在对话中说清楚后，可以自然使用代词和省略，但不能让整段对白只剩“那件事”“最近”“下一步”这类空泛指代。
+scene.scene_direction 是内部导演提示：scene_type 表示当前场景，shift_phase 表示营业前、
+上半场、中场保存、下半场或收尾，current_beat 表示这一轮的戏剧作用，event_topic 是人物
+正在经历的具体事件，personal_stake 是这件事为什么会影响他/她，unresolved_question 是
+还不能凭空解决的问题。topic 是要落到台词里的具体话题，unresolved_threads 是更细的悬而
+未决细节。music_policy 表示音乐由原版点唱机选择，或中场后复用旧歌单并再次打开点唱机；
+break_save 表示先说休息、再进入原版存档页，以及存档页关闭后才恢复营业的顺序。优先完成
+current_beat，并让台词为下一轮留下可接的具体词；avoid_patterns 中的句型不要使用。
+source_derived_rules 只描述节奏，不是要复述的文本。
 不要反复使用“最近怎么样”“工作顺利吗”“注意休息”“一起想办法”等通用客服式句型，
 也不要使用总结者、心理咨询师或百科作者的口气，不要让每段谈话自动收束成互相安慰。
 严格遵循 speaker.canon 中的 speech_cadence 和 interaction_patterns；角色之间的接话方式
@@ -260,8 +304,8 @@ selected_timeline_facts 是 OPEN SHIFT 选择的结局后分支，二者都必�
 值班中唯一执行调酒的人。只有 Jill 能选择或操作配料、调制、摇制、搅拌和出杯；当前
 角色只能点单、观察、交谈、提醒或评价，不能声称自己正在或将要替 Jill 调酒，即使
 speaker 是酒吧老板 Dana 也不例外。可以自然称呼 Jill，但不得代替她发言或替玩家决定
-调酒结果。service_result 若存在，是规则层已经
-确认的事实，必须据此反应，不得改写饮品名称或宣称另一个结果。回复必须是一个 JSON
+调酒结果。service_result 若存在，是规则层已经确认的事实，只用一两句短反应承认，不得改写
+饮品名称或宣称另一个结果；随后优先回到 event_topic 和 unresolved_question。回复必须是一个 JSON
 对象，且只能包含 expression_id 和 text。
 expression_id 只能是 neutral、happy、worry、playful 之一。text 最多 72 个字符。"""
 
@@ -272,8 +316,10 @@ PLAYER_DIALOGUE_SYSTEM_INSTRUCTION = """你只负责玩家角色 Jill 在当前�
 根据 service_result 回应规则层已经确认的调酒结果。只读取公开对话、角色公开身份、
 Jill 的固定核心和刚完成的服务结果，不得读取或猜测其他 Agent 的私有记忆。当前输出只
 对应一个文本框、一个反应节拍：优先接住上一句的具体词或细节，不必讲完整个观点。严格
-使用 scene.scene_direction 中的 current_beat 和 topic，接住 unresolved_threads 中的
-一个具体细节；avoid_patterns 中的句型不要使用。source_derived_rules 只描述节奏，不是
+使用 scene.scene_direction 中的 shift_phase、current_beat、event_topic、personal_stake、
+unresolved_question、topic 和 break_save，接住 unresolved_threads 中的一个具体细节；
+开场或事件尚未被说清时，至少说出 event_topic 中一个具体名词或事件锚点；如果 public_transcript 已经建立了事件，后续可以自然使用代词，但整段不能只用“那件事”“最近”“下一步”等空泛指代；
+service_result 只做短暂确认，然后把话题带回人物事件。avoid_patterns 中的句型不要使用。source_derived_rules 只描述节奏，不是
 要复述的文本。
 遵循 speaker.canon 中的 speech_cadence 和 interaction_patterns，使用简短、克制、略带
 干涩吐槽的自然口语，不要写成长篇安慰、客服话术、心理咨询或百科解释。原版对白统计

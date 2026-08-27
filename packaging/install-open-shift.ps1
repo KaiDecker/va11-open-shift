@@ -278,6 +278,7 @@ Add-Type -AssemblyName System.Security
 `$secretFile = Join-Path `$root "api-key.dpapi"
 if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configured. Run packaging\configure-api-key.ps1." }
 `$env:OPEN_SHIFT_TIMING_LOG = Join-Path `$root "timing.log"
+`$env:OPEN_SHIFT_DIALOGUE_LOG = Join-Path `$root "dialogue.log"
 `$protected = [IO.File]::ReadAllBytes(`$secretFile)
 `$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }

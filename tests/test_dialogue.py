@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,6 +54,7 @@ from open_shift.lore import (
     ORIGINAL_SHIFT_BEAT_SEQUENCE,
     SELECTED_TIMELINE_FACTS,
     CONTINUITY_FACTS,
+    scene_direction_metadata,
 )
 from open_shift.models import (
     AgentState,
@@ -178,9 +180,10 @@ class RecordingDialogueProvider:
         if self.fail:
             raise RuntimeError("synthetic dialogue failure")
         name = context.speaker.actor.display_name
+        anchor = self._anchor(context)
         return DialogueLineDraft(
             "neutral" if context.turn_index % 2 else "happy",
-            f"这是{name}根据自己的记忆作出的第{context.turn_index + 1}次回应。",
+            f"{anchor}，这是{name}根据自己的记忆作出的第{context.turn_index + 1}次回应。",
         )
 
     def generate_player_dialogue_line(
@@ -189,7 +192,14 @@ class RecordingDialogueProvider:
         self.player_contexts.append(context)
         if self.fail:
             raise RuntimeError("synthetic player dialogue failure")
-        return DialogueLineDraft("neutral", "知道了。先让我把杯子准备好。")
+        return DialogueLineDraft("neutral", f"{self._anchor(context)}？你接着说。")
+
+    @staticmethod
+    def _anchor(context: DialogueTurnContext | PlayerDialogueTurnContext) -> str:
+        direction = context.scene_direction
+        topic = direction.event_topic if direction is not None else ""
+        match = re.search(r"[\u4e00-\u9fff]{2,}", topic)
+        return match.group(0)[:12] if match else "今晚"
 
 
 class DialogueContractTests(unittest.TestCase):
@@ -423,6 +433,37 @@ class DialogueContractTests(unittest.TestCase):
         )
         payload = dialogue_observation(context)
         self.assertEqual(payload["scene"]["scene_direction"], direction.to_payload())
+
+    def test_scene_direction_carries_original_shift_and_music_semantics(self) -> None:
+        self.assertIn("围绕当天具体的城市事件或人物延续话题", ORIGINAL_SHIFT_BEAT_SEQUENCE[0])
+        self.assertNotIn("处理吧台、库存或卫生", ORIGINAL_SHIFT_BEAT_SEQUENCE[0])
+        pre_opening = scene_direction_metadata("pre_opening")
+        self.assertEqual(pre_opening["shift_phase"], "pre_opening")
+        self.assertEqual(pre_opening["music_policy"], "select_before_opening")
+        self.assertEqual(
+            pre_opening["break_save"],
+            "not_applicable",
+        )
+        first_half = scene_direction_metadata("arrival_order")
+        self.assertEqual(
+            first_half["music_policy"],
+            "continue_selected_shift_music",
+        )
+        second_half = scene_direction_metadata("second_half")
+        self.assertEqual(second_half["shift_phase"], "second_half")
+        self.assertEqual(second_half["music_policy"], "reuse_playlist_after_break")
+        self.assertEqual(second_half["break_save"], "resume_after_native_save")
+
+        direction = WorldSceneService._scene_direction(
+            "service_reaction",
+            "休息后接回上一轮没有说完的话题",
+            "中场存档页已经关闭，下一位客人开始点单。",
+            shift_phase="second_half",
+        )
+        payload = direction.to_payload()
+        self.assertEqual(payload["shift_phase"], "second_half")
+        self.assertEqual(payload["music_policy"], "reuse_playlist_after_break")
+        self.assertEqual(payload["break_save"], "resume_after_native_save")
 
     def test_byok_dialogue_uses_json_contract_and_shared_budget(self) -> None:
         transport = FakeTransport(
@@ -676,23 +717,23 @@ class DialogueWorldBridgeTests(unittest.TestCase):
                 "client_session_id": "dialogue-session-1",
             }
             scene = service.open_scene(request)
-            self.assertEqual(len(scene.lines), 4)
+            self.assertEqual(len(scene.lines), 6)
             self.assertEqual(len(provider.dialogue_contexts), 2)
-            self.assertEqual(len(provider.player_contexts), 1)
+            self.assertEqual(len(provider.player_contexts), 3)
             self.assertIn("jill", {line.speaker_id for line in scene.lines})
             jill_line = next(line for line in scene.lines if line.speaker_id == "jill")
             self.assertIsNone(jill_line.portrait_id)
             self.assertIsNotNone(scene.order)
             context = provider.dialogue_contexts[-1]
             self.assertEqual(len(context.transcript), context.turn_index)
-            self.assertEqual(context.turn_index, 3)
-            self.assertEqual(context.turn_count, 4)
+            self.assertEqual(context.turn_index, 2)
+            self.assertEqual(context.turn_count, 6)
             self.assertEqual(context.speaker.actor.agent_id, scene.order.customer_id)
             assert context.scene_direction is not None
-            self.assertIn("回应并转入调酒", context.scene_direction.beat)
+            self.assertIn("透露事件对自己", context.scene_direction.beat)
             self.assertEqual(
                 [item.speaker_id for item in context.transcript],
-                [scene.order.customer_id, "jill", provider.dialogue_contexts[0].speaker.actor.agent_id],
+                [scene.order.customer_id, "jill"],
             )
             self.assertTrue(
                 all(memory in context.speaker.memories for memory in context.speaker.memories)
@@ -760,12 +801,12 @@ class DialogueWorldBridgeTests(unittest.TestCase):
             }
             first = service.open_scene(request)
             self.assertEqual(len(first.lines), 3)
-            self.assertEqual(len(provider.dialogue_contexts), 0)
-            self.assertEqual(len(provider.player_contexts), 1)
+            self.assertEqual(len(provider.dialogue_contexts), 1)
+            self.assertEqual(len(provider.player_contexts), 0)
             second = service.open_scene(request)
             self.assertEqual(second, first)
-            self.assertEqual(len(provider.dialogue_contexts), 0)
-            self.assertEqual(len(provider.player_contexts), 1)
+            self.assertEqual(len(provider.dialogue_contexts), 1)
+            self.assertEqual(len(provider.player_contexts), 0)
             self.assertEqual(len(reports), 1)
             self.assertEqual(reports[0][0], "dialogue generation")
             self.assertIsInstance(reports[0][1], RuntimeError)
@@ -784,7 +825,10 @@ class DialogueWorldBridgeTests(unittest.TestCase):
                     for event in store.list_events()
                     if event["event_type"] == "agent_dialogue_completed"
                 ]
-                self.assertEqual(dialogue_events, [])
+                self.assertEqual(len(dialogue_events), 1)
+                self.assertEqual(
+                    dialogue_events[0]["payload"]["scene_id"], first.scene_id
+                )
 
     def test_order_resolution_is_persisted_and_returns_a_jill_reaction_scene(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -833,15 +877,15 @@ class DialogueWorldBridgeTests(unittest.TestCase):
             replay = service.resolve_order(request)
             self.assertEqual(resolution, replay)
             self.assertEqual(resolution.result.category, ServiceCategory.EXACT)
-            self.assertEqual(len(resolution.scene.lines), 3)
+            self.assertEqual(len(resolution.scene.lines), 4)
             self.assertEqual(len(provider.dialogue_contexts), 4)
-            self.assertEqual(len(provider.player_contexts), 2)
+            self.assertEqual(len(provider.player_contexts), 4)
             closing_context = provider.dialogue_contexts[-1]
             self.assertEqual(closing_context.turn_index, 2)
             self.assertEqual(closing_context.turn_count, 3)
             self.assertEqual(len(closing_context.transcript), 2)
             assert closing_context.scene_direction is not None
-            self.assertIn("回扣并收束", closing_context.scene_direction.beat)
+            self.assertIn("回到事件的未解决问题", closing_context.scene_direction.beat)
             self.assertNotIn("刚才那件事", "\n".join(line.text for line in resolution.scene.lines))
             self.assertNotIn("话题不用跟着杯子", "\n".join(line.text for line in resolution.scene.lines))
             self.assertNotIn("下一轮再接着说", "\n".join(line.text for line in resolution.scene.lines))

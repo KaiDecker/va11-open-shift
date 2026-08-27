@@ -14,7 +14,10 @@ from .drinks import ServiceCategory
 
 # Version bump prevents a previously prefetched graph from bypassing the
 # Stage 19 full-day flow gates after an upgrade.
-DAILY_STORY_GRAPH_VERSION = "stage_19_full_day_v1"
+# A new version is intentionally incompatible with the short Stage 19/20
+# cursor.  The bridge migrates an interrupted old day back to its opening
+# gates instead of letting an old customer node bypass the vanilla flow.
+DAILY_STORY_GRAPH_VERSION = "stage_21_event_flow_v5"
 MAX_DAILY_CUSTOMERS = 3
 _RESOURCE_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
