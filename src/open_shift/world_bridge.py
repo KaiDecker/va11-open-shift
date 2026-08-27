@@ -1969,14 +1969,27 @@ class WorldSceneService:
 
     @staticmethod
     def _dialogue_memory_summary(
-        scene: ScenePackage, display_names: Mapping[str, str]
+        scene: ScenePackage, display_names: Mapping[str, str], observer_id: str,
+        *, heard_only: bool = False,
     ) -> str:
-        transcript = " / ".join(
+        """Create an observer-specific recollection instead of a shared transcript."""
+        own_lines = [
+            f"{display_names.get(line.speaker_id, line.speaker_id)}：{line.text}"
+            for line in scene.lines
+            if line.speaker_id == observer_id
+        ]
+        heard_lines = [
             f"{display_names.get(line.speaker_id, line.speaker_id)}：{line.text}"
             for line in scene.lines
             if line.speaker_id is not None
-        )
-        return f"在 VA-11 Hall-A 与熟人完成了一次交谈。公开对话：{transcript}"[:480]
+            and line.speaker_id != observer_id
+            and line.speaker_id in _AGENT_IDS
+        ]
+        if heard_only:
+            heard_text = " / ".join(heard_lines) or "（没有听到其他角色发言）"
+            return f"以{display_names.get(observer_id, observer_id)}的视角，记录这次公开对话中听到的其他角色谈话：{heard_text}"[:480]
+        own_text = " / ".join(own_lines) or "（没有发言）"
+        return f"以{display_names.get(observer_id, observer_id)}的视角，记录这次公开对话中亲自参与的交谈。自己的言行：{own_text}"[:480]
 
     @staticmethod
     def _remember_generated_dialogue(
@@ -1995,13 +2008,30 @@ class WorldSceneService:
         ):
             return
         speakers = tuple(dict.fromkeys(line.speaker_id for line in scene.lines))
-        participants = tuple(item for item in speakers if item in _AGENT_IDS)
+        source_event = next(
+            (item for item in store.list_events() if item["event_id"] == source_event_id),
+            None,
+        )
+        event_payload = source_event.get("payload", {}) if source_event else {}
+        event_participants = event_payload.get("participants", [])
+        if not isinstance(event_participants, (list, tuple)):
+            event_participants = []
+        known_participants = tuple(
+            dict.fromkeys(
+                item
+                for item in (
+                    *speakers,
+                    *event_participants,
+                )
+                if item in _AGENT_IDS
+            )
+        )
+        participants = known_participants
         if not participants:
             return
         display_names = {
             agent.agent_id: agent.display_name for agent in store.list_agents()
         }
-        summary = WorldSceneService._dialogue_memory_summary(scene, display_names)
         memory_event_id = store.append_event(
             store.current_tick,
             "agent_dialogue_completed",
@@ -2011,18 +2041,42 @@ class WorldSceneService:
                 "scene_id": scene.scene_id,
                 "source_event_id": source_event_id,
                 "participants": list(speakers),
-                "summary": summary,
+                "summary": f"参与者：{', '.join(speakers)}；已为每位在场角色保存独立视角摘要。",
             },
         )
         tags = {"dialogue", "va11_hall_a", *speakers}
         for participant_id in participants:
-            store.append_memory(
-                participant_id,
-                memory_event_id,
-                0.75,
-                summary,
-                tags,
+            own_lines = sum(1 for line in scene.lines if line.speaker_id == participant_id)
+            heard_lines = sum(
+                1 for line in scene.lines
+                if line.speaker_id in _AGENT_IDS and line.speaker_id != participant_id
             )
+            if own_lines:
+                store.append_memory(
+                    participant_id,
+                    memory_event_id,
+                    0.75,
+                    WorldSceneService._dialogue_memory_summary(scene, display_names, participant_id),
+                    tags,
+                    source_type="direct",
+                    confidence=0.95,
+                    visibility="participants",
+                    canonical_key=f"dialogue:{scene.scene_id}:{participant_id}:direct",
+                )
+            if heard_lines:
+                store.append_memory(
+                    participant_id,
+                    memory_event_id,
+                    0.65,
+                    WorldSceneService._dialogue_memory_summary(
+                        scene, display_names, participant_id, heard_only=True
+                    ),
+                    tags,
+                    source_type="heard",
+                    confidence=0.82,
+                    visibility="participants",
+                    canonical_key=f"dialogue:{scene.scene_id}:{participant_id}:heard",
+                )
 
     @staticmethod
     def _story_node(graph: DailyStoryGraph, node_id: str) -> StoryGraphNode:
