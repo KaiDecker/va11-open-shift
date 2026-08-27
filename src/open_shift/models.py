@@ -76,6 +76,11 @@ class Memory:
     importance: float
     summary: str
     tags: tuple[str, ...]
+    source_type: str = "direct"
+    confidence: float = 0.8
+    visibility: str = "private"
+    archived: bool = False
+    canonical_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

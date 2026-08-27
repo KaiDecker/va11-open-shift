@@ -411,6 +411,9 @@ def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
             {
                 "summary": item.summary,
                 "tags": list(item.tags),
+                "source": item.source_type,
+                "confidence": round(item.confidence, 2),
+                "visibility": item.visibility,
             }
             for item in context.speaker.memories
         ],

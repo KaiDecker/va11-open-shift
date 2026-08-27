@@ -15,7 +15,7 @@ from open_shift.byok import (
     ResponseFormat,
     ThinkingMode,
 )
-from open_shift.bridge import BridgeError
+from open_shift.bridge import BridgeError, SceneLine, ScenePackage
 from open_shift.dialogue import (
     CHARACTER_PROFILES,
     DIALOGUE_SYSTEM_INSTRUCTION,
@@ -772,13 +772,54 @@ class DialogueWorldBridgeTests(unittest.TestCase):
                         for memory in store.list_memories(participant_id)
                         if "dialogue" in memory["tags"]
                     ]
-                    self.assertEqual(len(learned), 1)
-                    self.assertIn("公开对话", learned[0]["summary"])
+                    self.assertGreaterEqual(len(learned), 1)
+                    self.assertTrue({item["source_type"] for item in learned}.issubset({"direct", "heard"}))
+                    self.assertTrue(any("视角" in item["summary"] for item in learned))
                     next_context = SimulationEngine(
                         store, MockProvider()
                     ).context_for_agent(store.current_tick, participant_id)
                     self.assertTrue(
                         any("公开对话" in memory.summary for memory in next_context.memories)
+                    )
+
+                with WorldStore(db_path) as store:
+                    # A silent participant named by the source event hears the
+                    # scene, while an unrelated agent remains unaware.
+                    event = store.append_event(
+                        store.current_tick, "dialogue_context", "dana", "dorothy",
+                        payload={"participants": ["dana", "dorothy", "alma"]},
+                    )
+                    scene_with_silent = ScenePackage(
+                        "dialogue_silent_participant",
+                        (
+                            SceneLine("dialogue_silent_1", "dana", "sprite_dana", "neutral", "Dana 的话。"),
+                            SceneLine("dialogue_silent_2", "jill", None, "neutral", "Jill 的回应。"),
+                        ),
+                    )
+                    WorldSceneService._remember_generated_dialogue(store, scene_with_silent, event)
+                    alma_memories = [
+                        m
+                        for m in store.list_memories("alma")
+                        if m["canonical_key"]
+                        == "dialogue:dialogue_silent_participant:alma:heard"
+                    ]
+                    dorothy_memories = [
+                        m
+                        for m in store.list_memories("dorothy")
+                        if m["canonical_key"]
+                        == "dialogue:dialogue_silent_participant:dorothy:heard"
+                    ]
+                    self.assertTrue(any(m["source_type"] == "heard" for m in alma_memories))
+                    self.assertTrue(any(m["source_type"] == "heard" for m in dorothy_memories))
+                    self.assertEqual(
+                        [
+                            m
+                            for m in store.list_memories("stella")
+                            if (m["canonical_key"] or "").startswith(
+                                "dialogue:dialogue_silent_participant:"
+                            )
+                        ],
+                        [],
                     )
 
     def test_dialogue_failure_falls_back_and_is_not_retried_on_replay(self) -> None:

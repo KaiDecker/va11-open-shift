@@ -75,7 +75,11 @@ def emit_timing(event: str, **fields: Any) -> None:
             except OSError:
                 # Diagnostics must never break gameplay.
                 pass
-        print("[OPEN SHIFT TIMING] " + line, file=sys.stderr, flush=True)
+        # Installed launches set a log path, so keep the live console useful.
+        # Library/tests without a log path stay quiet unless explicitly asked.
+        stderr_enabled = os.environ.get("OPEN_SHIFT_TIMING_STDERR", "").strip().lower()
+        if path_value or stderr_enabled in {"1", "true", "yes", "on"}:
+            print("[OPEN SHIFT TIMING] " + line, file=sys.stderr, flush=True)
 
 
 def monotonic_seconds() -> float:
