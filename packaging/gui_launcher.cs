@@ -32,9 +32,15 @@ internal sealed class OpenShiftLauncherForm : Form
     public OpenShiftLauncherForm()
     {
         root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
-        installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenShift");
+        string packageVersion = ReadPackageVersion(root);
+        string existingState = Path.Combine(root, "install.json");
+        bool reuseInstalledRoot = ExistingInstallMatches(existingState, packageVersion);
+        string safeVersion = NormalizePackageVersion(packageVersion);
+        installDir = reuseInstalledRoot
+            ? root
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenShift-" + safeVersion);
         gameCopyDir = Path.Combine(installDir, "game");
-        runtimeConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VA_11_Hall_A", "open-shift.toml");
+        runtimeConfigPath = Path.Combine(installDir, "open-shift.toml");
         selectedSteamGame = FindSteamGame();
         Text = "OPEN SHIFT";
         ClientSize = new Size(540, 790);
@@ -48,6 +54,47 @@ internal sealed class OpenShiftLauncherForm : Form
         Controls.Add(browser);
         Load += async (sender, args) => await InitializeBrowser();
         FormClosed += (sender, args) => { if (activeProcess != null && !activeProcess.HasExited) activeProcess.Dispose(); };
+    }
+
+    private static string ReadPackageVersion(string root)
+    {
+        string manifest = Path.Combine(root, "PACKAGE_MANIFEST.json");
+        if (!File.Exists(manifest)) return "development";
+        try
+        {
+            using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(manifest, Encoding.UTF8)))
+            {
+                JsonElement value;
+                if (document.RootElement.TryGetProperty("package_version", out value))
+                {
+                    string version = value.GetString() ?? "";
+                    if (!String.IsNullOrWhiteSpace(version)) return version;
+                }
+            }
+        }
+        catch { }
+        return "development";
+    }
+
+    private static string NormalizePackageVersion(string version)
+    {
+        string safe = Regex.Replace(version ?? "", "[^A-Za-z0-9._-]", "-").Trim('.', '-');
+        return String.IsNullOrWhiteSpace(safe) ? "development" : safe;
+    }
+
+    private static bool ExistingInstallMatches(string statePath, string packageVersion)
+    {
+        if (!File.Exists(statePath)) return false;
+        try
+        {
+            using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(statePath, Encoding.UTF8)))
+            {
+                JsonElement value;
+                return document.RootElement.TryGetProperty("package_version", out value) &&
+                    String.Equals(value.GetString(), packageVersion, StringComparison.Ordinal);
+            }
+        }
+        catch { return false; }
     }
 
     private Icon LoadIcon()

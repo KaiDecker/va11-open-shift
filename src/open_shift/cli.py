@@ -44,6 +44,7 @@ from .paired_saves import (
     WorldSessionCheckpoint,
 )
 from .package import PackageError, build_mod_package
+from .data_delta import DataDeltaError, apply_delta, create_delta
 from .providers import MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
@@ -206,6 +207,21 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--patched-data-win", type=Path, required=True)
     verify.add_argument("--manifest", type=Path, required=True)
     verify.add_argument("--gml-source-dir", type=Path, required=True)
+    delta_build = subparsers.add_parser(
+        "build-data-delta",
+        help="create a player-side data.win delta (development build step)",
+    )
+    delta_build.add_argument("--original-data-win", type=Path, required=True)
+    delta_build.add_argument("--patched-data-win", type=Path, required=True)
+    delta_build.add_argument("--output", type=Path, required=True)
+    delta_build.add_argument("--max-ratio", type=float, default=0.80)
+    delta_apply = subparsers.add_parser(
+        "apply-data-delta",
+        help="apply and verify a player-side data.win delta",
+    )
+    delta_apply.add_argument("--original-data-win", type=Path, required=True)
+    delta_apply.add_argument("--delta", type=Path, required=True)
+    delta_apply.add_argument("--output", type=Path, required=True)
     package = subparsers.add_parser(
         "build-mod-package",
         help="build a source-only Mod zip without original game files",
@@ -216,6 +232,7 @@ def _build_parser() -> argparse.ArgumentParser:
     package.add_argument("--runtime-exe", type=Path)
     package.add_argument("--gui-exe", type=Path)
     package.add_argument("--icon", type=Path)
+    package.add_argument("--data-delta", type=Path)
     package.add_argument("--utmt-cli-zip", type=Path)
     package.add_argument("--webview-dll", type=Path, action="append", default=[])
     return parser
@@ -716,6 +733,7 @@ def _build_mod_package(args: argparse.Namespace) -> int:
             runtime_exe=args.runtime_exe,
             gui_exe=args.gui_exe,
             icon=args.icon,
+            data_delta=args.data_delta,
             utmt_cli=args.utmt_cli_zip,
             webview_dlls=tuple(args.webview_dll),
         )
@@ -723,6 +741,31 @@ def _build_mod_package(args: argparse.Namespace) -> int:
         print(f"Package build failed: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _build_data_delta(args: argparse.Namespace) -> int:
+    try:
+        result = create_delta(
+            args.original_data_win,
+            args.patched_data_win,
+            args.output,
+            max_ratio=args.max_ratio,
+        )
+    except (OSError, DataDeltaError, ValueError) as exc:
+        print(f"Data delta build failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _apply_data_delta(args: argparse.Namespace) -> int:
+    try:
+        result = apply_delta(args.original_data_win, args.delta, args.output)
+    except (OSError, DataDeltaError, ValueError) as exc:
+        print(f"Data delta application failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -751,6 +794,10 @@ def main(argv: list[str] | None = None) -> int:
         return _validate_config(args)
     if args.command == "verify-patch-output":
         return _verify_patch_output(args)
+    if args.command == "build-data-delta":
+        return _build_data_delta(args)
+    if args.command == "apply-data-delta":
+        return _apply_data_delta(args)
     if args.command == "build-mod-package":
         return _build_mod_package(args)
     parser.error(f"unknown command: {args.command}")
