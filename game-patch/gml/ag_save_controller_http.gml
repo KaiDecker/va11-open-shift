@@ -54,6 +54,24 @@ if (ds_map_find_value(async_load, "id") == ag_http_request)
         }
         else if (ag_operation == "restore")
         {
+            // The native loader restores the original save (money, music and
+            // vanilla cursor state), but it has no knowledge of the Agent
+            // world's day counter. Apply the paired snapshot's authoritative
+            // day before entering that loader so the next Jill room cannot
+            // fall back to the fresh-session default of DAY 1.
+            global.ag_story_day = ag_response_world_day;
+            global.datestring = "O.S. DAY " + string(global.ag_story_day);
+            global.ag_story_day_advance_applied = 0;
+            global.ag_prefetch_ready = 0;
+            global.ag_prefetch_failed = 0;
+            global.ag_prefetch_day = 0;
+            global.ag_preload_notice_day = 0;
+            global.ag_open_shift_intro_pending = 0;
+            global.ag_open_shift_intro_seen = 1;
+            global.jillcomment = "O.S.：正在恢复 DAY " + string(global.ag_story_day) + "……";
+            if (instance_exists(ag_preload_controller))
+                with (ag_preload_controller) instance_destroy();
+            show_debug_message("[OPEN SHIFT] save_restore_applied slot=" + string(ag_slot) + " world_day=" + string(global.ag_story_day) + " request=" + ag_request_id);
             global.block_click = 0;
             instance_create(x, y, out_to_loading);
             var ag_loader;

@@ -13,7 +13,10 @@ if (file_exists(ag_native_path))
     file_text_readln(ag_save_file);
     ag_saved_day = file_text_read_real(ag_save_file);
     file_text_close(ag_save_file);
-    if (ag_saved_day == 1001)
+    // Every Open Shift day is stored in the native save as 1001+.
+    // Route all of them through paired restore so the native slot and the
+    // external Agent world are validated and restored together.
+    if (ag_saved_day >= 1001)
     {
         if (!instance_exists(ag_save_controller))
         {

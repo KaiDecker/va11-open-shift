@@ -1,5 +1,5 @@
 param(
-    [string] $Version = "0.24.0-preview.2",
+    [string] $Version = "0.24.0-preview.5",
     [string] $Output = "",
     [string] $Python = "python",
     [string] $WebViewSdk = "",

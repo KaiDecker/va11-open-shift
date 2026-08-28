@@ -125,6 +125,9 @@ class PatchContractTests(unittest.TestCase):
         save_http = (
             root / "game-patch" / "gml" / "ag_save_controller_http.gml"
         ).read_text(encoding="utf-8")
+        save_slot = (
+            root / "game-patch" / "gml" / "ag_save_slot_mouse.gml"
+        ).read_text(encoding="utf-8")
         save_flow = (
             root / "game-patch" / "gml" / "ag_save_flow_controller_step.gml"
         ).read_text(encoding="utf-8")
@@ -297,6 +300,20 @@ class PatchContractTests(unittest.TestCase):
         self.assertIn('ag_expected_status = "paired"', save_http)
         self.assertIn('ag_expected_status = "restored"', save_http)
         self.assertNotIn('ag_operation + "ed"', save_http)
+        self.assertIn("global.ag_story_day = ag_response_world_day", save_http)
+        self.assertIn('global.datestring = "O.S. DAY " + string(global.ag_story_day)', save_http)
+        self.assertIn("global.ag_story_day_advance_applied = 0", save_http)
+        self.assertIn("global.ag_prefetch_ready = 0", save_http)
+        self.assertIn("global.ag_prefetch_day = 0", save_http)
+        self.assertIn("save_restore_applied", save_http)
+        self.assertLess(
+            save_http.index("global.ag_story_day = ag_response_world_day"),
+            save_http.index("instance_create(x, y, out_to_loading)"),
+        )
+        self.assertIn("global.cur_day >= 1001", save_slot)
+        self.assertNotIn("global.cur_day == 1001", save_slot)
+        self.assertIn("ag_saved_day >= 1001", load_slot)
+        self.assertNotIn("ag_saved_day == 1001", load_slot)
         self.assertIn("jill_room", save_flow)
         self.assertIn("ag_preload_controller", save_flow)
         self.assertIn('global.datestring = "O.S. DAY "', save_flow)
