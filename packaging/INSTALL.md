@@ -6,9 +6,9 @@
 原版目录永远不会作为写入目标。
 
 1. 解压最新 Windows x64 预览包。包内含 `OpenShift.exe`、带 OPEN SHIFT 图标的
-   `OpenShiftSetup.exe`、`OpenShift.ico` 和 `patch/data-win.delta`；
+   `OpenShiftSetup.exe`、`OpenShift.ico`、WebView2 Loader 和 `patch/data-win.delta`；
    不需要单独安装 Python 或从网络下载运行时。
-2. 双击 `OpenShiftSetup.exe`。这是基于 WebView2 的 Windows 图形界面，会自动寻找 Steam 游戏；如果未找到，在图形界面中
+2. 双击 `OpenShiftSetup.exe`。这是基于 Win32 + WebView2 的 Windows 图形界面，会自动寻找 Steam 游戏；如果未找到，在图形界面中
    选择包含 `data.win` 的 VA-11 HALL-A 目录。
 3. 在图形界面中输入 DeepSeek API Key，然后点击“安装 / 修复”。Key 使用 Windows
    DPAPI 加密，只能由当前 Windows 用户解密，不写入配置、日志、数据库或发布包。

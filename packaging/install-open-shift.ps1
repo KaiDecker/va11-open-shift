@@ -97,9 +97,8 @@ function Find-SteamRoot {
 
 function Get-PatchFingerprint([string] $Root) {
     $files = @(
-        (Join-Path $Root "game-patch\manifest.json"),
-        (Join-Path $Root "game-patch\apply_mod.csx")
-    ) + @(Get-ChildItem -LiteralPath (Join-Path $Root "game-patch\gml") -Filter "*.gml" -File | Select-Object -ExpandProperty FullName)
+        (Join-Path $Root "game-patch\manifest.json")
+    )
     $delta = Join-Path $Root "patch\data-win.delta"
     if (Test-Path -LiteralPath $delta -PathType Leaf) { $files += $delta }
     $hashText = (($files | Sort-Object | ForEach-Object { Get-Sha256Hex $_ }) -join "`n")
@@ -133,9 +132,6 @@ if ($copyRoot -eq [IO.Path]::GetFullPath($SteamGameDir)) { throw "GameCopyDir mu
 New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
 $sameRoot = $packageRoot.TrimEnd('\') -eq $installRoot.TrimEnd('\')
 if (-not $sameRoot) {
-    if (Test-Path -LiteralPath (Join-Path $packageRoot "src")) {
-        Copy-Item -LiteralPath (Join-Path $packageRoot "src") -Destination $installRoot -Recurse -Force
-    }
     if (-not $runtimeIsPython) {
         Copy-Item -LiteralPath $bundledRuntime -Destination (Join-Path $installRoot "OpenShift.exe") -Force
     }
@@ -147,22 +143,21 @@ if (-not $sameRoot) {
     if (Test-Path -LiteralPath $bundledIcon -PathType Leaf) {
         Copy-Item -LiteralPath $bundledIcon -Destination (Join-Path $installRoot "OpenShift.ico") -Force
     }
-    foreach ($webViewName in @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")) {
+    foreach ($webViewName in @("WebView2Loader.dll")) {
         $webViewPath = Join-Path $packageRoot $webViewName
         if (Test-Path -LiteralPath $webViewPath -PathType Leaf) {
             Copy-Item -LiteralPath $webViewPath -Destination (Join-Path $installRoot $webViewName) -Force
         }
     }
-    Copy-Item -LiteralPath (Join-Path $packageRoot "game-patch") -Destination $installRoot -Recurse -Force
+    $bundledManifest = Join-Path $packageRoot "game-patch\manifest.json"
+    New-Item -ItemType Directory -Force -Path (Join-Path $installRoot "game-patch") | Out-Null
+    Copy-Item -LiteralPath $bundledManifest -Destination (Join-Path $installRoot "game-patch\manifest.json") -Force
     Copy-Item -LiteralPath (Join-Path $packageRoot "packaging") -Destination $installRoot -Recurse -Force
     if (Test-Path -LiteralPath (Join-Path $packageRoot "assets")) {
         Copy-Item -LiteralPath (Join-Path $packageRoot "assets") -Destination $installRoot -Recurse -Force
     }
     if (Test-Path -LiteralPath (Join-Path $packageRoot "patch")) {
         Copy-Item -LiteralPath (Join-Path $packageRoot "patch") -Destination $installRoot -Recurse -Force
-    }
-    if (Test-Path -LiteralPath (Join-Path $packageRoot "pyproject.toml")) {
-        Copy-Item -LiteralPath (Join-Path $packageRoot "pyproject.toml") -Destination $installRoot -Force
     }
     if (Test-Path -LiteralPath $packageManifest -PathType Leaf) {
         Copy-Item -LiteralPath $packageManifest -Destination $installRoot -Force
@@ -310,7 +305,7 @@ if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configur
 `$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
 try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }
 `$database = if (`$state.database) { [IO.Path]::GetFullPath([string] `$state.database) } else { Join-Path `$root "open-shift.sqlite3" }
-`$arguments = @("launch", "--config", `$state.config, "--db", `$database, "--runtime-file", (Join-Path `$root "open-shift-runtime.ini"), "--paired-save-dir", (Join-Path `$root "paired-saves"), "--game-cwd", `$state.game_copy_dir, "--game-command", "VA-11 Hall A.exe", "--steam-root", `$state.steam_root, "--steam-app-id", "447530", "--prepare-before-game", "--bridge-command") + @(`$state.bridge_command)
+`$arguments = @("launch", "--config", `$state.config, "--db", `$database, "--runtime-file", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift-runtime.ini"), "--paired-save-dir", (Join-Path `$root "paired-saves"), "--game-cwd", `$state.game_copy_dir, "--game-command", "VA-11 Hall A.exe", "--steam-root", `$state.steam_root, "--steam-app-id", "447530", "--prepare-before-game", "--bridge-command") + @(`$state.bridge_command)
 if (`$state.runtime_is_python) { `$env:PYTHONPATH = Join-Path `$root "src"; & `$state.runtime -m open_shift @arguments } else { & `$state.runtime @arguments }
 exit `$LASTEXITCODE
 "@

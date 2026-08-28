@@ -2,71 +2,96 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OPEN SHIFT</title>
   <style>
-    :root { --ink:#252b38; --muted:#7c879b; --line:#e4e8f0; --card:#ffffffd9; --blue:#1687ff; --pink:#e72f87; --green:#31bf79; }
+    @font-face { font-family: "Fusion Pixel"; src: url("../../assets/fonts/fusion-pixel-12px-proportional-zh_hans.woff2") format("woff2"); font-display: swap; }
+    :root { --black:#09070d; --panel:#15101b; --panel2:#201426; --purple:#55206b; --purple2:#8e3ea3; --pink:#ff3c9d; --cyan:#48e6ff; --green:#63e6a1; --yellow:#f4df58; --white:#f4eafa; --dim:#a891ae; --red:#ff657c; }
     * { box-sizing:border-box; }
-    html,body { width:100%; height:100%; margin:0; overflow:hidden; }
-    body { background:linear-gradient(135deg,#edf1f8 0%,#f8f7f5 52%,#f1ebea 100%); color:var(--ink); font-family:Segoe UI,system-ui,sans-serif; }
-    button,input { font:inherit; }
-    .window { height:100%; display:flex; flex-direction:column; padding:16px 16px 14px; }
-    .hero,.card { background:var(--card); border:1px solid #fff; box-shadow:0 10px 28px #aab4c522, inset 0 1px #ffffffcc; border-radius:24px; }
-    .hero { min-height:112px; padding:22px 24px; display:flex; align-items:center; gap:16px; }
-    .brand-icon { width:62px; height:62px; object-fit:contain; image-rendering:pixelated; background:#f1f3f8; border-radius:9px; padding:7px; }
-    h1 { margin:0; font-size:25px; letter-spacing:.02em; } .tagline { margin-top:3px; color:#7e8aa0; font-size:12px; }
-    .hero-side { margin-left:auto; text-align:right; } .badge { display:inline-flex; align-items:center; gap:7px; padding:8px 14px; border-radius:10px; background:#e5f8ed; color:#13a863; font-weight:700; font-size:12px; }
-    .dot { width:6px; height:6px; border-radius:50%; background:#24bb72; } .version { margin-top:7px; color:#8d96a6; font:10px Consolas,monospace; }
-    .card { margin-top:16px; padding:20px; } .field { margin-bottom:17px; } .field:last-child { margin-bottom:0; }
-    label { display:block; font-weight:700; font-size:13px; margin-bottom:7px; } .row { display:flex; gap:12px; align-items:center; }
-    input { min-width:0; flex:1; height:36px; border:0; outline:0; border-radius:10px; padding:0 11px; color:#273348; background:#edf0f6; box-shadow:inset 0 1px 2px #b6bfd033; }
-    input:focus { box-shadow:0 0 0 2px #1687ff44; } .small { flex:0 0 74px; }
-    .hint,.copy { color:#8490a2; font:10px Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:7px; }
-    .hint { font:11px Segoe UI,sans-serif; }
-    .setting { display:flex; align-items:center; justify-content:space-between; gap:18px; }
-    .setting-copy { min-width:0; } .setting-copy label { margin-bottom:4px; }
-    .mode-select { flex:0 0 118px; height:34px; border:1px solid #d7deea; border-radius:17px; padding:0 12px; background:#e8ecf3; color:#52627b; cursor:pointer; font-size:11px; font-weight:700; outline:0; }
-    .mode-select:focus { box-shadow:0 0 0 2px #1687ff44; }
-    .safe { margin-top:16px; padding:15px; border-radius:16px; background:#f0f3f9; color:#54627b; font:11px Consolas,monospace; line-height:1.45; }
-    .safe strong { color:#3b465b; font-family:Segoe UI,sans-serif; font-size:12px; }
-    .actions { margin-top:16px; padding:16px 20px 18px; } .actions .primary { display:flex; gap:14px; }
-    button.action { border:0; height:43px; border-radius:22px; cursor:pointer; font-weight:700; flex:1; color:#fff; box-shadow:0 5px 12px #8b99ad33; transition:transform .12s,filter .12s; }
-    button.action:hover { filter:brightness(1.06); transform:translateY(-1px); } button.action:active { transform:translateY(0); } button:disabled { opacity:.48; cursor:default; transform:none!important; }
-    .install { background:var(--blue); } .start { background:var(--pink); } .secondary { margin-top:14px; display:flex; gap:14px; }
-    button.sub { flex:0 0 145px; height:36px; border-radius:18px; border:1px solid #d9e0ed; background:#edf2fb; color:#52627b; cursor:pointer; } button.danger { background:#f8e7f0; color:#a34a78; border-color:#efd0e0; }
-    .status { margin:17px 11px 0; min-height:20px; color:#19a9ad; font-size:12px; } .progress { height:3px; background:#d5d9e0; margin:7px 11px 0; overflow:hidden; } .progress span { display:block; height:100%; width:28%; background:#29b8c0; animation:slide 1.4s linear infinite; opacity:0; } .busy .progress span { opacity:1; }
-    @keyframes slide { from{transform:translateX(-110%)} to{transform:translateX(380%)} }
+    html,body { margin:0; width:100%; height:100%; overflow:hidden; }
+    body { color:var(--white); background:var(--black); font-family:"Fusion Pixel", "Microsoft YaHei UI", monospace; font-size:13px; letter-spacing:0; }
+    button,input,select { color:inherit; font:inherit; letter-spacing:0; }
+    button { cursor:pointer; }
+    button:disabled { cursor:default; opacity:.4; }
+    .screen { min-height:100%; display:flex; flex-direction:column; padding:16px; gap:10px; }
+    .topline { display:flex; align-items:flex-end; justify-content:space-between; border-bottom:3px double var(--purple2); padding:0 4px 8px; }
+    .brand { display:flex; align-items:center; gap:10px; }
+    .brand img { width:44px; height:44px; image-rendering:pixelated; }
+    h1 { margin:0; color:var(--pink); font-size:25px; line-height:1; font-weight:700; }
+    .subtitle { color:var(--dim); font-size:10px; margin-top:5px; }
+    .version { color:var(--cyan); font-size:10px; text-align:right; white-space:nowrap; }
+    .panel { background:var(--panel); border:3px double var(--purple2); padding:12px; position:relative; }
+    .panel-title { display:flex; align-items:center; gap:8px; color:var(--yellow); font-weight:700; margin-bottom:10px; }
+    .panel-title:before { content:"◆"; color:var(--pink); font-size:10px; }
+    .field { margin-bottom:11px; }
+    .field:last-child { margin-bottom:0; }
+    label { display:block; color:var(--cyan); font-size:11px; margin-bottom:5px; }
+    .row { display:flex; min-width:0; gap:6px; }
+    input,select { height:31px; min-width:0; flex:1; border:2px solid var(--purple); background:#08060b; padding:3px 7px; outline:0; border-radius:0; }
+    input:focus,select:focus { border-color:var(--cyan); }
+    select { flex:0 0 104px; color:var(--yellow); }
+    .button { border:2px solid var(--purple2); border-right-color:#290d35; border-bottom-color:#290d35; background:var(--panel2); min-height:31px; padding:4px 10px; color:var(--white); }
+    .button:hover:not(:disabled) { color:var(--yellow); border-color:var(--cyan); }
+    .button:active:not(:disabled) { border-color:#290d35; border-right-color:var(--purple2); border-bottom-color:var(--purple2); }
+    .button.primary { background:#3b174c; color:var(--pink); border-color:var(--pink); }
+    .button.start { background:#123e42; color:var(--green); border-color:var(--green); }
+    .button.danger { color:var(--red); }
+    .hint { color:var(--dim); font-size:10px; line-height:1.35; margin-top:5px; }
+    .safe { border:1px solid var(--purple); color:var(--dim); padding:8px; font-size:10px; line-height:1.45; }
+    .safe strong { color:var(--green); font-weight:700; }
+    .actions { display:flex; gap:8px; }
+    .actions .button { flex:1; min-height:38px; }
+    .secondary { display:flex; gap:8px; margin-top:8px; }
+    .secondary .button { flex:1; }
+    .status { min-height:24px; border-top:1px solid var(--purple); border-bottom:1px solid var(--purple); padding:5px 6px; color:var(--green); font-size:11px; line-height:1.35; }
+    .status.error { color:var(--red); }
+    .meter { height:7px; border:1px solid var(--purple); background:#0b080e; overflow:hidden; }
+    .meter span { display:block; width:0; height:100%; background:var(--cyan); }
+    .busy .meter span { width:45%; animation:move 1.1s steps(8,end) infinite; }
+    @keyframes move { from { transform:translateX(-120%); } to { transform:translateX(300%); } }
+    .footer { margin-top:auto; color:#6d5574; font-size:9px; display:flex; justify-content:space-between; }
+    @media (max-height:700px) { .screen { padding:10px; gap:6px; } .panel { padding:9px; } .field { margin-bottom:7px; } }
   </style>
 </head>
 <body>
-  <main class="window" id="app">
-    <section class="hero">
-      <img class="brand-icon" id="brand" src="../../assets/open-shift-icon.svg" alt="OPEN SHIFT">
-      <div><h1>OPEN SHIFT</h1><div class="tagline">VA-11 HALL-A · 结局之后的本地世界</div></div>
-      <div class="hero-side"><div class="badge"><span class="dot"></span>STEAM</div><div class="version">PLAYER 0.19 RC.32</div></div>
+  <main class="screen" id="app">
+    <header class="topline">
+      <div class="brand"><img src="../../assets/open-shift-icon.svg" alt="OPEN SHIFT"><div><h1>OPEN SHIFT</h1><div class="subtitle">VA-11 HALL-A // 结局之后的世界</div></div></div>
+      <div class="version">发行版<br><span id="version">读取中</span></div>
+    </header>
+    <section class="panel">
+      <div class="panel-title">游戏连接</div>
+      <div class="field"><label for="steam">STEAM 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="button" data-action="browse">选择</button></div><div class="hint" id="copy">尚未选择隔离实例。</div></div>
+      <div class="field"><label for="key">DEEPSEEK API KEY</label><div class="row"><input id="key" type="password" spellcheck="false"><button class="button" data-action="saveKey">保存</button></div><div class="hint">使用 Windows DPAPI 加密保存，不写入日志。</div></div>
+      <div class="field"><label for="thinkingToggle">生成模式 // THINKING</label><div class="row"><div class="hint" id="thinkingHint">安装后可选择生成模式。</div><select id="thinkingToggle" title="生成模式"><option value="disabled">快速</option><option value="balanced">平衡</option><option value="enabled">深度</option></select></div></div>
+      <div class="safe"><strong>系统状态</strong><br>原版 DATA.WIN　只读输入<br>MOD DATA.WIN　隔离实例<br>世界状态　独立版本数据库<br><span id="diagnostic">版本读取中　|　密钥未配置　|　尚未安装</span></div>
     </section>
-    <section class="card">
-      <div class="field"><label>Steam 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="sub small" data-action="browse">选择</button></div><div class="copy" id="copy"></div></div>
-      <div class="field"><label>DeepSeek API Key</label><div class="row"><input id="key" type="password" spellcheck="false"><button class="sub small" data-action="saveKey">保存</button></div><div class="hint">使用 Windows DPAPI 加密保存，不写入 TOML、日志或存档。</div></div>
-      <div class="field setting"><div class="setting-copy"><label>DeepSeek 生成模式（Thinking）</label><div class="hint" id="thinkingHint">快速适合普通对白；平衡只为世界决策启用 Thinking；深度会让所有生成更慢。</div></div><select class="mode-select" id="thinkingToggle" data-action="thinking" role="switch" title="选择 DeepSeek 生成模式"><option value="disabled">快速</option><option value="balanced">平衡</option><option value="enabled">深度</option></select></div>
-      <div class="safe"><strong>安全状态</strong><br>Steam 原版 data.win：只读输入<br>补丁 data.win：仅写入隔离副本<br>世界数据库和配对存档：%LOCALAPPDATA%\VA_11_Hall_A</div>
+    <section class="panel">
+      <div class="panel-title">控制台</div>
+      <div class="actions"><button class="button primary" data-action="install">安装 / 修复</button><button class="button start" data-action="start">准备并启动</button></div>
+      <div class="secondary"><button class="button" data-action="logs">打开日志</button><button class="button" data-action="export">导出诊断</button></div>
+      <div class="secondary"><button class="button" data-action="update">检查更新</button><button class="button" id="release" data-action="updateOpen" hidden>打开发行页</button><button class="button danger" data-action="uninstall">卸载</button></div>
     </section>
-    <section class="card actions"><div class="primary"><button class="action install" data-action="install">安装 / 修复</button><button class="action start" data-action="start">准备并启动</button></div><div class="secondary"><button class="sub" data-action="logs">打开日志</button><button class="sub danger" data-action="uninstall">卸载</button></div></section>
-    <div class="status" id="status">就绪。Steam 原版文件保持只读。</div><div class="progress"><span></span></div>
+    <div class="status" id="status">就绪 // Steam 原版文件保持不变。</div>
+    <div class="meter"><span></span></div>
+    <footer class="footer"><span>OPEN SHIFT 社区预览版</span><span>无 UTMT // 无原版 DATA</span></footer>
   </main>
   <script>
-    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status'), thinkingToggle=document.getElementById('thinkingToggle'), thinkingLabel=document.getElementById('thinkingLabel'), thinkingHint=document.getElementById('thinkingHint');
-    function send(action, data={}) { if (window.chrome?.webview) window.chrome.webview.postMessage(JSON.stringify({action,...data})); }
+    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status'), mode=document.getElementById('thinkingToggle'), hint=document.getElementById('thinkingHint');
     let busy=false, startDisabled=true, thinking='disabled', thinkingAvailable=false;
-    function applyThinking() { thinkingToggle.value=thinking==='enabled'?'enabled':thinking==='balanced'?'balanced':'disabled'; thinkingHint.textContent=thinkingAvailable?(thinking==='enabled'?'深度：所有生成都可启用 Thinking，等待时间和 Token 消耗最高。':thinking==='balanced'?'平衡：世界决策使用 Thinking，普通对白保持快速。':'快速：普通对白和调酒反应优先快速生成。'):'安装后可切换生成模式。'; }
-    function applyAvailability() { document.querySelectorAll('[data-action]').forEach(button=>{ button.disabled=busy && button.dataset.action!=='logs'; }); steam.disabled=busy; key.disabled=busy; document.querySelector('[data-action="start"]').disabled=busy||startDisabled; thinkingToggle.disabled=busy||!thinkingAvailable; }
-    function setState(s) { if(s.steam!==undefined) steam.value=s.steam; if(s.copy!==undefined) copy.textContent='隔离副本 · '+s.copy; if(s.status) status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;app.classList.toggle('busy',busy);} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; applyThinking(); applyAvailability(); }
+    function send(action,data={}) { if(window.chrome?.webview) window.chrome.webview.postMessage(JSON.stringify({action,...data})); }
+    let releaseUrl='https://github.com/KaiDecker/va11-open-shift/releases/latest';
+    async function checkUpdate() { status.textContent='正在检查 GitHub 最新发行版...'; try { const response=await fetch('https://api.github.com/repos/KaiDecker/va11-open-shift/releases/latest',{headers:{Accept:'application/vnd.github+json'}}); if(!response.ok)throw new Error('HTTP '+response.status); const latest=await response.json(); releaseUrl=latest.html_url||releaseUrl; const current=(document.getElementById('version').textContent||'').replace(/^v/i,''); const remote=(latest.tag_name||'').replace(/^v/i,''); document.getElementById('release').hidden=false; status.textContent=remote&&remote!==current?'发现新版本 '+remote+'，点击“打开发行页”查看。':'已是最新版本。'; } catch(error) { status.textContent='无法联网检查更新，当前版本仍可正常使用。'; document.getElementById('release').hidden=true; } }
+    function apply() {
+      const text=thinking==='enabled'?'深度 // 对话最充分，等待时间最长':thinking==='balanced'?'平衡 // 关键世界决策启用思考':'快速 // 日常对话优先速度';
+      hint.textContent=thinkingAvailable?text:'安装 OPEN SHIFT 后可切换生成模式。'; mode.value=thinking; mode.disabled=busy||!thinkingAvailable;
+      document.querySelectorAll('[data-action]').forEach(b=>b.disabled=busy&&b.dataset.action!=='logs');
+      document.querySelector('[data-action="start"]').disabled=busy||startDisabled; steam.disabled=busy; key.disabled=busy; app.classList.toggle('busy',busy);
+    }
+    function setState(s) { if(s.steam!==undefined)steam.value=s.steam; if(s.copy!==undefined)copy.textContent='隔离实例 // '+s.copy; if(s.status)status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;status.classList.toggle('error',/失败|错误|missing|failed/i.test(s.status||''));} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; if(s.packageVersion!==undefined)document.getElementById('version').textContent=s.packageVersion; if(s.keyConfigured!==undefined||s.installReady!==undefined)document.getElementById('diagnostic').textContent='版本 '+(s.packageVersion||'development')+'　|　密钥 '+(s.keyConfigured?'已配置':'未配置')+'　|　'+(s.installReady?'安装完成':'尚未安装'); apply(); }
     window.setState=setState;
-    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{ const a=b.dataset.action; if(a==='browse')send(a); else if(a==='saveKey'){send(a,{value:key.value});} else if(a==='install')send(a,{steam:steam.value,key:key.value}); else send(a); }));
-    thinkingToggle.addEventListener('change',()=>send('thinking',{value:thinkingToggle.value}));
-    steam.addEventListener('change',()=>send('steamChanged',{value:steam.value}));
-    applyThinking(); applyAvailability();
+    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{const a=b.dataset.action;if(a==='browse')send(a);else if(a==='saveKey')send(a,{value:key.value});else if(a==='install')send(a,{steam:steam.value,key:key.value});else if(a==='update')checkUpdate();else if(a==='updateOpen')send('updateOpen',{url:releaseUrl});else send(a);}));
+    mode.addEventListener('change',()=>send('thinking',{value:mode.value})); steam.addEventListener('change',()=>send('steamChanged',{value:steam.value})); apply();
   </script>
 </body>
 </html>

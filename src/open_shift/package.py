@@ -35,10 +35,9 @@ class PackageResult:
 
 _REQUIRED_FILES = (
     "assets/open-shift-icon.svg",
-    "pyproject.toml",
+    "assets/fonts/fusion-pixel-12px-proportional-zh_hans.woff2",
+    "assets/fonts/OFL-1.1.txt",
     "game-patch/manifest.json",
-    "game-patch/apply_mod.csx",
-    "game-patch/analysis/verify_patch.csx",
     "packaging/install-isolated-copy.ps1",
     "packaging/install-open-shift.ps1",
     "packaging/configure-api-key.ps1",
@@ -66,16 +65,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _relative_files(root: Path) -> tuple[Path, ...]:
+def _relative_files(root: Path, *, include_sources: bool) -> tuple[Path, ...]:
     files: set[Path] = set()
     for relative in _REQUIRED_FILES:
         path = root / relative
         if not path.is_file():
             raise PackageError(f"required package file was missing: {relative}")
         files.add(path)
-    gml_dir = root / "game-patch" / "gml"
-    files.update(path for path in gml_dir.glob("*.gml") if path.is_file())
-    files.update(path for path in (root / "src" / "open_shift").glob("*.py") if path.is_file())
+    # Source-only archives remain useful to maintainers. A bundled player
+    # archive must contain no Python/GML development material: its runtime and
+    # delta are the only executable implementation the player needs.
+    if include_sources:
+        files.add(root / "pyproject.toml")
+        files.update(
+            path for path in (root / "game-patch" / "gml").glob("*.gml") if path.is_file()
+        )
+        files.add(root / "game-patch" / "apply_mod.csx")
+        files.add(root / "game-patch" / "analysis" / "verify_patch.csx")
+        files.update(path for path in (root / "src" / "open_shift").glob("*.py") if path.is_file())
+    else:
+        files = {path for path in files if path.name != "pyproject.toml"}
     return tuple(sorted(files))
 
 
@@ -156,7 +165,7 @@ def build_mod_package(
         relative_output = output_path.relative_to(root)
         if not relative_output.parts or relative_output.parts[0] not in {"dist", "work"}:
             raise PackageError("package output must not be inside the project source tree")
-    files = tuple(sorted(_relative_files(root)))
+    files = tuple(sorted(_relative_files(root, include_sources=runtime_exe is None)))
     extras: list[tuple[Path, str]] = []
     if runtime_exe is not None:
         runtime_path = Path(runtime_exe).expanduser().resolve()
@@ -201,6 +210,7 @@ def build_mod_package(
         "requires_user_owned_game_copy": True,
         "contains_original_data_win": False,
         "contains_patched_data_win": False,
+        "contains_development_sources": runtime_exe is None,
         "contains_api_key": False,
         "files": names,
     }

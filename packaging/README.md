@@ -20,11 +20,11 @@ Steam 原版目录不会作为写入目标。
 ## 发行包内容
 
 - `OpenShift.exe`：本地 bridge 运行程序；
-- `OpenShiftSetup.exe`：WebView2 图形安装器；
-- `OpenShift.ico` 和 WebView2 运行库；
-- `game-patch/`：补丁源和 GameMaker 注入脚本；
-- `packaging/`：安装、启动、卸载和配置脚本；
-- `src/open_shift/`：bridge 和规则层源代码；
+- `OpenShiftSetup.exe`：Win32 + WebView2 图形安装器（不携带 .NET runtime）；
+- `OpenShift.ico` 和 WebView2 Loader；
+- `game-patch/manifest.json`：玩家端补丁契约；
+- `packaging/`：安装、启动、卸载、配置脚本和 Web UI；
+- `OpenShift.exe`：已打包的 bridge 和规则层运行时；
 - `patch/data-win.delta`：开发构建期由 UTMT 生成的、供玩家端应用的增量补丁；
 - 安装、配置和贡献说明。
 
@@ -41,7 +41,7 @@ Steam 原版目录不会作为写入目标。
 
 ## 开发者验收
 
-维护者可以使用 PowerShell、Python 3.11+、UTMT CLI 0.9.1.2 和正版 Steam 游戏生成发行包；玩家端不需要 UTMT。
+维护者可以使用 PowerShell、Python 3.11+、Visual Studio C++ 工具链、Native WebView2 SDK、UTMT CLI 0.9.1.2 和正版 Steam 游戏生成发行包；玩家端不需要 Python、.NET 或 UTMT。
 运行日志写入 `timing.log`，包含请求 ID、状态码、生成模式、耗时、回退事件和记忆诊断，不包含 API Key、
 提示词或模型完整响应。遇到问题时可同时提交脱敏后的 `dialogue.log`，其中只包含实际显示的对白。
 

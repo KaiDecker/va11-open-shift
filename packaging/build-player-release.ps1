@@ -1,5 +1,5 @@
 param(
-    [string] $Version = "0.19.0-rc.32",
+    [string] $Version = "0.24.0-preview.2",
     [string] $Output = "",
     [string] $Python = "python",
     [string] $WebViewSdk = "",
@@ -38,23 +38,47 @@ $runtimeOut = Join-Path $root "work\OpenShift.exe"
 $guiOut = Join-Path $root "work\OpenShiftSetup.exe"
 $iconOut = Join-Path $root "work\OpenShift.ico"
 $deltaOut = Join-Path $root "work\data-win.delta"
-function Find-WebViewSdk {
-    $candidates = @(
-        $WebViewSdk,
-        $env:OPEN_SHIFT_WEBVIEW2_SDK,
-        "C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit"
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+function Find-WebViewSdkNative {
+    $version = "1.0.3485.44"
+    $expectedPackageSha256 = "bc09150b179246ac90189649b13be8e6b11b3ac200e817e18df106e1f3cf489e"
+    $candidates = @($WebViewSdk, $env:OPEN_SHIFT_WEBVIEW2_SDK) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     foreach ($candidate in $candidates) {
         $full = [IO.Path]::GetFullPath($candidate)
-        if ((Test-Path -LiteralPath (Join-Path $full "Microsoft.Web.WebView2.Core.dll") -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $full "Microsoft.Web.WebView2.WinForms.dll") -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $full "WebView2Loader.dll") -PathType Leaf)) {
-            return $full
+        $include = Join-Path $full "build\native\include"
+        $native = Join-Path $full "build\native"
+        if (-not (Test-Path -LiteralPath (Join-Path $include "WebView2.h") -PathType Leaf)) {
+            $include = Join-Path $full "include"
+            $native = $full
+        }
+        $arch = Join-Path $native "x64"
+        $loader = Join-Path $arch "WebView2Loader.dll"
+        $lib = Join-Path $arch "WebView2LoaderStatic.lib"
+        if (-not (Test-Path -LiteralPath $lib -PathType Leaf)) { $lib = Join-Path $arch "WebView2Loader.dll.lib" }
+        if ((Test-Path -LiteralPath (Join-Path $include "WebView2.h") -PathType Leaf) -and (Test-Path -LiteralPath $loader -PathType Leaf) -and (Test-Path -LiteralPath $lib -PathType Leaf)) {
+            return [pscustomobject]@{ Include = $include; Loader = $loader; Library = $lib }
         }
     }
-    throw "WebView2 SDK files were not found. Use -WebViewSdk with a directory containing the Core, WinForms, and Loader DLLs."
+    $downloadRoot = Join-Path ([IO.Path]::GetTempPath()) ("open-shift-webview2-" + $version)
+    $package = Join-Path $downloadRoot ("Microsoft.Web.WebView2." + $version + ".nupkg")
+    $expanded = Join-Path $downloadRoot "expanded"
+    if (-not (Test-Path -LiteralPath (Join-Path $expanded "build\native\include\WebView2.h") -PathType Leaf)) {
+        New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
+        if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
+            Invoke-WebRequest -Uri ("https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/" + $version) -OutFile $package
+        }
+        Expand-Archive -LiteralPath $package -DestinationPath $expanded -Force
+    }
+    if (Test-Path -LiteralPath $package -PathType Leaf) {
+        $actualPackageSha256 = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualPackageSha256 -ne $expectedPackageSha256) { throw "Native WebView2 SDK SHA-256 did not match the pinned package." }
+    }
+    $arch = Join-Path $expanded "build\native\x64"
+    $lib = Join-Path $arch "WebView2LoaderStatic.lib"
+    if (-not (Test-Path -LiteralPath $lib -PathType Leaf)) { $lib = Join-Path $arch "WebView2Loader.dll.lib" }
+    if (-not (Test-Path -LiteralPath (Join-Path $expanded "build\native\include\WebView2.h") -PathType Leaf) -or -not (Test-Path -LiteralPath $lib -PathType Leaf)) { throw "Native WebView2 SDK could not be prepared." }
+    return [pscustomobject]@{ Include = Join-Path $expanded "build\native\include"; Loader = Join-Path $arch "WebView2Loader.dll"; Library = $lib }
 }
-$resolvedWebViewSdk = Find-WebViewSdk
+$resolvedWebViewSdk = Find-WebViewSdkNative
 $utmtCheck = Join-Path ([IO.Path]::GetTempPath()) ("open-shift-utmt-check-" + [guid]::NewGuid().ToString("N"))
 try {
     Expand-Archive -LiteralPath $UtmtCliZip -DestinationPath $utmtCheck -Force
@@ -65,20 +89,22 @@ try {
 finally {
     Remove-Item -LiteralPath $utmtCheck -Recurse -Force -ErrorAction SilentlyContinue
 }
-$webViewCore = Join-Path $resolvedWebViewSdk "Microsoft.Web.WebView2.Core.dll"
-$webViewForms = Join-Path $resolvedWebViewSdk "Microsoft.Web.WebView2.WinForms.dll"
-$webViewLoader = Join-Path $resolvedWebViewSdk "WebView2Loader.dll"
+$webViewLoader = $resolvedWebViewSdk.Loader
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "packaging\create-icon.ps1") -Output $iconOut
 if ($LASTEXITCODE -ne 0) { throw "OpenShift.ico build failed" }
 & $pythonExe -m PyInstaller --noconfirm --clean --onefile --name OpenShift (Join-Path $root "packaging\runtime_entry.py") --paths (Join-Path $root "src") --distpath (Split-Path -Parent $runtimeOut) --workpath (Join-Path $root "work\pyinstaller-build") --specpath (Join-Path $root "work\pyinstaller-spec")
 if ($LASTEXITCODE -ne 0) { throw "OpenShift.exe build failed" }
-$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-if (-not $dotnet) { throw "The .NET SDK is required to build the WebView2 launcher" }
-$publishDir = Join-Path $root "work\webview-publish"
-Remove-Item -LiteralPath $publishDir -Recurse -Force -ErrorAction SilentlyContinue
-& $dotnet.Source publish (Join-Path $root "packaging\OpenShiftSetup.csproj") --configuration Release --output $publishDir --self-contained true --runtime win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:WebViewSdk=$resolvedWebViewSdk -p:ApplicationIcon=$iconOut
-if ($LASTEXITCODE -ne 0) { throw "OpenShiftSetup.exe WebView2 build failed" }
-Copy-Item -LiteralPath (Join-Path $publishDir "OpenShiftSetup.exe") -Destination $guiOut -Force
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "Visual Studio 2022 with the C++ workload is required to build the native launcher." }
+$vsInstall = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1).Trim()
+if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "Visual Studio C++ build tools were not found." }
+$devCmd = Join-Path $vsInstall "Common7\Tools\VsDevCmd.bat"
+$nativeSource = Join-Path $root "packaging\native\OpenShiftSetup.cpp"
+$nativeBuild = Join-Path $root "work\native-launcher"
+New-Item -ItemType Directory -Force -Path $nativeBuild | Out-Null
+$compile = "call `"$devCmd`" -arch=x64 && cl /nologo /std:c++17 /EHsc /O2 /MT /utf-8 /DUNICODE /D_UNICODE /I `"$($resolvedWebViewSdk.Include)`" /Fo`"$nativeBuild\OpenShiftSetup.obj`" `"$nativeSource`" `"$($resolvedWebViewSdk.Library)`" /link /SUBSYSTEM:WINDOWS /OUT:`"$guiOut`" /PDB:`"$nativeBuild\OpenShiftSetup.pdb`""
+& cmd.exe /d /s /c $compile
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $guiOut -PathType Leaf)) { throw "Native OpenShiftSetup.exe build failed" }
 $deltaBuildDir = Join-Path ([IO.Path]::GetTempPath()) ("open-shift-release-delta-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $deltaBuildDir | Out-Null
 try {
@@ -100,7 +126,7 @@ try {
 finally {
     Remove-Item -LiteralPath $deltaBuildDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-& $pythonExe -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --data-delta $deltaOut --webview-dll $webViewCore --webview-dll $webViewForms --webview-dll $webViewLoader
+& $pythonExe -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --data-delta $deltaOut --webview-dll $webViewLoader
 if ($LASTEXITCODE -ne 0) { throw "Player release package build failed" }
 # Re-open and CRC-check the final archive through Python as an independent
 # guard. Do not leave a corrupt package behind if a write was interrupted.
