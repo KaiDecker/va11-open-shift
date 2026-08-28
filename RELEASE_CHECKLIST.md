@@ -6,7 +6,7 @@
 ## 版本与输入
 
 - [ ] 工作区干净，发布 commit、版本号和目标平台已确定。
-- [ ] 本次公开预览版本统一为 `v0.24.0-preview.5`，包名、安装目录和界面版本显示一致。
+- [ ] 本次公开预览版本统一为 `v0.24.0-preview`，包名、安装目录和界面版本显示一致。
 - [ ] `game-patch/manifest.json` 中的 Steam Windows 哈希与受支持版本一致。
 - [ ] Steam 原版 `data.win` 和 EXE 哈希在构建前后不变。
 - [ ] 构建输入不包含 API Key、数据库、存档、原版资源或生成的 `data.win`。
@@ -39,9 +39,9 @@
 - [ ] GitHub Release 说明兼容 Steam 哈希、Windows x64 范围、安装步骤和 SHA-256。
 - [ ] README、贡献指南和路线图已同步当前版本，并给出 Issue/PR 入口。
 
-## v0.24.0-preview.5 专项记录
+## v0.24.0-preview 专项记录
 
 - [x] 已确认 preview.1 的运行配置路径问题不再复现：本地服务已启动时，游戏可以进入 `ready` 状态。
-- [ ] 已记录 preview.5 玩家 ZIP 的 SHA-256；创建 Release 后再与远端附件核对：
-      `d98e5c5367172a2a1743b767f32b097acfbaba93fdf9d9ca9697e34f07cea5f7`。
+- [ ] 已记录 preview 玩家 ZIP 的 SHA-256；创建 Release 后再与远端附件核对：
+      `3b90fd6eb1111461423cc1ccc8432c96c6affd380a1310df2e63693b944fca3e`。
 - [ ] 已确认旧版 `v0.19.0-rc.23` 仅作为历史版本，不作为公开下载入口或验收依据。

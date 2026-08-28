@@ -1,6 +1,6 @@
 # OPEN SHIFT 玩家发行包
 
-这是 OPEN SHIFT `v0.24.0-preview.5` 的 Windows x64 预览版发行包。它包含安装器、启动器、增量补丁和运行所需的
+这是 OPEN SHIFT `v0.24.0-preview` 的 Windows x64 预览版发行包。它包含安装器、启动器、增量补丁和运行所需的
 脚本，但不包含 VA-11 HALL-A 的可执行文件、`data.win`、原版资源、存档、数据库或 API Key。
 
 ## 玩家使用
