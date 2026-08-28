@@ -211,17 +211,19 @@ class PackageTests(unittest.TestCase):
         self.assertIn("../../assets/open-shift-icon.svg", webview)
         build = (root / "packaging" / "build-player-release.ps1").read_text(encoding="utf-8")
         self.assertIn('$WebViewSdk', build)
-        self.assertIn('0.24.0-preview.5', build)
+        self.assertIn('0.24.0-preview', build)
+        self.assertNotIn('0.24.0-preview.5', build)
         self.assertNotIn('0.24.0-preview.1', build)
         for relative in (
             "packaging/README.md",
             "packaging/INSTALL.md",
             "RELEASE_CHECKLIST.md",
             "docs/roadmap.md",
-            "docs/releases/v0.24.0-preview.5.md",
+            "docs/releases/v0.24.0-preview.md",
         ):
             text = (root / relative).read_text(encoding="utf-8")
-            self.assertIn("0.24.0-preview.5", text, relative)
+            self.assertIn("0.24.0-preview", text, relative)
+            self.assertNotIn("0.24.0-preview.5", text, relative)
             self.assertNotIn("0.24.0-preview.2", text, relative)
         self.assertIn('OPEN_SHIFT_WEBVIEW2_SDK', build)
         self.assertIn('Get-Command -Name $PythonPath -CommandType Application', build)
