@@ -30,7 +30,7 @@ Evergreen Runtime 后重试。玩家发行包不要求安装 .NET 或 Python；W
 WebView2 Runtime 仍由系统提供。
 
 从旧版升级时，启动器会根据 `PACKAGE_MANIFEST.json` 自动使用独立目录
-`%LOCALAPPDATA%\OpenShift-<package_version>`（例如 `OpenShift-0.24.0-preview.5`）。如果当前启动器目录已有相同版本的
+`%LOCALAPPDATA%\OpenShift-<package_version>`（例如 `OpenShift-0.24.0-preview`）。如果当前启动器目录已有相同版本的
 `install.json`，则继续复用该目录；显式传入 `-InstallDir` 时始终以指定目录为准。每个安装目录都有独立的数据库、日志、配置、API Key 和 OPEN SHIFT 配套存档；
 原版 GameMaker 存档仍由正版游戏的原生路径管理；
 安装器会比较补丁源指纹，只有当前实例确实属于同一版本时才跳过重建。旧版本目录可以在确认不再需要存档后单独卸载。
