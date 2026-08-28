@@ -127,7 +127,9 @@ New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 try {
     $patched = Join-Path $buildDir "patched.data.win"
     Invoke-OpenShift @("apply-data-delta", "--original-data-win", $original, "--delta", $dataDeltaPath, "--output", $patched)
-    Invoke-OpenShift @("verify-patch-output", "--original-data-win", $original, "--patched-data-win", $patched, "--manifest", (Join-Path $packageRoot "game-patch\manifest.json"), "--gml-source-dir", (Join-Path $packageRoot "game-patch\gml"))
+    # The delta application already verifies both input and output hashes.
+    # Player packages intentionally omit the development GML tree; the full
+    # source-tree verification remains a build-time check.
     # Do not replace an instance until the new patch has compiled and verified.
     # The game executable and immutable resources are linked back to Steam; only
     # data.win is a physical, patched instance copy. Never fall back to copying
