@@ -136,6 +136,7 @@ def build_mod_package(
     runtime_exe: str | Path | None = None,
     gui_exe: str | Path | None = None,
     icon: str | Path | None = None,
+    data_delta: str | Path | None = None,
     utmt_cli: str | Path | None = None,
     webview_dlls: tuple[str | Path, ...] = (),
 ) -> PackageResult:
@@ -149,6 +150,8 @@ def build_mod_package(
     output_path = Path(output).expanduser().resolve()
     if not root.is_dir():
         raise PackageError("project root was not a directory")
+    if runtime_exe is not None and data_delta is None:
+        raise PackageError("a bundled player package requires a prebuilt data.win delta")
     if output_path == root or root in output_path.parents:
         relative_output = output_path.relative_to(root)
         if not relative_output.parts or relative_output.parts[0] not in {"dist", "work"}:
@@ -168,9 +171,11 @@ def build_mod_package(
         _optional_file(icon_path, name="application icon", files=set())
         extras.append((icon_path, "OpenShift.ico"))
     if utmt_cli is not None:
-        utmt_path = Path(utmt_cli).expanduser().resolve()
-        _optional_file(utmt_path, name="UTMT CLI", files=set())
-        extras.append((utmt_path, "tools/utmt/UndertaleModCli.zip"))
+        raise PackageError("UTMT CLI is a development-only dependency and cannot enter a player package")
+    if data_delta is not None:
+        delta_path = Path(data_delta).expanduser().resolve()
+        _optional_file(delta_path, name="data.win delta", files=set())
+        extras.append((delta_path, "patch/data-win.delta"))
     for webview in webview_dlls:
         webview_path = Path(webview).expanduser().resolve()
         _optional_file(webview_path, name="WebView2 runtime library", files=set())
@@ -189,11 +194,13 @@ def build_mod_package(
         "contains_runtime_exe": runtime_exe is not None,
         "contains_gui_exe": gui_exe is not None,
         "contains_icon": icon is not None,
-        "contains_utmt_cli": utmt_cli is not None,
+        "contains_utmt_cli": False,
+        "contains_data_delta": data_delta is not None,
         "contains_webview2": bool(webview_dlls),
         "requires_python": runtime_exe is None,
         "requires_user_owned_game_copy": True,
         "contains_original_data_win": False,
+        "contains_patched_data_win": False,
         "contains_api_key": False,
         "files": names,
     }

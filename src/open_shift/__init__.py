@@ -21,6 +21,7 @@ from .distribution import (
     uninstall_patch,
     verify_patch_output,
 )
+from .data_delta import DataDeltaError, apply_delta, create_delta
 from .drinks import (
     DrinkOrder,
     DrinkSubmission,
@@ -71,6 +72,9 @@ __all__ = [
     "install_patch",
     "uninstall_patch",
     "verify_patch_output",
+    "DataDeltaError",
+    "create_delta",
+    "apply_delta",
     "DrinkOrder",
     "DrinkSubmission",
     "ServiceCategory",

@@ -11,6 +11,18 @@ OPEN SHIFT 由三部分组成：
 DeepSeek 只提出受限的行动、世界事件或对白草稿。规则层验证并提交结果，模型不能直接修改
 现金、关系、时间、存档或剧情游标。API Key 只通过当前 Windows 用户的 DPAPI 保存。
 
+### 玩家实例
+
+安装器为每个版本创建独立的实例根目录。实例包含补丁后的 `data.win`、可写的选项文件和
+`open-shift-links.json`；原版 EXE、DLL 及 `answer`、`config`、`scripts`、`sounds` 等只读资源
+通过 Windows 文件链接从 Steam 目录读取。链接创建失败时安装会停止，不会把完整 Steam 目录复制
+到实例中。`install.json` 保存实例 ID、版本指纹、数据库和日志路径，卸载时只删除当前实例，
+并拒绝以任何方式删除 Steam 原版目录。
+
+玩家发行包不携带 UTMT、原版 `data.win` 或完整 patched `data.win`。开发构建阶段由 UTMT
+生成 patched 文件并产出 `patch/data-win.delta`；安装器调用本地 Python bridge 应用该 delta，
+先校验正版文件 SHA-256，再校验重建文件 SHA-256，随后才写入隔离实例。
+
 ### 角色记忆
 
 `memories` 是角色隔离的长期记忆表。记忆包含 `source_type`（`direct`、`heard`、`rumor`、

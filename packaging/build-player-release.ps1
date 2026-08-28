@@ -3,7 +3,8 @@ param(
     [string] $Output = "",
     [string] $Python = "python",
     [string] $WebViewSdk = "",
-    [Parameter(Mandatory = $true)] [string] $UtmtCliZip
+    [Parameter(Mandatory = $true)] [string] $UtmtCliZip,
+    [Parameter(Mandatory = $true)] [string] $OriginalDataWin
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,6 +37,7 @@ $env:PYTHONPATH = Join-Path $root "src"
 $runtimeOut = Join-Path $root "work\OpenShift.exe"
 $guiOut = Join-Path $root "work\OpenShiftSetup.exe"
 $iconOut = Join-Path $root "work\OpenShift.ico"
+$deltaOut = Join-Path $root "work\data-win.delta"
 function Find-WebViewSdk {
     $candidates = @(
         $WebViewSdk,
@@ -77,7 +79,28 @@ Remove-Item -LiteralPath $publishDir -Recurse -Force -ErrorAction SilentlyContin
 & $dotnet.Source publish (Join-Path $root "packaging\OpenShiftSetup.csproj") --configuration Release --output $publishDir --self-contained true --runtime win-x64 -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:WebViewSdk=$resolvedWebViewSdk -p:ApplicationIcon=$iconOut
 if ($LASTEXITCODE -ne 0) { throw "OpenShiftSetup.exe WebView2 build failed" }
 Copy-Item -LiteralPath (Join-Path $publishDir "OpenShiftSetup.exe") -Destination $guiOut -Force
-& $pythonExe -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --utmt-cli-zip $UtmtCliZip --webview-dll $webViewCore --webview-dll $webViewForms --webview-dll $webViewLoader
+$deltaBuildDir = Join-Path ([IO.Path]::GetTempPath()) ("open-shift-release-delta-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $deltaBuildDir | Out-Null
+try {
+    $originalPath = (Resolve-Path -LiteralPath $OriginalDataWin -ErrorAction Stop).Path
+    $utmtExtracted = Join-Path $deltaBuildDir "utmt"
+    Expand-Archive -LiteralPath $UtmtCliZip -DestinationPath $utmtExtracted -Force
+    $utmt = (Get-ChildItem -LiteralPath $utmtExtracted -Filter "UndertaleModCli.exe" -Recurse -File | Select-Object -First 1).FullName
+    if (-not $utmt) { throw "UTMT CLI executable was not found in $UtmtCliZip" }
+    $deltaInput = Join-Path $deltaBuildDir "original.data.win"
+    $patchedInput = Join-Path $deltaBuildDir "patched.data.win"
+    Copy-Item -LiteralPath $originalPath -Destination $deltaInput -Force
+    & $utmt load $deltaInput -s (Join-Path $root "game-patch\apply_mod.csx") -o $patchedInput -v
+    if ($LASTEXITCODE -ne 0) { throw "UTMT patching failed with code $LASTEXITCODE" }
+    & $pythonExe -m open_shift verify-patch-output --original-data-win $originalPath --patched-data-win $patchedInput --manifest (Join-Path $root "game-patch\manifest.json") --gml-source-dir (Join-Path $root "game-patch\gml")
+    if ($LASTEXITCODE -ne 0) { throw "Patched data.win verification failed" }
+    & $pythonExe -m open_shift build-data-delta --original-data-win $originalPath --patched-data-win $patchedInput --output $deltaOut
+    if ($LASTEXITCODE -ne 0) { throw "data.win delta build failed" }
+}
+finally {
+    Remove-Item -LiteralPath $deltaBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+& $pythonExe -m open_shift build-mod-package --project-root $root --output $outputPath --version $Version --runtime-exe $runtimeOut --gui-exe $guiOut --icon $iconOut --data-delta $deltaOut --webview-dll $webViewCore --webview-dll $webViewForms --webview-dll $webViewLoader
 if ($LASTEXITCODE -ne 0) { throw "Player release package build failed" }
 # Re-open and CRC-check the final archive through Python as an independent
 # guard. Do not leave a corrupt package behind if a write was interrupted.
