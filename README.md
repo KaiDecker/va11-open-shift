@@ -44,7 +44,7 @@ OPEN SHIFT 是一个基于 VA-11 HALL-A Windows 版的社区 Mod。它发生在�
 - 自己的 DeepSeek API Key；
 - 一台能够运行原版游戏的 Windows x64 电脑。
 
-从 [Releases](https://github.com/KaiDecker/va11-open-shift/releases) 下载最新的 Windows 预览包，按照 [安装说明](packaging/INSTALL.md) 操作。安装过程会读取你的 Steam 游戏目录，并在另一个目录创建隔离副本；Steam 原版文件不会被修改。
+从 [Releases](https://github.com/KaiDecker/va11-open-shift/releases) 下载最新的 Windows 预览包，按照 [安装说明](packaging/INSTALL.md) 操作。安装过程会读取你的 Steam 游戏目录，在独立版本目录生成补丁后的 `data.win`，并通过 Windows 链接复用其余只读资源；Steam 原版文件不会被修改。
 
 ## 遇到问题
 

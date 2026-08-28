@@ -1,6 +1,6 @@
 # OPEN SHIFT 玩家发行包
 
-这是 OPEN SHIFT 的 Windows x64 预览版发行包。它包含安装器、启动器、补丁源和运行所需的
+这是 OPEN SHIFT `v0.24.0-preview.5` 的 Windows x64 预览版发行包。它包含安装器、启动器、增量补丁和运行所需的
 脚本，但不包含 VA-11 HALL-A 的可执行文件、`data.win`、原版资源、存档、数据库或 API Key。
 
 ## 玩家使用
@@ -24,9 +24,8 @@ Steam 原版目录不会作为写入目标。
 - `OpenShift.ico` 和 WebView2 Loader；
 - `game-patch/manifest.json`：玩家端补丁契约；
 - `packaging/`：安装、启动、卸载、配置脚本和 Web UI；
-- `OpenShift.exe`：已打包的 bridge 和规则层运行时；
 - `patch/data-win.delta`：开发构建期由 UTMT 生成的、供玩家端应用的增量补丁；
-- 安装、配置和贡献说明。
+- 像素字体、许可证以及安装和运行所需脚本。
 
 实机截图和宣传素材不放进玩家发行 ZIP；它们只保存在仓库的素材目录中。
 

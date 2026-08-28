@@ -205,6 +205,8 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         'ag_expected_status = "paired"',
         'ag_expected_status = "restored"',
         'ag_operation = "restore"',
+        "global.ag_story_day = ag_response_world_day",
+        "save_restore_applied",
         "Record of Waifu Wars",
         "ag_save_slot",
         "jill_room",
@@ -235,7 +237,7 @@ def validate_patch_source_tree(path: str | Path) -> tuple[Path, ...]:
         "ag_preload_scope",
         "global.shop_casitas = 1",
         "global.gotmeshop = 1",
-        "global.cur_day == 1001",
+        "global.cur_day >= 1001",
         "global.cur_news = 54",
     )
     if "global.money" in combined:
