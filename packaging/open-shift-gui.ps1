@@ -5,7 +5,20 @@ Add-Type -AssemblyName System.Security
 [Windows.Forms.Application]::EnableVisualStyles()
 
 $packageRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$installDir = Join-Path $env:LOCALAPPDATA "OpenShift"
+$packageManifest = Join-Path $packageRoot "PACKAGE_MANIFEST.json"
+$packageVersion = "development"
+if (Test-Path -LiteralPath $packageManifest -PathType Leaf) {
+    try { $packageVersion = [string] ((Get-Content -LiteralPath $packageManifest -Raw | ConvertFrom-Json).package_version) } catch { }
+}
+if ([string]::IsNullOrWhiteSpace($packageVersion)) { $packageVersion = "development" }
+$safeVersion = [regex]::Replace($packageVersion, '[^A-Za-z0-9._-]', '-').Trim([char[]]@('-','.'))
+if ([string]::IsNullOrWhiteSpace($safeVersion)) { $safeVersion = "development" }
+$existingStatePath = Join-Path $packageRoot "install.json"
+$reuseInstalledRoot = $false
+if (Test-Path -LiteralPath $existingStatePath -PathType Leaf) {
+    try { $reuseInstalledRoot = ([string] ((Get-Content -LiteralPath $existingStatePath -Raw | ConvertFrom-Json).package_version) -eq $packageVersion) } catch { }
+}
+$installDir = if ($reuseInstalledRoot) { $packageRoot } else { Join-Path $env:LOCALAPPDATA ("OpenShift-" + $safeVersion) }
 $gameCopyDir = Join-Path $installDir "game"
 $script:activeProcess = $null
 $script:activeMode = ""
@@ -215,7 +228,7 @@ $safetyPanel.SetBounds(36, 350, 486, 150)
 $form.Controls.Add($safetyPanel)
 
 $safety = New-Object Windows.Forms.Label
-$safety.Text = "Steam 原版 data.win：只读输入`r`n补丁 data.win：仅写入隔离副本`r`n世界数据库和配对存档：%LOCALAPPDATA%\VA_11_Hall_A"
+$safety.Text = "Steam 原版 data.win：只读输入`r`n补丁 data.win：仅写入独立版本实例`r`n数据库、日志、配置和 API Key：当前版本安装目录"
 $safety.Font = New-Object Drawing.Font("Consolas", 8.5)
 $safety.ForeColor = [Drawing.Color]::FromArgb(73, 83, 103)
 $safety.SetBounds(14, 12, 460, 130)
