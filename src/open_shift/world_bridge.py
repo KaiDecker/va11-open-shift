@@ -564,6 +564,26 @@ class WorldSceneService:
                 return fallback
             return value
 
+        def with_public_context(text: str) -> str:
+            """Keep a day's public headline visible beside a private arc.
+
+            Character-story events remain the authoritative source event.  The
+            optional context is only a read-only observation supplied by the
+            day's public-world event, so it cannot mutate simulation state.
+            """
+
+            if event_type == "public_world_event":
+                return text
+            context = details.get("public_world_event_context")
+            if not isinstance(context, Mapping):
+                return text
+            headline = " ".join(str(context.get("headline", "")).split()).strip()
+            summary = " ".join(str(context.get("summary", "")).split()).strip()
+            if not headline:
+                return text
+            public_text = f"{headline}。{summary}".strip("。 ")
+            return f"{text} 城里还传来消息：{public_text}。"[:400]
+
         if event_type == "public_world_event":
             if details:
                 headline = str(details.get("headline", "城市出现了新的公开消息。"))
@@ -571,7 +591,7 @@ class WorldSceneService:
                 return f"{headline}。{summary}".strip()
         if event_type == "character_story_stage":
             facts = safe_text("facts", "summary", fallback="一件还没有结论的事")
-            return facts
+            return with_public_context(facts)
         templates = {
             "worked": f"{actor}刚结束工作并拿到{safe_int('wage', 120)}信用点，来酒吧向{target}说起这笔收入打算怎么用。",
             "rested": f"{actor}在家休息了{safe_int('duration_minutes', 60)}分钟后遇到{target}，正在考虑今晚要不要改变原定安排。",
@@ -592,7 +612,7 @@ class WorldSceneService:
             "goal_created": f"{actor}设定了{safe_text('goal_name', 'goal_label', fallback='新的工作目标')}，想听{target}对执行办法的看法。",
         }
         if event_type in templates:
-            return templates[event_type]
+            return with_public_context(templates[event_type])
 
         # Unknown event types are implementation details, not dialogue. Use
         # an explicitly public field when one exists, otherwise describe the
@@ -601,8 +621,8 @@ class WorldSceneService:
             "headline", "summary", "subject", "description", "detail", "location"
         )
         if detail:
-            return f"{actor}想和{target}当面确认一件事：{detail}。"
-        return f"{actor}和{target}刚碰到一件需要当面确认的事，今晚想把话说清楚。"
+            return with_public_context(f"{actor}想和{target}当面确认一件事：{detail}。")
+        return with_public_context(f"{actor}和{target}刚碰到一件需要当面确认的事，今晚想把话说清楚。")
 
     @classmethod
     def _narrative_perspective(
@@ -631,6 +651,12 @@ class WorldSceneService:
             question = cls._clean_story_text(details.get("choice"), "现在要不要先做个决定？")
             follow_up = cls._clean_story_text(details.get("follow_up"), "这件事还会继续影响之后的安排。")
             title = cls._clean_story_text(details.get("title"), "今晚要谈的事")
+            public_context = details.get("public_world_event_context")
+            if isinstance(public_context, Mapping):
+                headline = cls._clean_story_text(public_context.get("headline"), "")
+                summary = cls._clean_story_text(public_context.get("summary"), "")
+                if headline:
+                    facts = f"{facts} 城里还传来消息：{headline}。{summary}"[:240]
             return NarrativePerspective(
                 facts,
                 f"{stake} {stance}",
@@ -1216,7 +1242,13 @@ class WorldSceneService:
         """Build the cheap, provider-free cursor used before play begins."""
 
         nodes: list[StoryGraphNode] = []
+        # Keep the source event ids unchanged, but expose the selected public
+        # headline to each character's dialogue premise as read-only context.
+        # This is intentionally done on a copy and cannot affect authority.
+        with WorldStore(self.db_path) as context_store:
+            public_event = self._public_world_event_for_day(context_store, day_index)
         for index, event in enumerate(events, start=1):
+            event = self._augment_event_with_public_context(event, public_event)
             prefix = f"day_{day_index}_customer_{index}"
             arrival_id = f"{prefix}_arrival"
             merge_id = f"{prefix}_merge"
@@ -2286,7 +2318,10 @@ class WorldSceneService:
         provider: ModelProvider,
     ) -> DailyStoryGraph:
         nodes: list[StoryGraphNode] = []
+        with WorldStore(self.db_path) as context_store:
+            public_event = self._public_world_event_for_day(context_store, day_index)
         for index, event in enumerate(events, start=1):
+            event = self._augment_event_with_public_context(event, public_event)
             # The vanilla day-10+ rhythm places the break before the third
             # customer. Keep that boundary in provider context as well, so
             # second-half lines do not accidentally reopen the day or talk as
@@ -2519,6 +2554,99 @@ class WorldSceneService:
             raise ValueError("persisted bridge event was missing")
         return event
 
+    @classmethod
+    def _public_world_event_for_day(
+        cls, store: WorldStore, day_index: int
+    ) -> dict[str, Any] | None:
+        """Return the durable public headline selected for ``day_index``.
+
+        Public events do not carry authority over the story graph.  This
+        lookup only joins the selected event into dialogue observations.  The
+        selection receipts are checked first so events from earlier days can
+        never leak into a later day's prompt; the latest-event fallback keeps
+        manually published Day 1 events useful on legacy databases.
+        """
+
+        records = [
+            event
+            for event in store.list_events()
+            if event.get("event_type") == "public_world_event"
+            and isinstance(event.get("payload"), Mapping)
+        ]
+        if not records:
+            return None
+        by_id = {int(event["event_id"]): event for event in records}
+
+        def event_from_meta(key: str) -> dict[str, Any] | None:
+            raw = store.get_meta(key)
+            if raw is None:
+                return None
+            try:
+                value = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None
+            if not isinstance(value, Mapping):
+                return None
+            try:
+                event_id = int(value.get("event_id", 0))
+            except (TypeError, ValueError):
+                event_id = 0
+            if event_id in by_id:
+                return by_id[event_id]
+            event_key = value.get("event_key")
+            if isinstance(event_key, str):
+                return next(
+                    (
+                        event
+                        for event in records
+                        if event.get("payload", {}).get("event_key") == event_key
+                    ),
+                    None,
+                )
+            return None
+
+        # LLM selection metadata contains an event id and is authoritative for
+        # the current day.  Stage 26 selection uses a key plus a receipt.
+        selected = event_from_meta(f"llm_public_event_selection:{day_index}")
+        if selected is not None:
+            return selected
+        scheduled = event_from_meta(f"scheduled_public_event_selection:{day_index}")
+        if scheduled is not None:
+            return scheduled
+        if day_index == 1:
+            for event in reversed(records):
+                event_key = event.get("payload", {}).get("event_key")
+                if isinstance(event_key, str) and event_key.startswith("city_news_day_1_"):
+                    continue
+                return event
+            return records[-1]
+        return None
+
+    @staticmethod
+    def _augment_event_with_public_context(
+        event: Mapping[str, Any], public_event: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Copy an event with a bounded public-world observation for dialogue."""
+
+        if public_event is None or event.get("event_type") == "public_world_event":
+            return dict(event)
+        public_payload = public_event.get("payload")
+        if not isinstance(public_payload, Mapping):
+            return dict(event)
+        context = {
+            key: public_payload[key]
+            for key in ("category", "status", "headline", "summary", "affected_agents")
+            if key in public_payload
+        }
+        if not context:
+            return dict(event)
+        copy = dict(event)
+        payload = event.get("payload")
+        merged_payload = dict(payload) if isinstance(payload, Mapping) else {}
+        merged_payload["public_world_event_context"] = context
+        copy["payload"] = merged_payload
+        return copy
+
     @staticmethod
     def _dialogue_memory_summary(
         scene: ScenePackage, display_names: Mapping[str, str], observer_id: str,
@@ -2629,6 +2757,54 @@ class WorldSceneService:
                     visibility="participants",
                     canonical_key=f"dialogue:{scene.scene_id}:{participant_id}:heard",
                 )
+
+    @staticmethod
+    def _persist_dialogue_transcript(
+        store: WorldStore,
+        *,
+        story_day: int,
+        scene_id: str,
+        lines: list[dict[str, str]],
+    ) -> None:
+        """Write one displayed scene transcript to the event ledger.
+
+        ACKs are normally idempotent already, but keeping an explicit receipt
+        also makes this safe when an older client retries after a partial
+        bridge hand-off.  The transcript contains only rendered line data;
+        prompts, provider responses, and credentials never enter the ledger.
+        The caller holds the store transaction.
+        """
+
+        payload = {
+            "story_day": story_day,
+            "scene_id": scene_id,
+            "lines": lines,
+        }
+        payload_json = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        receipt_key = f"dialogue_transcript:{scene_id}"
+        prior = store.get_meta(receipt_key)
+        if prior is not None:
+            # A matching receipt is the common retry path.  Do not append a
+            # second event even if the scene ACK receipt was lost.
+            return
+        # Migrate/repair an event written by the pre-receipt implementation
+        # without creating a duplicate transcript.
+        for event in store.list_events():
+            if event.get("event_type") != "dialogue_transcript":
+                continue
+            existing = event.get("payload")
+            if (
+                isinstance(existing, Mapping)
+                and existing.get("scene_id") == scene_id
+                and existing.get("story_day") == story_day
+                and existing.get("lines") == lines
+            ):
+                store.set_meta(receipt_key, payload_json)
+                return
+        store.append_event(store.current_tick, "dialogue_transcript", None, payload=payload)
+        store.set_meta(receipt_key, payload_json)
 
     @staticmethod
     def _story_node(graph: DailyStoryGraph, node_id: str) -> StoryGraphNode:
@@ -2843,6 +3019,10 @@ class WorldSceneService:
                 source_events = self._daily_source_events(store.list_events(), day_index)
                 if not source_events:
                     raise ValueError("world did not contain a story source event")
+                public_event = self._public_world_event_for_day(store, day_index)
+                source_event = self._augment_event_with_public_context(
+                    source_events[0], public_event
+                )
                 names = {
                     agent.agent_id: agent.display_name for agent in store.list_agents()
                 }
@@ -2850,7 +3030,7 @@ class WorldSceneService:
                     provider = self.provider_factory()
                     pre_opening = self._generated_pre_opening_scene(
                         day_index,
-                        source_events[0],
+                        source_event,
                         names,
                         store.current_tick,
                         self._engine(store, provider),
@@ -2946,6 +3126,9 @@ class WorldSceneService:
                 # The skeleton contains the authoritative order and node IDs;
                 # only the selected arrival dialogue is sent to the provider.
                 event = self._find_event(store, source_event_id)
+                event = self._augment_event_with_public_context(
+                    event, self._public_world_event_for_day(store, day_index)
+                )
                 names = {
                     agent.agent_id: agent.display_name
                     for agent in store.list_agents()
@@ -3727,15 +3910,11 @@ class WorldSceneService:
                     for line in scene.lines
                 ]
                 story_day = self._story_day_for_scene(scene_id)
-                store.append_event(
-                    store.current_tick,
-                    "dialogue_transcript",
-                    None,
-                    payload={
-                        "story_day": story_day,
-                        "scene_id": scene_id,
-                        "lines": transcript_lines,
-                    },
+                self._persist_dialogue_transcript(
+                    store,
+                    story_day=story_day,
+                    scene_id=scene_id,
+                    lines=transcript_lines,
                 )
                 emit_dialogue_transcript(story_day, scene_id, transcript_lines)
                 ack_event_id = store.append_event(
