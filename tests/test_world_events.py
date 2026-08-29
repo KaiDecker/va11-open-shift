@@ -7,7 +7,12 @@ from pathlib import Path
 
 from open_shift.bridge import BridgeApplication, BridgeConfig, BridgeError
 from open_shift.providers import MockProvider
-from open_shift.world_bridge import _SCHEDULED_PUBLIC_EVENTS, WorldSceneService
+from open_shift.world_bridge import (
+    SCHEDULED_PUBLIC_EVENT_VERSION,
+    _SCHEDULED_PUBLIC_EVENTS,
+    WorldSceneService,
+    select_scheduled_public_event,
+)
 from open_shift.world_events import (
     CHARACTER_STORY_ARCS,
     EVENT_AGENTS,
@@ -111,10 +116,35 @@ class WorldEventTests(unittest.TestCase):
                     service._ensure_scheduled_public_event(store)
             feed = service.tablet_feed({"limit": 8})
             self.assertEqual(len(feed["items"]), 1)
-            self.assertEqual(feed["items"][0]["event_key"], "city_transit_day_2")
+            self.assertEqual(
+                feed["items"][0]["event_key"],
+                select_scheduled_public_event(2, 7).event_key,
+            )
+
+    def test_scheduled_event_selection_is_versioned_and_reproducible(self) -> None:
+        first = select_scheduled_public_event(2, 7)
+        self.assertIsNotNone(first)
+        self.assertEqual(first, select_scheduled_public_event(2, 7))
+        self.assertNotEqual(
+            first,
+            select_scheduled_public_event(2, 7, version="stage26-candidate-pool-v2"),
+        )
+        self.assertGreater(
+            len({select_scheduled_public_event(2, seed).event_key for seed in range(1, 32)}),
+            1,
+        )
+        self.assertGreater(
+            len({select_scheduled_public_event(day, 7).event_key for day in range(2, 13)}),
+            1,
+        )
+        self.assertEqual(
+            SCHEDULED_PUBLIC_EVENT_VERSION,
+            "stage26-candidate-pool-v1",
+        )
 
     def test_scheduled_catalogue_covers_days_two_to_twelve_with_valid_unique_events(self) -> None:
         self.assertEqual(set(_SCHEDULED_PUBLIC_EVENTS), set(range(2, 13)))
+        self.assertTrue(all(len(events) >= 3 for events in _SCHEDULED_PUBLIC_EVENTS.values()))
         events = [
             event
             for day_events in _SCHEDULED_PUBLIC_EVENTS.values()
@@ -147,7 +177,7 @@ class WorldEventTests(unittest.TestCase):
             self.assertEqual(feed["world_day"], 3)
             self.assertEqual(
                 [item["event_key"] for item in feed["items"]],
-                ["night_maintenance_window_day_3"],
+                [select_scheduled_public_event(3, 7).event_key],
             )
             self.assertEqual(
                 [
@@ -155,7 +185,7 @@ class WorldEventTests(unittest.TestCase):
                     for event in source_events
                     if event["event_type"] == "public_world_event"
                 ],
-                ["night_maintenance_window_day_3"],
+                [select_scheduled_public_event(3, 7).event_key],
             )
 
     def test_first_day_uses_code_owned_fixed_tablet_articles(self) -> None:
