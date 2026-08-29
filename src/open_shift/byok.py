@@ -41,11 +41,23 @@ from .models import (
     DecisionContext,
     GoalStatus,
 )
+from .world_events import (
+    PUBLIC_WORLD_EVENT_OUTPUT_SCHEMA,
+    PublicWorldEvent,
+    validate_public_world_event_candidates,
+)
 
 
 MAX_RESPONSE_BYTES = 1_000_000
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+_WORLD_EVENT_SYSTEM_INSTRUCTION = """You propose public background events for an ongoing fictional city.
+Return JSON only in the exact form {\"events\":[...]} with one to three events.
+Events must be concise, plausible, non-sensitive city facts that can motivate
+conversation. Do not include dialogue, instructions, secrets, world mutations,
+or claims about information not present in the input. Use only the listed
+categories and character ids. The host validates every field before persistence."""
 
 
 class APIProtocol(str, Enum):
@@ -150,7 +162,7 @@ class BYOKConfig:
             return self
         effective = (
             ThinkingMode.ENABLED
-            if operation in {"action", "story_graph"}
+            if operation in {"action", "story_graph", "world_events", "world_event_candidates"}
             else ThinkingMode.DISABLED
         )
         return replace(self, thinking_mode=effective)
@@ -373,6 +385,58 @@ def _responses_payload(config: BYOKConfig, context: DecisionContext) -> dict[str
         ),
         "text": {"format": output_format},
     }
+
+
+def _world_event_responses_payload(
+    config: BYOKConfig, day: int, context: Mapping[str, Any]
+) -> dict[str, Any]:
+    output_format: dict[str, Any]
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        output_format = {"type": "json_object"}
+    else:
+        output_format = {
+            "type": "json_schema",
+            "name": "public_world_event_candidates",
+            "strict": True,
+            "schema": PUBLIC_WORLD_EVENT_OUTPUT_SCHEMA,
+        }
+    observation = {"day": day, **dict(context)}
+    return {
+        "model": config.model,
+        "instructions": _WORLD_EVENT_SYSTEM_INSTRUCTION,
+        "input": json.dumps(observation, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        "text": {"format": output_format},
+    }
+
+
+def _world_event_chat_payload(
+    config: BYOKConfig, day: int, context: Mapping[str, Any]
+) -> dict[str, Any]:
+    observation = {"day": day, **dict(context)}
+    payload: dict[str, Any] = {
+        "model": config.model,
+        "max_tokens": 1200,
+        "messages": [
+            {"role": "system", "content": _WORLD_EVENT_SYSTEM_INSTRUCTION},
+            {
+                "role": "user",
+                "content": json.dumps(observation, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            },
+        ],
+    }
+    _apply_chat_thinking(config, payload)
+    if config.response_format is ResponseFormat.JSON_OBJECT:
+        payload["response_format"] = {"type": "json_object"}
+    else:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "public_world_event_candidates",
+                "strict": True,
+                "schema": PUBLIC_WORLD_EVENT_OUTPUT_SCHEMA,
+            },
+        }
+    return payload
 
 
 def _chat_payload(config: BYOKConfig, context: DecisionContext) -> dict[str, Any]:
@@ -780,6 +844,50 @@ class BYOKProvider:
             _api_key=api_key,
             transport=transport or UrllibJsonTransport(),
         )
+
+    def generate_public_world_event_candidates(
+        self, day: int, context: Mapping[str, Any]
+    ) -> tuple[PublicWorldEvent, ...]:
+        """Ask the model for bounded public-event suggestions.
+
+        This is deliberately a proposal-only operation.  The world service
+        validates and persists the returned events; this provider never gets
+        access to a store and cannot mutate authoritative state.
+        """
+
+        if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+            raise BYOKValidationError("world event day must be a positive integer")
+        if not isinstance(context, Mapping):
+            raise BYOKValidationError("world event context must be an object")
+        operation_config = self.config.for_operation("world_events")
+        payload = (
+            _world_event_responses_payload(operation_config, day, context)
+            if operation_config.protocol is APIProtocol.RESPONSES
+            else _world_event_chat_payload(operation_config, day, context)
+        )
+        response = self._request(
+            payload,
+            operation="world_event_candidates",
+            thinking_mode=operation_config.thinking_mode,
+        )
+        raw = (
+            _extract_responses_output(response)
+            if operation_config.protocol is APIProtocol.RESPONSES
+            else _extract_chat_output(response)
+        )
+        value = _as_action_object(raw)
+        try:
+            return validate_public_world_event_candidates(value)
+        except (TypeError, ValueError) as exc:
+            raise BYOKValidationError(str(exc)) from None
+
+    # Short alias for providers and integrations that call these simply
+    # ``world_event`` candidates.  Keep one implementation and one budgeted
+    # request so the aliases cannot diverge.
+    def generate_world_event_candidates(
+        self, day: int, context: Mapping[str, Any]
+    ) -> tuple[PublicWorldEvent, ...]:
+        return self.generate_public_world_event_candidates(day, context)
 
     def decide(self, context: DecisionContext) -> ActionProposal:
         operation_config = self.config.for_operation("action")

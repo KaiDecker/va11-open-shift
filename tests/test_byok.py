@@ -80,6 +80,55 @@ def action_json(**overrides: Any) -> str:
 
 
 class BYOKProviderTests(unittest.TestCase):
+    def test_world_event_candidates_use_strict_structured_output(self) -> None:
+        response = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "events": [{
+                            "event_key": "district_power_check",
+                            "category": "technology",
+                            "status": "developing",
+                            "headline": "旧城区今晚进行电网检查",
+                            "summary": "供电公司提醒商户检查冷藏设备。",
+                            "affected_agents": ["dana", "sei"],
+                        }]
+                    }, ensure_ascii=False)
+                }
+            }]
+        }
+        transport = FakeTransport(response)
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret",
+            transport=transport,
+        )
+        events = provider.generate_public_world_event_candidates(3, {"allowed_agents": ["dana", "sei"]})
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_key, "district_power_check")
+        self.assertEqual(transport.calls[0]["payload"]["response_format"], {"type": "json_object"})
+        self.assertEqual(provider.calls_used, 1)
+
+    def test_world_event_candidates_reject_unknown_fields(self) -> None:
+        transport = FakeTransport({
+            "choices": [{"message": {"content": json.dumps({
+                "events": [{
+                    "event_key": "valid_event_key",
+                    "category": "city",
+                    "status": "active",
+                    "headline": "一条消息",
+                    "summary": "城市里发生了一点变化。",
+                    "affected_agents": ["alma"],
+                    "mutate_world": True,
+                }]
+            }, ensure_ascii=False)}}]
+        })
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret", transport=transport,
+        )
+        with self.assertRaises(BYOKValidationError):
+            provider.generate_public_world_event_candidates(3, {})
     def test_missing_optional_key_keeps_local_bridge_playable(self) -> None:
         args = Namespace(
             provider_base_url="https://api.deepseek.com",
