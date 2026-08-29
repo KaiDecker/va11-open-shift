@@ -50,6 +50,7 @@ from .world_events import (
     character_story_arcs_for_day,
     character_story_event,
     tablet_feed_item,
+    validate_public_world_event_candidates,
 )
 from .story_graph import (
     DAILY_STORY_GRAPH_VERSION,
@@ -123,6 +124,7 @@ class NarrativePerspective:
             raise ValueError("narrative perspective field was too long")
 
 SCHEDULED_PUBLIC_EVENT_VERSION = "stage26-candidate-pool-v1"
+LLM_PUBLIC_EVENT_VERSION = "stage27-llm-candidate-v1"
 
 _SCHEDULED_PUBLIC_EVENTS: dict[int, tuple[PublicWorldEvent, ...]] = {
     2: (
@@ -770,7 +772,190 @@ class WorldSceneService:
                 )
             return event_id
 
-    def _ensure_scheduled_public_event(self, store: WorldStore) -> None:
+    def _world_event_generation_context(
+        self, store: WorldStore, day: int
+    ) -> dict[str, Any]:
+        """Build a small, non-secret observation for an optional provider."""
+
+        recent: list[dict[str, Any]] = []
+        for record in store.list_events()[-16:]:
+            if record.get("event_type") not in {"public_world_event", "character_story_stage"}:
+                continue
+            payload = record.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            item = {
+                key: payload[key]
+                for key in ("event_key", "category", "status", "headline", "summary", "affected_agents")
+                if key in payload
+            }
+            if item:
+                recent.append(item)
+        return {
+            "day": day,
+            "world_seed": int(
+                store.get_meta("world_seed", str(self.seed)) or self.seed
+            ),
+            "allowed_categories": sorted(
+                {"city", "security", "technology", "health", "culture", "economy", "local"}
+            ),
+            "allowed_agents": list(_AGENT_IDS),
+            "recent_events": recent[-8:],
+        }
+
+    def _ensure_llm_public_event(
+        self,
+        store: WorldStore,
+        day: int,
+        provider: Any,
+    ) -> bool:
+        """Try one provider proposal and atomically persist its selection.
+
+        Returns ``True`` only when an LLM candidate set is already persisted
+        or was accepted now.  Every failure is intentionally converted to a
+        caller-visible timing record and ``False`` so the code-owned pool can
+        keep the day playable.
+        """
+
+        method = getattr(provider, "generate_world_event_candidates", None)
+        if not callable(method):
+            method = getattr(provider, "generate_public_world_event_candidates", None)
+        if not callable(method):
+            return False
+        attempt_key = f"llm_public_event_attempt:{day}"
+        prior_attempt = store.get_meta(attempt_key)
+        if prior_attempt is not None:
+            try:
+                attempt = json.loads(prior_attempt)
+                if isinstance(attempt, Mapping):
+                    if attempt.get("status") == "fallback":
+                        return False
+                    if attempt.get("status") == "accepted":
+                        return True
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+        selection_key = f"llm_public_event_selection:{day}"
+        candidates_key = f"llm_public_event_candidates:{day}"
+        selection_payload = store.get_meta(selection_key)
+        if selection_payload is not None:
+            try:
+                selection = json.loads(selection_payload)
+                if isinstance(selection, Mapping) and selection.get("event_id"):
+                    return True
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+
+        started = monotonic_seconds()
+        emit_timing("world_event_generation_start", day=day)
+        try:
+            raw = method(day, self._world_event_generation_context(store, day))
+            candidates = validate_public_world_event_candidates(raw)
+            existing_keys = {
+                str(event.get("payload", {}).get("event_key"))
+                for event in store.list_events()
+                if event.get("event_type") == "public_world_event"
+                and isinstance(event.get("payload"), Mapping)
+            }
+            if any(event.event_key in existing_keys for event in candidates):
+                raise ValueError("world event candidate key was already persisted")
+            raw_seed = store.get_meta("world_seed")
+            world_seed = int(raw_seed) if raw_seed is not None else int(self.seed)
+            digest = hashlib.blake2b(
+                f"{world_seed}:{day}:{LLM_PUBLIC_EVENT_VERSION}".encode(),
+                digest_size=8,
+            ).digest()
+            selected = candidates[int.from_bytes(digest, "big") % len(candidates)]
+            candidates_record = {
+                "day": day,
+                "seed": world_seed,
+                "version": LLM_PUBLIC_EVENT_VERSION,
+                "candidates": [event.to_dict() for event in candidates],
+                "selected_event_key": selected.event_key,
+            }
+            with store.transaction():
+                # A concurrent retry may have completed while the provider
+                # request was in flight; retain that durable result.
+                prior = store.get_meta(selection_key)
+                if prior is not None:
+                    return True
+                if raw_seed is None:
+                    store.set_meta("world_seed", str(world_seed))
+                event_id = store.append_event(
+                    store.current_tick,
+                    "public_world_event",
+                    selected.affected_agents[0] if selected.affected_agents else None,
+                    selected.affected_agents[1] if len(selected.affected_agents) > 1 else None,
+                    payload=selected.to_dict(),
+                )
+                store.set_meta(
+                    candidates_key,
+                    json.dumps(candidates_record, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+                )
+                store.set_meta(
+                    selection_key,
+                    json.dumps(
+                        {
+                            "day": day,
+                            "event_id": event_id,
+                            "event_key": selected.event_key,
+                            "seed": world_seed,
+                            "version": LLM_PUBLIC_EVENT_VERSION,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+                store.set_meta(
+                    attempt_key,
+                    json.dumps(
+                        {"day": day, "status": "accepted", "version": LLM_PUBLIC_EVENT_VERSION},
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+            emit_timing(
+                "world_event_generation_end",
+                day=day,
+                candidate_count=len(candidates),
+                selected_event_key=selected.event_key,
+                elapsed_ms=round((monotonic_seconds() - started) * 1000),
+            )
+            return True
+        except Exception as exc:
+            emit_timing(
+                "world_event_generation_error",
+                day=day,
+                elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                error_type=type(exc).__name__,
+            )
+            emit_timing(
+                "world_event_generation_fallback",
+                day=day,
+                error_type=type(exc).__name__,
+            )
+            # A failed attempt is a durable decision for this day.  This
+            # prevents repeated room refreshes from spending another API call
+            # while preserving the deterministic code-owned fallback.
+            with store.transaction():
+                store.set_meta(
+                    attempt_key,
+                    json.dumps(
+                        {
+                            "day": day,
+                            "status": "fallback",
+                            "error_type": type(exc).__name__,
+                            "version": LLM_PUBLIC_EVENT_VERSION,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+            self._report_error("world event candidate generation", exc)
+            return False
+
+    def _ensure_scheduled_public_event(
+        self, store: WorldStore, provider: Any | None = None
+    ) -> None:
         """Materialize one reproducibly selected public event for the day.
 
         The catalogue is deliberately code-owned: model output can discuss an
@@ -781,6 +966,12 @@ class WorldSceneService:
         """
 
         day = int(store.get_meta("current_story_day", "1") or 1)
+        # LLM candidates are optional.  A persisted selection always wins on
+        # retries, including calls made later by the provider-free skeleton.
+        if store.get_meta(f"llm_public_event_selection:{day}") is not None:
+            return
+        if provider is not None and self._ensure_llm_public_event(store, day, provider):
+            return
         candidates = _SCHEDULED_PUBLIC_EVENTS.get(day, ())
         if not candidates:
             return
@@ -979,7 +1170,21 @@ class WorldSceneService:
             self._release_legacy_save_gate(store)
             self._recover_unacknowledged_settlement(store)
             day_index = int(store.get_meta("current_story_day", "1") or 1)
-            self._ensure_scheduled_public_event(store)
+            # Event proposals are optional and happen once per day.  Creating
+            # a MockProvider here is harmless (it has no event method), while
+            # a BYOK provider can enrich the day's background before the
+            # provider-free skeleton records its source event ids.
+            try:
+                event_provider = self.provider_factory()
+            except BYOKError as exc:
+                event_provider = None
+                emit_timing(
+                    "world_event_generation_fallback",
+                    day=day_index,
+                    error_type=type(exc).__name__,
+                )
+                self._report_error("world event provider unavailable", exc)
+            self._ensure_scheduled_public_event(store, event_provider)
             shift_phase = store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
             last_completed_story_day = int(
                 store.get_meta("last_completed_story_day", "0") or 0

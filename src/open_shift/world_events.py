@@ -14,6 +14,49 @@ EVENT_CATEGORIES = frozenset(
 EVENT_STATUSES = frozenset({"developing", "active", "resolved"})
 EVENT_AGENTS = frozenset({"dana", "dorothy", "alma", "stella", "sei"})
 
+# This schema is intentionally kept next to ``PublicWorldEvent`` so the
+# provider and the authoritative world layer share one contract.  The model
+# may suggest facts, but it never receives a field that can mutate the world
+# directly.
+PUBLIC_WORLD_EVENT_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["events"],
+    "properties": {
+        "events": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "event_key",
+                    "category",
+                    "status",
+                    "headline",
+                    "summary",
+                    "affected_agents",
+                ],
+                "properties": {
+                    "event_key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{2,63}$"},
+                    "category": {"type": "string", "enum": sorted(EVENT_CATEGORIES)},
+                    "status": {"type": "string", "enum": sorted(EVENT_STATUSES)},
+                    "headline": {"type": "string", "minLength": 1, "maxLength": 96},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "affected_agents": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": len(EVENT_AGENTS),
+                        "uniqueItems": True,
+                        "items": {"type": "string", "enum": sorted(EVENT_AGENTS)},
+                    },
+                },
+            },
+        }
+    },
+}
+
 
 @dataclass(frozen=True, slots=True)
 class CharacterStoryStage:
@@ -154,6 +197,38 @@ class PublicWorldEvent:
             value["summary"],
             tuple(agents),
         )
+
+
+def validate_public_world_event_candidates(value: Any) -> tuple[PublicWorldEvent, ...]:
+    """Parse the provider's bounded event list without mutating world state.
+
+    The provider contract is an object containing exactly one ``events``
+    array.  Accepting already parsed ``PublicWorldEvent`` instances keeps the
+    boundary convenient for deterministic test providers, while mappings are
+    still passed through the same strict event validator.
+    """
+
+    if isinstance(value, Mapping):
+        if set(value) != {"events"}:
+            raise ValueError("world event candidate fields did not match the schema")
+        value = value["events"]
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("world event candidates must be an array")
+    if not 1 <= len(value) <= 3:
+        raise ValueError("world event candidates must contain between 1 and 3 events")
+    result: list[PublicWorldEvent] = []
+    seen_keys: set[str] = set()
+    for item in value:
+        event = item if isinstance(item, PublicWorldEvent) else PublicWorldEvent.from_dict(item) if isinstance(item, Mapping) else None
+        if event is None:
+            raise ValueError("world event candidate was not an object")
+        if not event.affected_agents:
+            raise ValueError("world event candidate affected_agents was empty")
+        if event.event_key in seen_keys:
+            raise ValueError("world event candidate keys were duplicated")
+        seen_keys.add(event.event_key)
+        result.append(event)
+    return tuple(result)
 
 
 def tablet_feed_item(event_id: int, tick: int, event: PublicWorldEvent) -> dict[str, Any]:

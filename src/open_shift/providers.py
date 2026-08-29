@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Protocol
+from typing import Any, Protocol
+
+from .world_events import PublicWorldEvent
 
 from .dialogue import (
     DialogueLineDraft,
@@ -31,6 +33,23 @@ class DialogueProvider(Protocol):
     ) -> DialogueLineDraft:
         ...
 
+
+class WorldEventProvider(Protocol):
+    """Optional proposal interface for public city-event candidates.
+
+    Providers that do not implement this interface remain fully compatible;
+    the world service then uses its deterministic code-owned event pool.
+    """
+
+    def generate_public_world_event_candidates(
+        self, day: int, context: dict[str, Any]
+    ) -> tuple[PublicWorldEvent, ...]:
+        ...
+
+    def generate_world_event_candidates(
+        self, day: int, context: dict[str, Any]
+    ) -> tuple[PublicWorldEvent, ...]:
+        ...
 
 class MockProvider:
     """Deterministic policy used for tests and headless simulation."""
