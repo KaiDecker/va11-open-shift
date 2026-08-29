@@ -27,7 +27,7 @@ from open_shift.story_graph import (
     StoryNodeKind,
 )
 from open_shift.world_bridge import WorldSceneService
-from open_shift.world_events import CODE_OWNED_DAY_ONE_EVENTS
+from open_shift.world_events import CODE_OWNED_DAY_ONE_EVENTS, PublicWorldEvent
 
 
 class RecordingProvider:
@@ -64,6 +64,49 @@ class RecordingProvider:
 
 
 class DailyStoryGraphTests(unittest.TestCase):
+    def test_selected_public_event_is_joined_to_character_dialogue_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(path, advance_minutes=0)
+            service.publish_public_world_event(
+                PublicWorldEvent(
+                    "day_one_public_transit",
+                    "city",
+                    "active",
+                    "夜班电车临时改道",
+                    "施工让末班车绕开旧城区。",
+                    ("alma", "sei"),
+                )
+            )
+            graph = service.prepare_daily_story_skeleton(1)
+            topics = [
+                node.topic
+                for node in graph.nodes
+                if node.kind is StoryNodeKind.ARRIVAL_ORDER
+            ]
+            self.assertTrue(topics)
+            self.assertTrue(any("夜班电车临时改道" in topic for topic in topics))
+
+    def test_dialogue_transcript_receipt_is_idempotent_without_ack_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(path, advance_minutes=0)
+            lines = [{"line_id": "line_1", "speaker_id": "alma", "text": "听说电车改道了。"}]
+            with WorldStore(path) as store, store.transaction():
+                service._persist_dialogue_transcript(
+                    store, story_day=1, scene_id="day_1_customer_1_order", lines=lines
+                )
+                service._persist_dialogue_transcript(
+                    store, story_day=1, scene_id="day_1_customer_1_order", lines=lines
+                )
+                records = [
+                    event
+                    for event in store.list_events()
+                    if event["event_type"] == "dialogue_transcript"
+                ]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["payload"]["lines"], lines)
+
     def test_day_one_narrative_perspectives_are_personal_and_actionable(self) -> None:
         names = {"alma": "Alma", "stella": "Stella", "dorothy": "Dorothy"}
         events = [
