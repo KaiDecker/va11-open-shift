@@ -13,6 +13,7 @@ from open_shift.world_bridge import (
     WorldSceneService,
     select_scheduled_public_event,
 )
+from open_shift.store import WorldStore
 from open_shift.world_events import (
     CHARACTER_STORY_ARCS,
     EVENT_AGENTS,
@@ -63,6 +64,114 @@ class WorldEventTests(unittest.TestCase):
             )
             self.assertIn("市中心交通线路临时调整", premise)
             self.assertIn("公共交通", premise)
+
+    def test_supported_provider_candidates_are_persisted_and_replayed(self) -> None:
+        event = PublicWorldEvent(
+            "llm_transit_update",
+            "city",
+            "active",
+            "夜班公交临时改道",
+            "施工让夜班公交今晚绕开酒吧所在街区。",
+            ("alma", "stella"),
+        )
+
+        class CandidateProvider(MockProvider):
+            calls = 0
+
+            def generate_public_world_event_candidates(self, day, context):
+                type(self).calls += 1
+                return (event,)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                path, provider_factory=CandidateProvider, advance_minutes=0
+            )
+            with WorldStore(path) as store:
+                store.set_meta("current_story_day", "2")
+            service.prepare_story_day({"request_id": "candidate-1"})
+            service.prepare_story_day({"request_id": "candidate-2"})
+            with WorldStore(path) as store:
+                self.assertEqual(CandidateProvider.calls, 1)
+                receipt = json.loads(store.get_meta("llm_public_event_candidates:2"))
+                selection = json.loads(store.get_meta("llm_public_event_selection:2"))
+                self.assertEqual(receipt["candidates"][0]["event_key"], event.event_key)
+                self.assertEqual(selection["event_key"], event.event_key)
+                records = [item for item in store.list_events() if item["event_type"] == "public_world_event"]
+                self.assertEqual(len(records), 1)
+
+    def test_supported_provider_can_persist_day_thirteen_candidates(self) -> None:
+        event = PublicWorldEvent(
+            "llm_day_13_transit",
+            "city",
+            "developing",
+            "凌晨线路临时调整",
+            "运营方把一条凌晨线路改到旧城区，预计只持续几天。",
+            ("alma", "sei"),
+        )
+
+        class CandidateProvider(MockProvider):
+            calls = 0
+
+            def generate_world_event_candidates(self, day, context):
+                type(self).calls += 1
+                return (event,)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                path, provider_factory=CandidateProvider, advance_minutes=0
+            )
+            with WorldStore(path) as store:
+                store.set_meta("current_story_day", "13")
+            service.prepare_story_day({"request_id": "day-13-1"})
+            service.prepare_story_day({"request_id": "day-13-2"})
+            with WorldStore(path) as store:
+                self.assertEqual(CandidateProvider.calls, 1)
+                candidates = json.loads(
+                    store.get_meta("llm_public_event_candidates:13")
+                )
+                selection = json.loads(
+                    store.get_meta("llm_public_event_selection:13")
+                )
+                self.assertEqual(
+                    candidates["candidates"][0]["event_key"], event.event_key
+                )
+                self.assertEqual(selection["event_key"], event.event_key)
+                records = [
+                    item
+                    for item in store.list_events()
+                    if item["event_type"] == "public_world_event"
+                ]
+                self.assertEqual(len(records), 1)
+
+    def test_invalid_provider_candidates_fall_back_to_code_pool(self) -> None:
+        class InvalidProvider(MockProvider):
+            calls = 0
+
+            def generate_public_world_event_candidates(self, day, context):
+                type(self).calls += 1
+                return [{"events": []}]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(
+                path, provider_factory=InvalidProvider, advance_minutes=0
+            )
+            with WorldStore(path) as store:
+                store.set_meta("current_story_day", "2")
+            service.prepare_story_day({"request_id": "fallback-1"})
+            service.prepare_story_day({"request_id": "fallback-2"})
+            with WorldStore(path) as store:
+                self.assertEqual(InvalidProvider.calls, 1)
+                self.assertIsNone(store.get_meta("llm_public_event_selection:2"))
+                self.assertEqual(
+                    json.loads(store.get_meta("llm_public_event_attempt:2"))["status"],
+                    "fallback",
+                )
+                self.assertIsNotNone(store.get_meta("scheduled_public_event_selection:2"))
+                records = [item for item in store.list_events() if item["event_type"] == "public_world_event"]
+                self.assertEqual(len(records), 1)
 
     def test_reusing_world_event_key_with_changed_content_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
