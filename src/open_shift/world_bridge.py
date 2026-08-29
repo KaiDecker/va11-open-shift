@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -121,32 +122,324 @@ class NarrativePerspective:
         if any(len(value) > 240 for value in fields):
             raise ValueError("narrative perspective field was too long")
 
+SCHEDULED_PUBLIC_EVENT_VERSION = "stage26-candidate-pool-v1"
+
 _SCHEDULED_PUBLIC_EVENTS: dict[int, tuple[PublicWorldEvent, ...]] = {
-    2: (PublicWorldEvent(
+    2: (
+        PublicWorldEvent(
         "city_transit_day_2",
         "city",
         "developing",
         "市中心交通线路临时调整",
         "施工封闭让两条常用线路绕开酒吧附近街区，预计几天内逐步恢复。",
         ("alma", "stella"),
-    ),),
-    4: (PublicWorldEvent(
+        ),
+        PublicWorldEvent(
+            "rainfall_day_2",
+            "local",
+            "active",
+            "今晚的雨势比预报更早抵达",
+            "气象台上调了降雨提醒，低洼路段的积水可能让晚归的人多花一点时间。",
+            ("dorothy", "alma"),
+        ),
+        PublicWorldEvent(
+            "night_market_setup_day_2",
+            "economy",
+            "developing",
+            "夜市摊位开始试着延长营业",
+            "几家摊主把收摊时间往后推，想看看这座城市的夜晚能不能再热闹一会儿。",
+            ("dana", "sei"),
+        ),
+    ),
+    3: (
+        PublicWorldEvent(
+        "night_maintenance_window_day_3",
+        "city",
+        "active",
+        "市政维修调整至深夜",
+        "维修队调整施工时段，酒吧附近街道今晚会短时封闭，清晨前恢复通行。",
+        ("dorothy", "dana"),
+        ),
+        PublicWorldEvent(
+            "district_power_check_day_3",
+            "technology",
+            "developing",
+            "旧城区今晚进行电网检查",
+            "供电公司提醒居民可能遇到短暂降压，商户被建议提前检查冷藏设备。",
+            ("dana", "sei"),
+        ),
+        PublicWorldEvent(
+            "late_bus_detour_day_3",
+            "city",
+            "resolved",
+            "夜班公交恢复绕行班次",
+            "临时施工让夜班公交换了路线，运营方说新的站点安排今晚已经稳定下来。",
+            ("alma", "stella"),
+        ),
+    ),
+    4: (
+        PublicWorldEvent(
         "apollo_trust_day_4",
         "economy",
         "active",
         "Apollo Trust 发布新的账户审查通知",
         "银行要求部分客户重新确认身份资料，街区里的小商户开始讨论影响。",
         ("dana", "sei"),
-    ),),
-    7: (PublicWorldEvent(
+        ),
+        PublicWorldEvent(
+            "corporate_payroll_delay_day_4",
+            "economy",
+            "developing",
+            "几家公司的工资到账出现延迟",
+            "财务系统的批次处理比平时慢，员工开始互相确认是不是只有自己的账户出了问题。",
+            ("sei", "dana"),
+        ),
+        PublicWorldEvent(
+            "identity_kiosk_update_day_4",
+            "technology",
+            "resolved",
+            "身份确认终端完成夜间更新",
+            "街区服务终端换上了新的验证程序，运营方称旧资料不会因此消失。",
+            ("alma", "dorothy"),
+        ),
+    ),
+    5: (
+        PublicWorldEvent(
+        "station_exit_reopened_day_5",
+        "city",
+        "resolved",
+        "轨道站重新开放备用出口",
+        "维修提前完成，通往旧城区的备用出口恢复使用，晚间人流逐渐回到原来的路线。",
+        ("alma", "sei"),
+        ),
+        PublicWorldEvent(
+            "station_lost_property_day_5",
+            "local",
+            "developing",
+            "轨道站开始寻找一批失物的主人",
+            "工作人员在维修区域整理出几件无人认领的物品，失物招领窗口今晚延长了时间。",
+            ("dorothy", "alma"),
+        ),
+        PublicWorldEvent(
+            "old_town_freight_day_5",
+            "city",
+            "active",
+            "旧城区夜间货运改走新入口",
+            "备用出口恢复后，商户的补货路线也跟着调整，晚间街道比前几天更拥挤。",
+            ("dana", "sei"),
+        ),
+    ),
+    6: (
+        PublicWorldEvent(
+        "clinic_night_hours_day_6",
+        "health",
+        "developing",
+        "街区诊所试行夜间接诊",
+        "附近诊所从今晚起延长接诊时间，居民无需预约也能处理普通的纳米机不适。",
+        ("dorothy", "alma"),
+        ),
+        PublicWorldEvent(
+            "clinic_waiting_list_day_6",
+            "health",
+            "active",
+            "夜间门诊的等候名单变长",
+            "延长营业后的第一晚来了不少临时求诊的人，诊所提醒大家准备好基本病历。",
+            ("dorothy", "stella"),
+        ),
+        PublicWorldEvent(
+            "pharmacy_stock_check_day_6",
+            "health",
+            "resolved",
+            "街区药房重新盘点常用药品",
+            "几种常用的纳米机护理用品补货完成，药房建议居民别在最后一刻才来购买。",
+            ("alma", "dana"),
+        ),
+    ),
+    7: (
+        PublicWorldEvent(
         "lilim_health_day_7",
         "health",
         "developing",
         "诊所报告纳米机排斥反应增加",
         "几家诊所同时提醒居民留意新一批症状，官方仍在核对原因。",
         ("dorothy", "alma"),
-    ),),
+        ),
+        PublicWorldEvent(
+            "lilim_followup_day_7",
+            "health",
+            "active",
+            "诊所开始回访近期更换装置的居民",
+            "医护人员逐一确认近期症状，官方还没有把变化归因到某一种具体型号。",
+            ("dorothy", "sei"),
+        ),
+        PublicWorldEvent(
+            "night_pharmacy_notice_day_7",
+            "health",
+            "resolved",
+            "药房贴出新的护理提醒",
+            "药房把常见的不适和需要尽快就医的情况分开说明，夜班店员也准备回答问题。",
+            ("alma", "stella"),
+        ),
+    ),
+    8: (
+        PublicWorldEvent(
+        "radio_station_return_day_8",
+        "culture",
+        "developing",
+        "旧城区电台恢复短时播报",
+        "电台修复发射设备后恢复夜间节目，暂时只播报社区通知和交通消息。",
+        ("stella", "dana"),
+        ),
+        PublicWorldEvent(
+            "community_broadcast_day_8",
+            "culture",
+            "active",
+            "社区电台征集夜间节目建议",
+            "恢复播报的电台收到不少听众留言，主持人决定先从本地消息和旧歌单开始。",
+            ("stella", "dorothy"),
+        ),
+        PublicWorldEvent(
+            "radio_repair_credit_day_8",
+            "technology",
+            "resolved",
+            "电台公开致谢维修志愿者",
+            "发射设备修复后，电台向帮忙排查线路的志愿者致谢，旧城区又听见了熟悉的信号。",
+            ("dana", "sei"),
+        ),
+    ),
+    9: (
+        PublicWorldEvent(
+        "vending_network_glitch_day_9",
+        "technology",
+        "active",
+        "自动售货网络出现短暂故障",
+        "多处终端无法完成小额支付，运营方表示正在回滚昨晚的系统更新。",
+        ("sei", "dorothy"),
+        ),
+        PublicWorldEvent(
+            "vending_refund_queue_day_9",
+            "technology",
+            "developing",
+            "自动售货机开始处理重复扣款",
+            "运营方开放了线上退款登记，几家店的顾客还在核对自己的付款记录。",
+            ("sei", "alma"),
+        ),
+        PublicWorldEvent(
+            "corner_terminal_manual_day_9",
+            "local",
+            "resolved",
+            "街角商户暂时改用人工收款",
+            "支付网络恢复前，几家小店把零钱盒重新放回柜台，交易速度慢了一些。",
+            ("dana", "dorothy"),
+        ),
+    ),
+    10: (
+        PublicWorldEvent(
+        "night_market_late_hours_day_10",
+        "economy",
+        "active",
+        "夜间市场试行延长营业",
+        "市场管理方把关门时间推迟一小时，摊主将根据客流决定是否长期保留。",
+        ("dana", "alma"),
+        ),
+        PublicWorldEvent(
+            "night_market_vendor_vote_day_10",
+            "economy",
+            "developing",
+            "夜市摊主开始讨论新的收摊时间",
+            "延长营业让客流变多，也让补货和回家时间变得更难安排，摊主准备投票决定是否继续。",
+            ("dana", "stella"),
+        ),
+        PublicWorldEvent(
+            "late_market_cleanup_day_10",
+            "local",
+            "active",
+            "夜市加派了收摊后的清洁班次",
+            "市场管理方试着解决延长营业带来的垃圾和噪音问题，附近居民正在观察效果。",
+            ("alma", "dorothy"),
+        ),
+    ),
+    11: (
+        PublicWorldEvent(
+        "district_safety_notice_day_11",
+        "security",
+        "developing",
+        "治安部门发布夜间出行提醒",
+        "公告建议居民避开几处临时施工路段，巡逻队将在收摊时段增加巡查。",
+        ("stella", "sei"),
+        ),
+        PublicWorldEvent(
+            "district_patrol_shift_day_11",
+            "security",
+            "active",
+            "巡逻队调整了旧城区的夜间班次",
+            "新的班次覆盖了几条人流较少的街道，商户收到通知后开始重新安排打烊时间。",
+            ("sei", "dana"),
+        ),
+        PublicWorldEvent(
+            "night_route_lighting_day_11",
+            "security",
+            "resolved",
+            "两条夜间路线换上了临时照明",
+            "施工路段的照明设备已经补齐，居民仍被建议不要在封闭区域逗留。",
+            ("stella", "alma"),
+        ),
+    ),
+    12: (
+        PublicWorldEvent(
+        "community_gallery_move_day_12",
+        "culture",
+        "resolved",
+        "社区艺术展更换临时展厅",
+        "原展厅维修期间，展品移至旧城区的小型画廊，开放时间保持不变。",
+        ("dorothy", "stella"),
+        ),
+        PublicWorldEvent(
+            "community_gallery_late_show_day_12",
+            "culture",
+            "active",
+            "社区画廊试着延长展览时间",
+            "临时展厅的空间不大，主办方却想让下班后赶来的人也能看完这次展览。",
+            ("dorothy", "alma"),
+        ),
+        PublicWorldEvent(
+            "old_town_artist_meet_day_12",
+            "culture",
+            "developing",
+            "旧城区画廊安排了小型见面会",
+            "展览搬迁后，几位参展者决定在新场地聊聊作品和这次临时改变。",
+            ("stella", "dana"),
+        ),
+    ),
 }
+
+
+def select_scheduled_public_event(
+    day: int,
+    seed: int,
+    *,
+    version: str = SCHEDULED_PUBLIC_EVENT_VERSION,
+) -> PublicWorldEvent | None:
+    """Choose one public event using a stable, versioned world seed.
+
+    Python's ``hash`` is intentionally process-randomized, so the selection
+    uses SHA-256 over the explicit version, seed, and day instead.  Keeping
+    this function pure makes event selection easy to test and replay.
+    """
+
+    if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+        raise ValueError("day must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("seed must be an integer")
+    if not isinstance(version, str) or not version:
+        raise ValueError("version must be a non-empty string")
+    candidates = _SCHEDULED_PUBLIC_EVENTS.get(day, ())
+    if not candidates:
+        return None
+    material = f"{version}\0{seed}\0{day}".encode("utf-8")
+    digest = hashlib.sha256(material).digest()
+    index = int.from_bytes(digest[:8], "big") % len(candidates)
+    return candidates[index]
 
 
 class WorldSceneService:
@@ -477,36 +770,90 @@ class WorldSceneService:
                 )
             return event_id
 
-    @staticmethod
-    def _ensure_scheduled_public_event(store: WorldStore) -> None:
-        """Commit only the bounded, deterministic public-event catalogue.
+    def _ensure_scheduled_public_event(self, store: WorldStore) -> None:
+        """Materialize one reproducibly selected public event for the day.
 
         The catalogue is deliberately code-owned: model output can discuss an
-        event but cannot invent or persist one. A per-day receipt makes retries
-        and repeated scene opens idempotent.
+        event but cannot invent or persist one.  A selection receipt and an
+        event receipt make retries and repeated scene opens idempotent.  The
+        legacy event receipt check keeps databases created before candidate
+        selection from acquiring a second event for the same day.
         """
 
         day = int(store.get_meta("current_story_day", "1") or 1)
-        events = _SCHEDULED_PUBLIC_EVENTS.get(day, ())
-        if not events:
+        candidates = _SCHEDULED_PUBLIC_EVENTS.get(day, ())
+        if not candidates:
             return
-        for event in events:
-            receipt_key = f"scheduled_public_event:{event.event_key}"
-            if store.get_meta(receipt_key) is not None:
-                continue
-            payload = event.to_dict()
-            with store.transaction():
-                event_id = store.append_event(
-                    store.current_tick,
-                    "public_world_event",
-                    event.affected_agents[0] if event.affected_agents else None,
-                    event.affected_agents[1] if len(event.affected_agents) > 1 else None,
-                    payload=payload,
-                )
+
+        selection_key = f"scheduled_public_event_selection:{day}"
+        # A phase-26 database has an event-specific receipt but no selection
+        # receipt.  Preserve any already-materialized event during upgrade.
+        # This check also prevents a partial/interrupted write from creating a
+        # second candidate if the selection receipt and event receipt diverge.
+        selected = next(
+            (
+                event
+                for event in candidates
+                if store.get_meta(f"scheduled_public_event:{event.event_key}")
+                is not None
+            ),
+            None,
+        )
+        if selected is None:
+            selection_payload = store.get_meta(selection_key)
+            if selection_payload is not None:
+                try:
+                    selection = json.loads(selection_payload)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    selection = None
+                if isinstance(selection, Mapping):
+                    event_key = selection.get("event_key")
+                    selected = next(
+                        (event for event in candidates if event.event_key == event_key),
+                        None,
+                    )
+
+        raw_seed = store.get_meta("world_seed")
+        world_seed = int(raw_seed) if raw_seed is not None else int(self.seed)
+        if selected is None:
+            selected = select_scheduled_public_event(day, world_seed)
+        if selected is None:
+            return
+
+        receipt_key = f"scheduled_public_event:{selected.event_key}"
+        selection_record = {
+            "day": day,
+            "event_key": selected.event_key,
+            "seed": world_seed,
+            "version": SCHEDULED_PUBLIC_EVENT_VERSION,
+        }
+        with store.transaction():
+            # Establish the seed before the engine is constructed.  This also
+            # makes a first preparation independent of a later service retry.
+            if raw_seed is None:
+                store.set_meta("world_seed", str(world_seed))
+            if store.get_meta(selection_key) is None:
                 store.set_meta(
-                    receipt_key,
-                    json.dumps({"event_id": event_id, "event_key": event.event_key}, separators=(",", ":"), sort_keys=True),
+                    selection_key,
+                    json.dumps(selection_record, separators=(",", ":"), sort_keys=True),
                 )
+            if store.get_meta(receipt_key) is not None:
+                return
+            event_id = store.append_event(
+                store.current_tick,
+                "public_world_event",
+                selected.affected_agents[0] if selected.affected_agents else None,
+                selected.affected_agents[1] if len(selected.affected_agents) > 1 else None,
+                payload=selected.to_dict(),
+            )
+            store.set_meta(
+                receipt_key,
+                json.dumps(
+                    {"event_id": event_id, "event_key": selected.event_key},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            )
 
     @staticmethod
     def _ensure_character_story_events(store: WorldStore, day: int) -> None:
