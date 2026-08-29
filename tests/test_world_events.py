@@ -7,9 +7,12 @@ from pathlib import Path
 
 from open_shift.bridge import BridgeApplication, BridgeConfig, BridgeError
 from open_shift.providers import MockProvider
-from open_shift.world_bridge import WorldSceneService
+from open_shift.world_bridge import _SCHEDULED_PUBLIC_EVENTS, WorldSceneService
 from open_shift.world_events import (
     CHARACTER_STORY_ARCS,
+    EVENT_AGENTS,
+    EVENT_CATEGORIES,
+    EVENT_STATUSES,
     PublicWorldEvent,
     character_story_arcs_for_day,
 )
@@ -109,6 +112,51 @@ class WorldEventTests(unittest.TestCase):
             feed = service.tablet_feed({"limit": 8})
             self.assertEqual(len(feed["items"]), 1)
             self.assertEqual(feed["items"][0]["event_key"], "city_transit_day_2")
+
+    def test_scheduled_catalogue_covers_days_two_to_twelve_with_valid_unique_events(self) -> None:
+        self.assertEqual(set(_SCHEDULED_PUBLIC_EVENTS), set(range(2, 13)))
+        events = [
+            event
+            for day_events in _SCHEDULED_PUBLIC_EVENTS.values()
+            for event in day_events
+        ]
+        self.assertEqual(len({event.event_key for event in events}), len(events))
+        self.assertTrue(all(event.category in EVENT_CATEGORIES for event in events))
+        self.assertTrue(all(event.status in EVENT_STATUSES for event in events))
+        self.assertTrue(
+            all(
+                event.affected_agents
+                and set(event.affected_agents) <= EVENT_AGENTS
+                for event in events
+            )
+        )
+
+    def test_new_scheduled_event_is_materialized_once_and_used_as_story_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(Path(temp_dir) / "world.sqlite3", advance_minutes=0)
+            with service._lock:
+                from open_shift.store import WorldStore
+
+                with WorldStore(service.db_path) as store:
+                    store.set_meta("current_story_day", "3")
+                    service._ensure_scheduled_public_event(store)
+                    service._ensure_scheduled_public_event(store)
+                    records = store.list_events()
+                    source_events = service._daily_source_events(records, 3)
+            feed = service.tablet_feed({"limit": 8})
+            self.assertEqual(feed["world_day"], 3)
+            self.assertEqual(
+                [item["event_key"] for item in feed["items"]],
+                ["night_maintenance_window_day_3"],
+            )
+            self.assertEqual(
+                [
+                    event["payload"]["event_key"]
+                    for event in source_events
+                    if event["event_type"] == "public_world_event"
+                ],
+                ["night_maintenance_window_day_3"],
+            )
 
     def test_first_day_uses_code_owned_fixed_tablet_articles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
