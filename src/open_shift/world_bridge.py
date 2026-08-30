@@ -479,6 +479,7 @@ class WorldSceneService:
         self._lock = threading.RLock()
         self._generation_lock = threading.Lock()
         self._generation_threads: dict[int, threading.Thread] = {}
+        self._generation_cancel_reports: set[int] = set()
 
     def _report_error(self, operation: str, error: Exception) -> None:
         if self.error_reporter is None:
@@ -980,7 +981,11 @@ class WorldSceneService:
             return False
 
     def _ensure_scheduled_public_event(
-        self, store: WorldStore, provider: Any | None = None
+        self,
+        store: WorldStore,
+        provider: Any | None = None,
+        *,
+        day: int | None = None,
     ) -> None:
         """Materialize one reproducibly selected public event for the day.
 
@@ -991,7 +996,10 @@ class WorldSceneService:
         selection from acquiring a second event for the same day.
         """
 
-        day = int(store.get_meta("current_story_day", "1") or 1)
+        if day is None:
+            day = int(store.get_meta("current_story_day", "1") or 1)
+        if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+            raise ValueError("day must be a positive integer")
         # LLM candidates are optional.  A persisted selection always wins on
         # retries, including calls made later by the provider-free skeleton.
         if store.get_meta(f"llm_public_event_selection:{day}") is not None:
@@ -1196,21 +1204,26 @@ class WorldSceneService:
             self._release_legacy_save_gate(store)
             self._recover_unacknowledged_settlement(store)
             day_index = int(store.get_meta("current_story_day", "1") or 1)
-            # Event proposals are optional and happen once per day.  Creating
-            # a MockProvider here is harmless (it has no event method), while
-            # a BYOK provider can enrich the day's background before the
-            # provider-free skeleton records its source event ids.
-            try:
-                event_provider = self.provider_factory()
-            except BYOKError as exc:
+            # Entering the bar must never wait for a remote provider when
+            # prefetch is enabled.  Keep the legacy synchronous path when
+            # prefetch is disabled so existing installations retain their
+            # stage-27 behaviour (including DAY13+ provider events).
+            if self.prefetch_days:
+                self._ensure_scheduled_public_event(store, day=day_index)
+            else:
                 event_provider = None
-                emit_timing(
-                    "world_event_generation_fallback",
-                    day=day_index,
-                    error_type=type(exc).__name__,
+                try:
+                    event_provider = self.provider_factory()
+                except Exception as exc:
+                    emit_timing(
+                        "world_event_generation_fallback",
+                        day=day_index,
+                        error_type=type(exc).__name__,
+                    )
+                    self._report_error("world event provider unavailable", exc)
+                self._ensure_scheduled_public_event(
+                    store, event_provider, day=day_index
                 )
-                self._report_error("world event provider unavailable", exc)
-            self._ensure_scheduled_public_event(store, event_provider)
             shift_phase = store.get_meta("shift_phase", _SHIFT_PHASE_PLAYING)
             last_completed_story_day = int(
                 store.get_meta("last_completed_story_day", "0") or 0
@@ -1224,6 +1237,8 @@ class WorldSceneService:
         # the cursor/order rules; the selected scene is materialized later by
         # the scene job worker.
         self.prepare_daily_story_skeleton(day_index)
+        if self.prefetch_days:
+            self._start_daily_story_generation(day_index + 1)
         return {
             "world_day": day_index,
             "status": "ready",
@@ -1577,7 +1592,7 @@ class WorldSceneService:
             self._engine(store, MockProvider())
             self._ensure_day_one_public_events(store, day_index)
             self._ensure_character_story_events(store, day_index)
-            self._ensure_scheduled_public_event(store)
+            self._ensure_scheduled_public_event(store, day=day_index)
             if record is None:
                 source_events = self._daily_source_events(store.list_events(), day_index)
                 if not source_events:
@@ -2444,6 +2459,8 @@ class WorldSceneService:
         started = monotonic_seconds()
         emit_timing("story_graph_start", day=day_index)
         with self._generation_lock, WorldStore(self.db_path) as store:
+            provider: Any | None = None
+            provider_error: Exception | None = None
             record = store.get_daily_story_graph(
                 day_index, DAILY_STORY_GRAPH_VERSION
             )
@@ -2470,6 +2487,22 @@ class WorldSceneService:
                 self._engine(store, MockProvider())
                 self._ensure_day_one_public_events(store, day_index)
                 self._ensure_character_story_events(store, day_index)
+                # Materialize the day's provider event before taking the
+                # source-event snapshot.  Otherwise a freshly generated LLM
+                # event would be persisted too late to appear in the graph.
+                try:
+                    provider = self.provider_factory()
+                except Exception as exc:
+                    provider_error = exc
+                    emit_timing(
+                        "world_event_generation_fallback",
+                        day=day_index,
+                        error_type=type(exc).__name__,
+                    )
+                    self._report_error("world event provider unavailable", exc)
+                    if self.prefetch_days == 1 and self.allow_provider_fallback:
+                        provider = MockProvider()
+                self._ensure_scheduled_public_event(store, provider, day=day_index)
                 source_events = self._daily_source_events(store.list_events(), day_index)
                 if not source_events:
                     raise ValueError("world did not contain a story source event")
@@ -2488,7 +2521,19 @@ class WorldSceneService:
                 source_event_ids,
             )
             try:
-                provider = self.provider_factory()
+                if provider_error is not None and not (
+                    self.prefetch_days == 1 and self.allow_provider_fallback
+                ):
+                    raise provider_error
+                if provider is None:
+                    provider = self.provider_factory()
+                # A prefetched graph owns its future day's public event.  Do
+                # this only after obtaining the provider so an LLM candidate
+                # request is confined to the daemon worker, never today's
+                # prepare request.
+                self._ensure_scheduled_public_event(
+                    store, provider, day=day_index
+                )
                 engine = self._engine(store, provider)
                 source_events = tuple(
                     self._find_event(store, event_id)
@@ -2922,23 +2967,73 @@ class WorldSceneService:
         )
 
     def _start_daily_story_generation(self, day_index: int) -> None:
-        existing = self._generation_threads.get(day_index)
-        if existing is not None and existing.is_alive():
+        if self.prefetch_days != 1:
             return
 
         def generate() -> None:
+            started = monotonic_seconds()
             try:
-                self.prepare_daily_story_graph(day_index)
-            except Exception:
-                return
+                graph = self.prepare_daily_story_graph(day_index)
+                with WorldStore(self.db_path) as store:
+                    attempt = store.get_meta(f"llm_public_event_attempt:{day_index}")
+                    used_fallback = False
+                    if attempt is not None:
+                        try:
+                            used_fallback = (
+                                json.loads(attempt).get("status") == "fallback"
+                            )
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            pass
+                    status = "fallback" if used_fallback else "ready"
+                    with store.transaction():
+                        store.set_meta(
+                            f"background_generation:{day_index}",
+                            json.dumps(
+                                {
+                                    "day": day_index,
+                                    "status": status,
+                                    "generation_version": DAILY_STORY_GRAPH_VERSION,
+                                },
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                        )
+                emit_timing(
+                    "background_generation_fallback" if used_fallback else "background_generation_ready",
+                    day=day_index,
+                    node_count=len(graph.nodes),
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                )
+            except Exception as exc:
+                # The worker is intentionally daemonized.  A provider request
+                # cannot be force-cancelled safely; if it outlives process
+                # shutdown its result is simply not observed by the client.
+                emit_timing(
+                    "background_generation_error",
+                    day=day_index,
+                    error_type=type(exc).__name__,
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                )
+                self._report_error("background daily story generation", exc)
+            finally:
+                with self._generation_lock:
+                    current = self._generation_threads.get(day_index)
+                    if current is threading.current_thread():
+                        self._generation_threads.pop(day_index, None)
+                    self._generation_cancel_reports.discard(day_index)
 
         worker = threading.Thread(
             target=generate,
             name=f"open-shift-story-day-{day_index}",
             daemon=True,
         )
-        self._generation_threads[day_index] = worker
-        worker.start()
+        with self._generation_lock:
+            existing = self._generation_threads.get(day_index)
+            if existing is not None and existing.is_alive():
+                return
+            emit_timing("background_generation_start", day=day_index)
+            self._generation_threads[day_index] = worker
+            worker.start()
 
     def wait_for_background_generation(self, timeout_seconds: float = 5.0) -> None:
         """Wait for currently scheduled graph workers, primarily for clean shutdown."""
@@ -2946,9 +3041,21 @@ class WorldSceneService:
         if timeout_seconds < 0:
             raise ValueError("timeout_seconds must be non-negative")
         deadline = time.monotonic() + timeout_seconds
-        for worker in tuple(self._generation_threads.values()):
+        for day_index, worker in tuple(self._generation_threads.items()):
             remaining = max(0.0, deadline - time.monotonic())
             worker.join(remaining)
+            if worker.is_alive() and day_index not in self._generation_cancel_reports:
+                # Python cannot safely interrupt an urllib request in a
+                # worker.  Report the timeout as a cancellation request only;
+                # the daemon worker may finish later and its durable result is
+                # still protected by the normal idempotent receipts.
+                emit_timing(
+                    "background_generation_cancel",
+                    day=day_index,
+                    reason="wait_timeout",
+                    force_cancelled=False,
+                )
+                self._generation_cancel_reports.add(day_index)
 
     @staticmethod
     def _persist_ambient_request(
