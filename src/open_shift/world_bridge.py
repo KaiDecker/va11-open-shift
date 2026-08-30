@@ -1829,10 +1829,15 @@ class WorldSceneService:
         event_topic = perspective.event_topic
         personal_stake = perspective.personal_stake
         unresolved_question = perspective.unresolved_question
+        customer_decision_context = engine.context_for_agent(current_tick, customer)
+        memory_hint = self._dialogue_memory_hint(customer_decision_context)
         premise = (
             f"营业中的事件：{event_topic} "
             f"个人利害：{personal_stake}。"
         )
+        if memory_hint:
+            premise += f" 角色记得：{memory_hint}。"
+        premise = premise[:220]
         unresolved_threads = (unresolved_question, "顾客还没有说出下一步打算")
         direction_kwargs = {
             "unresolved_threads": unresolved_threads,
@@ -1849,7 +1854,7 @@ class WorldSceneService:
                 turn_index,
                 turn_count,
                 premise,
-                engine.context_for_agent(current_tick, customer),
+                customer_decision_context,
                 public_participants,
                 tuple(transcript),
                 None,
@@ -2100,12 +2105,19 @@ class WorldSceneService:
             unresolved_question or "刚才谈到的事情还没有结论",
             personal_stake or "这件事对顾客今晚的选择仍有影响",
         )
+        customer_decision_context = engine.context_for_agent(
+            current_tick, order.customer_id
+        )
+        memory_hint = self._dialogue_memory_hint(customer_decision_context)
+        if memory_hint:
+            premise += f" 角色记得：{memory_hint}。"
+        premise = premise[:220]
         customer_context = DialogueTurnContext(
             scene_id,
             0,
             3,
             premise,
-            engine.context_for_agent(current_tick, order.customer_id),
+            customer_decision_context,
             participants,
             (),
             result,
@@ -2646,6 +2658,41 @@ class WorldSceneService:
         merged_payload["public_world_event_context"] = context
         copy["payload"] = merged_payload
         return copy
+
+    @staticmethod
+    def _dialogue_memory_hint(
+        context: Any,
+        *,
+        max_items: int = 3,
+        max_chars: int = 360,
+    ) -> str:
+        """Format a small private-memory cue for one character's prompt.
+
+        Memories are already retrieved by ``SimulationEngine`` with the
+        character's visibility and time bounds.  This helper only formats
+        those records; it never broadens access or changes authoritative
+        state.  Keeping the hint bounded prevents old dialogue from crowding
+        out the current event and order.
+        """
+
+        memories = getattr(context, "memories", ())
+        if not memories:
+            return ""
+        parts: list[str] = []
+        for memory in memories[:max_items]:
+            summary = " ".join(str(getattr(memory, "summary", "")).split()).strip()
+            if not summary:
+                continue
+            source = str(getattr(memory, "source_type", "direct"))
+            qualifier = {
+                "direct": "我亲自经历过",
+                "heard": "我听人提过",
+                "rumor": "我听过传闻",
+                "inferred": "我自己推断过",
+                "legacy": "我记得以前发生过",
+            }.get(source, "我记得")
+            parts.append(f"{qualifier}：{summary}")
+        return "；".join(parts)[:max_chars]
 
     @staticmethod
     def _dialogue_memory_summary(

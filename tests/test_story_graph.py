@@ -16,7 +16,7 @@ from open_shift.dialogue import (
 from open_shift.bridge import BridgeError
 from open_shift.byok import BYOKTransportError
 from open_shift.drinks import AlcoholRequirement, DRINK_RECIPES, DrinkOrder, ServiceCategory, ServiceResult
-from open_shift.models import DecisionContext
+from open_shift.models import DecisionContext, Memory, AgentState
 from open_shift.providers import MockProvider
 from open_shift.scenario import create_demo_world
 from open_shift.store import WorldStore
@@ -64,6 +64,25 @@ class RecordingProvider:
 
 
 class DailyStoryGraphTests(unittest.TestCase):
+    def test_dialogue_memory_hint_preserves_private_source_and_budget(self) -> None:
+        context = DecisionContext(
+            tick=1800,
+            seed=7,
+            actor=AgentState("alma", "Alma", "va11_hall_a", 100, 0.1, "steady", 480),
+            agents=(),
+            relationships=(),
+            goals=(),
+            locations=(),
+            memories=(
+                Memory(1, 1, 1200, 0.9, "她答应明早再确认路线。", ("route",), "direct", 0.95, "private"),
+                Memory(2, 2, 1300, 0.7, "有人提到诊所延长了夜间接诊。", ("clinic",), "heard", 0.8, "participants"),
+            ),
+        )
+        hint = WorldSceneService._dialogue_memory_hint(context)
+        self.assertIn("我亲自经历过：她答应明早再确认路线。", hint)
+        self.assertIn("我听人提过：有人提到诊所延长了夜间接诊。", hint)
+        self.assertLessEqual(len(hint), 360)
+
     def test_selected_public_event_is_joined_to_character_dialogue_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "world.sqlite3"
