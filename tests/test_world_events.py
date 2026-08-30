@@ -417,7 +417,10 @@ class WorldEventTests(unittest.TestCase):
             def generate_world_event_candidates(self, day, context):
                 type(self).started = True
                 type(self).calls += 1
-                time.sleep(0.25)
+                # Keep the provider deliberately slower than the assertion
+                # threshold so a loaded CI worker cannot make this test
+                # flaky while still proving prepare_story_day is non-blocking.
+                time.sleep(0.75)
                 return (
                     PublicWorldEvent(
                         "prefetched_transit_day_2",
@@ -441,7 +444,7 @@ class WorldEventTests(unittest.TestCase):
             result = service.prepare_story_day({"request_id": "prefetch-open"})
             elapsed = time.monotonic() - started
             self.assertEqual(result["status"], "ready")
-            self.assertLess(elapsed, 0.2)
+            self.assertLess(elapsed, 0.5)
             service.wait_for_background_generation(5)
             with WorldStore(service.db_path) as store:
                 self.assertEqual(BlockingProvider.calls, 1)

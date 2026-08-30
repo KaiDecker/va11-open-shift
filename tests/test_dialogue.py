@@ -55,6 +55,7 @@ from open_shift.lore import (
     SELECTED_TIMELINE_FACTS,
     CONTINUITY_FACTS,
     scene_direction_metadata,
+    scene_direction_rules,
 )
 from open_shift.models import (
     AgentState,
@@ -322,6 +323,11 @@ class DialogueContractTests(unittest.TestCase):
             self.assertTrue(all(item for item in payload["speech_cadence"]))
             self.assertTrue(all(item for item in payload["interaction_patterns"]))
 
+    def test_arrival_direction_allows_description_based_drink_requests(self) -> None:
+        rules = scene_direction_rules("arrival_order")
+        self.assertTrue(any("甜度" in rule and "冰量" in rule for rule in rules))
+        self.assertTrue(any("可执行" in rule for rule in rules))
+
     def test_output_validation_rejects_wrong_fields_and_allows_addressing_jill(self) -> None:
         context = turn_context()
         accepted = validate_dialogue_output(
@@ -345,6 +351,22 @@ class DialogueContractTests(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_dialogue_output(invalid, context)
+
+    def test_output_validation_rejects_long_verbatim_repeats(self) -> None:
+        prior = DialogueUtterance("dana", "这件事我还得再想想，不能现在决定。")
+        context = DialogueTurnContext(
+            "world_event_1",
+            2,
+            4,
+            "Dorothy 在吧台谈起了一件还没有决定的事。",
+            turn_context().speaker,
+            ("dana", "dorothy"),
+            (prior, prior),
+        )
+        with self.assertRaisesRegex(ValueError, "repeated"):
+            validate_dialogue_output(
+                {"expression_id": "neutral", "text": prior.text}, context
+            )
 
     def test_only_jill_may_claim_bartending_actions(self) -> None:
         context = turn_context()
