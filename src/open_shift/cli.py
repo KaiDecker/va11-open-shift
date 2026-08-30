@@ -48,6 +48,7 @@ from .data_delta import DataDeltaError, apply_delta, create_delta
 from .providers import MockProvider
 from .scenario import create_demo_world
 from .store import WorldStore
+from .world_diagnostics import WorldDiagnosticsError, inspect_world_database
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -59,6 +60,25 @@ def _build_parser() -> argparse.ArgumentParser:
     simulate.add_argument("--seed", type=int, default=7)
     simulate.add_argument("--fresh", action="store_true")
     simulate.add_argument("--json", action="store_true", dest="as_json")
+
+    diagnostics = subparsers.add_parser(
+        "diagnose-world",
+        aliases=["inspect-world"],
+        help="read a saved world and print a secret-free diagnostic/replay report",
+    )
+    diagnostics.add_argument("--db", type=Path, required=True)
+    diagnostics.add_argument(
+        "--day", type=int,
+        help="limit the report to one营业日 (default: include all days)",
+    )
+    diagnostics.add_argument(
+        "--timing-log", type=Path,
+        help="optional timing.log JSONL file to include",
+    )
+    diagnostics.add_argument(
+        "--dialogue-log", type=Path,
+        help="optional dialogue.log JSONL file to include",
+    )
 
     probe = subparsers.add_parser(
         "probe-provider",
@@ -270,6 +290,21 @@ def _simulate(args: argparse.Namespace) -> int:
                     f"- {agent['display_name']}: location={agent['location']}, "
                     f"money={agent['money']}, fatigue={agent['fatigue']:.2f}"
                 )
+    return 0
+
+
+def _diagnose_world(args: argparse.Namespace) -> int:
+    try:
+        report = inspect_world_database(
+            args.db,
+            day=args.day,
+            timing_log=args.timing_log,
+            dialogue_log=args.dialogue_log,
+        )
+    except (OSError, WorldDiagnosticsError) as exc:
+        print(f"World diagnostics failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -774,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "simulate":
         return _simulate(args)
+    if args.command in {"diagnose-world", "inspect-world"}:
+        return _diagnose_world(args)
     if args.command == "probe-provider":
         return _probe_provider(args)
     if args.command == "probe-dialogue":
