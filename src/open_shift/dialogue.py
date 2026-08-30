@@ -553,6 +553,23 @@ def normalize_dialogue_output(value: Mapping[str, Any]) -> dict[str, Any]:
     return dict(normalized)
 
 
+def _reject_repeated_line(
+    text: str,
+    transcript: tuple[DialogueUtterance, ...],
+    speaker_id: str,
+) -> None:
+    """Reject long verbatim repeats that make generated conversations sound templated."""
+
+    if len(text) < 8:
+        return
+    repeats = sum(
+        item.speaker_id == speaker_id and item.text.strip() == text
+        for item in transcript
+    )
+    if repeats >= 2:
+        raise ValueError("dialogue text repeated an earlier line")
+
+
 def validate_dialogue_output(
     value: Mapping[str, Any], context: DialogueTurnContext
 ) -> DialogueLineDraft:
@@ -584,6 +601,7 @@ def validate_dialogue_output(
         raise ValueError("non-player dialogue claimed Jill's bartending action")
     if context.speaker.actor.agent_id == "dana" and re.search(r"老板[，,]?\s*我", text):
         raise ValueError("Dana dialogue addressed herself as the boss")
+    _reject_repeated_line(text, context.transcript, context.speaker.actor.agent_id)
     return DialogueLineDraft(expression, text)
 
 
