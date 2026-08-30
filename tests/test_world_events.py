@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from open_shift.world_bridge import (
     select_scheduled_public_event,
 )
 from open_shift.store import WorldStore
+from open_shift.story_graph import DAILY_STORY_GRAPH_VERSION
 from open_shift.world_events import (
     CHARACTER_STORY_ARCS,
     EVENT_AGENTS,
@@ -406,6 +408,82 @@ class WorldEventTests(unittest.TestCase):
             service.prepare_story_day({"request_id": "skeleton-only"})
             self.assertEqual(CountingProvider.dialogue_calls, 0)
             self.assertEqual(CountingProvider.player_calls, 0)
+
+    def test_prepare_story_day_does_not_wait_for_next_day_provider(self) -> None:
+        class BlockingProvider(MockProvider):
+            started = False
+            calls = 0
+
+            def generate_world_event_candidates(self, day, context):
+                type(self).started = True
+                type(self).calls += 1
+                time.sleep(0.25)
+                return (
+                    PublicWorldEvent(
+                        "prefetched_transit_day_2",
+                        "city",
+                        "developing",
+                        "下一天的交通安排有变化",
+                        "施工让常用线路需要绕行。",
+                        ("alma", "stella"),
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=BlockingProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                prefetch_days=1,
+            )
+            started = time.monotonic()
+            result = service.prepare_story_day({"request_id": "prefetch-open"})
+            elapsed = time.monotonic() - started
+            self.assertEqual(result["status"], "ready")
+            self.assertLess(elapsed, 0.2)
+            service.wait_for_background_generation(5)
+            with WorldStore(service.db_path) as store:
+                self.assertEqual(BlockingProvider.calls, 1)
+                self.assertIsNotNone(
+                    store.get_daily_story_graph(2, DAILY_STORY_GRAPH_VERSION)
+                )
+                self.assertIsNotNone(
+                    store.get_meta("llm_public_event_selection:2")
+                )
+
+    def test_prefetch_provider_failure_uses_local_event_and_is_idempotent(self) -> None:
+        class FailingProvider(MockProvider):
+            calls = 0
+
+            def generate_world_event_candidates(self, day, context):
+                type(self).calls += 1
+                raise RuntimeError("synthetic prefetch failure")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=FailingProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                prefetch_days=1,
+            )
+            service.prepare_story_day({"request_id": "prefetch-fallback-1"})
+            service.wait_for_background_generation(5)
+            service.prepare_story_day({"request_id": "prefetch-fallback-2"})
+            service.wait_for_background_generation(1)
+            with WorldStore(service.db_path) as store:
+                self.assertEqual(FailingProvider.calls, 1)
+                attempt = json.loads(
+                    store.get_meta("llm_public_event_attempt:2") or "{}"
+                )
+                self.assertEqual(attempt.get("status"), "fallback")
+                background = json.loads(
+                    store.get_meta("background_generation:2") or "{}"
+                )
+                self.assertEqual(background.get("status"), "fallback")
+                graph = store.get_daily_story_graph(2, DAILY_STORY_GRAPH_VERSION)
+                self.assertIsNotNone(graph)
 
 
 if __name__ == "__main__":
