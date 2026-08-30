@@ -58,3 +58,15 @@ DeepSeek 只提出受限的行动、世界事件或对白草稿。规则层验�
 检索选择和压缩也会写入同一日志；SQLite 中保留原始事件和角色视角，便于解释角色为何知道某事。
 安装后的运行会将 timing 事件写入 `timing.log`；没有配置日志路径的开发库调用默认不刷 stderr，
 可用 `OPEN_SHIFT_TIMING_STDERR=1` 显式开启实时控制台输出。
+
+### 只读诊断与回放
+
+阶段 31 提供 `open-shift diagnose-world --db <open-shift.sqlite3>` 命令，用来检查一份已保存的
+世界库。命令以 SQLite 只读模式打开数据库，不创建表、不写入元数据，也不会重新调用 provider。
+输出是一份脱敏 JSON 报告：按营业日列出事件账本、已展示的对白 transcript、角色私有记忆、每日故事图
+生成状态和游标进度；使用 `--day N` 可以只查看某一天。通过 `--timing-log` 和 `--dialogue-log` 可以
+额外加载安装目录中的 JSONL 日志，日志记录与 SQLite 中已保存的 transcript 分开呈现，便于识别日志轮转
+或丢行造成的差异。
+
+诊断报告只保留支持复现所需的内容，并递归遮盖 API key、授权头、token、prompt、原始响应等敏感字段；
+数据库完整路径不会写入报告。报告可以直接附到 Issue，玩家不需要上传 API Key、原版文件或可写存档。
