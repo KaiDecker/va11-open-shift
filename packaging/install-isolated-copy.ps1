@@ -145,12 +145,20 @@ try {
         $linkType = New-InstanceLink $source $target "file"
         [void] $links.Add([ordered]@{ path = $name; source = $source; type = $linkType })
     }
-    $linkedDirectories = @("answer", "config", "scripts", "sounds")
+    $linkedDirectories = @("answer", "scripts", "sounds")
     foreach ($name in $linkedDirectories) {
         $source = Join-Path $steamDir $name
         $target = Join-Path $destinationRoot $name
         $linkType = New-InstanceLink $source $target "directory"
         [void] $links.Add([ordered]@{ path = $name; source = $source; type = $linkType })
+    }
+    # Clean Steam installs may not have a config directory yet. Preserve it
+    # when present, but do not mutate the Steam installation to create one.
+    $optionalConfig = Join-Path $steamDir "config"
+    if (Test-Path -LiteralPath $optionalConfig -PathType Container) {
+        $configTarget = Join-Path $destinationRoot "config"
+        $configLinkType = New-InstanceLink $optionalConfig $configTarget "directory"
+        [void] $links.Add([ordered]@{ path = "config"; source = $optionalConfig; type = $configLinkType })
     }
     # The game may update this file; keep it instance-local instead of linking a
     # writable file into the user's Steam installation.

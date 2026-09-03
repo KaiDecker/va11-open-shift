@@ -641,6 +641,16 @@ class WorldSceneService:
         """
 
         name = display_names.get(customer, customer.title())
+
+        def safe_narrative(value: Any, fallback: str) -> str:
+            # Provider-sourced fields may contain control characters or grow
+            # beyond the bounded story-node topic contract. Normalize them at
+            # the boundary while keeping StoryGraphNode validation strict.
+            text = " ".join(str(value or "").split()).strip()
+            text = "".join(char if ord(char) >= 32 else " " for char in text)
+            text = " ".join(text.split()).strip()
+            return (text or fallback)[:240]
+
         event_type = str(event.get("event_type", "world_event"))
         raw_payload = event.get("payload")
         details = raw_payload if isinstance(raw_payload, Mapping) else event
@@ -659,11 +669,11 @@ class WorldSceneService:
                 if headline:
                     facts = f"{facts} 城里还传来消息：{headline}。{summary}"[:240]
             return NarrativePerspective(
-                facts,
-                f"{stake} {stance}",
-                f"{question} 后续：{follow_up}",
-                title,
-                cls._short_event_topic(title, 18),
+                safe_narrative(facts, "一件还没有说完的事"),
+                safe_narrative(f"{stake} {stance}", "这件事已经影响到今晚的安排。"),
+                safe_narrative(f"{question} 后续：{follow_up}", "现在要不要先做个决定？"),
+                safe_narrative(title, "今晚要谈的事"),
+                cls._short_event_topic(safe_narrative(title, "今晚要谈的事"), 18),
             )
         day_one = {
             ("alma", "city_news_day_1_transit"): (
@@ -694,7 +704,11 @@ class WorldSceneService:
                 "dorothy": "那场被积水耽误的约见",
             }
             return NarrativePerspective(
-                topic, stake, question, short_topics.get(customer, anchor), anchor
+                safe_narrative(topic, "今晚要谈的事"),
+                safe_narrative(stake, "这件事已经影响到今晚的安排。"),
+                safe_narrative(question, "现在要不要先做个决定？"),
+                safe_narrative(short_topics.get(customer, anchor), "今晚要谈的事"),
+                cls._short_event_topic(safe_narrative(anchor, "今晚要谈的事"), 18),
             )
 
         category = str(details.get("category", "local"))
@@ -720,7 +734,17 @@ class WorldSceneService:
         stake = f"这件事已经影响到{name}今晚的安排，不能只当成闲聊。"
         question = f"{choice}？"
         anchor = cls._short_event_topic(topic, 18)
-        return NarrativePerspective(topic, stake, question, cls._short_event_topic(topic, 32), anchor)
+        safe_topic = safe_narrative(topic, "今晚要谈的事")
+        safe_stake = safe_narrative(stake, "这件事已经影响到今晚的安排。")
+        safe_question = safe_narrative(question, "现在要不要先做个决定？")
+        safe_anchor = cls._short_event_topic(safe_narrative(anchor, "今晚要谈的事"), 18)
+        return NarrativePerspective(
+            safe_topic,
+            safe_stake,
+            safe_question,
+            cls._short_event_topic(safe_topic, 32),
+            safe_anchor,
+        )
 
     @staticmethod
     def _clean_story_text(value: Any, fallback: str) -> str:
@@ -949,6 +973,9 @@ class WorldSceneService:
             )
             return True
         except Exception as exc:
+            # Provider errors are intentionally reduced to a type-only
+            # diagnostic. Do not write model text, prompts, or secrets into
+            # timing.log or SQLite metadata.
             emit_timing(
                 "world_event_generation_error",
                 day=day,
@@ -1955,11 +1982,15 @@ class WorldSceneService:
         topic = event_topic or "刚才谈到的那件具体事情"
         stake = personal_stake or "这件事对顾客今晚的选择有影响"
         question = unresolved_question or "这件事还没有结论"
-        return (
+        premise = (
             f"吧台上的{result.beverage_name}只是对话中的短暂停顿；{topic}。"
             f"{stake}。服务事实是：{meanings[result.category]}。"
             f"饮品反应要简短，回到尚未解决的问题：{question}。"
         )
+        # StoryGraphNode topics are deliberately bounded. Keep the beginning
+        # of the concrete premise (including the service fact) while avoiding
+        # provider/event text overrunning the graph schema.
+        return " ".join(premise.split())[:240].rstrip()
 
     @staticmethod
     def _fallback_reaction(
@@ -1994,7 +2025,7 @@ class WorldSceneService:
         }[result.category]
         jill_line = f"{jill_prefix}{decision}"
         closing = WorldSceneService._fallback_departure(
-            order.customer_id, topic, personal_stake
+            order.customer_id, topic, personal_stake, service_event_id
         )
         lines = (
             SceneLine(
@@ -2066,19 +2097,45 @@ class WorldSceneService:
 
     @staticmethod
     def _fallback_departure(
-        customer: str, topic: str, personal_stake: str | None
+        customer: str, topic: str, personal_stake: str | None,
+        event_id: int = 0,
     ) -> str:
-        """End the beat with an explicit, character-neutral departure."""
+        """End the beat with a short, character-specific departure.
 
-        if customer == "alma":
-            return "我先走了，明早的安排我再算一遍。"
-        if customer == "sei":
-            return "我先走了，今晚把路线重新排一下。"
-        if customer == "dorothy":
-            return "我先走了，约见的时间我再确认一下。"
-        if customer == "stella":
-            return "我先走了，这件事我回去再想想。"
-        return "我先走了，今晚的安排我回去再想想。"
+        The event id is part of the durable scene identity, so selecting among
+        a few equivalent closers is deterministic while preventing every day
+        from ending with the same stock sentence.
+        """
+
+        variants = {
+            "alma": (
+                "我先走了，明早的安排我再算一遍。",
+                "我先走了，明早的路线我回去再捋捋。",
+                "我先走了，见面的事我今晚再确认。",
+            ),
+            "sei": (
+                "我先走了，今晚把路线重新排一下。",
+                "我先走了，接人的时间我再核对一遍。",
+                "我先走了，明早出发前我还得想想。",
+            ),
+            "dorothy": (
+                "我先走了，约见的时间我再确认一下。",
+                "我先走了，等对方回信再决定。",
+                "我先走了，这个约见我得重新排时间。",
+            ),
+            "stella": (
+                "我先走了，这件事我回去再想想。",
+                "我先走了，明天再看要不要开口。",
+                "我先走了，今晚先把这件事捋清楚。",
+            ),
+            "dana": (
+                "我先走了，今晚的安排我回去再想想。",
+                "我先走了，剩下的事明天再处理。",
+                "我先走了，回去把时间重新排一下。",
+            ),
+        }
+        choices = variants.get(customer, variants["dana"])
+        return choices[event_id % len(choices)]
 
     def _generated_reaction(
         self,

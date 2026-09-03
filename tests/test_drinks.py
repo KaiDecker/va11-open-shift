@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from open_shift.drinks import (
+    AlcoholRequirement,
     DRINK_RECIPES,
     DrinkSubmission,
     ServiceCategory,
@@ -91,6 +92,50 @@ class DrinkRuleTests(unittest.TestCase):
         non_alcoholic_sugar_rush = submission((2, 0, 1, 0, 0))
         result = evaluate_service(order, non_alcoholic_sugar_rush)
         self.assertEqual(result.category, ServiceCategory.WRONG)
+
+    def test_customer_orders_have_deterministic_natural_request_variants(self) -> None:
+        first = order_for_customer("sei", 10)
+        repeat = order_for_customer("sei", 10)
+        other = order_for_customer("sei", 11)
+        self.assertEqual(first.display_text, repeat.display_text)
+        self.assertNotEqual(first.display_text, other.display_text)
+        self.assertTrue(
+            any(word in first.display_text for word in ("甜", "女性化", "漂亮", "轻松"))
+        )
+        self.assertIn("酒精", first.display_text)
+        self.assertIn("sweet", first.preference_tags)
+        self.assertIn("girly", first.preference_tags)
+
+    def test_later_orders_cover_original_flavor_and_style_categories(self) -> None:
+        orders = [
+            order_for_customer(customer, event_id)
+            for customer in ("alma", "sei", "dorothy", "stella", "dana")
+            for event_id in range(20, 26)
+        ]
+        flavors = {tag for order in orders for tag in order.preference_tags}
+        self.assertTrue({"sweet", "bitter", "sour", "spicy", "bubbly"}.issubset(flavors))
+        self.assertTrue({"girly", "manly", "classic", "classy", "promo"}.issubset(flavors))
+        self.assertTrue(
+            all(order.alcohol_requirement is AlcoholRequirement.REQUIRED for order in orders)
+        )
+        self.assertTrue(all("酒精" in order.display_text for order in orders))
+
+    def test_descriptive_ice_and_strength_preferences_are_rule_visible(self) -> None:
+        order = order_for_customer("stella", 10)
+        self.assertIn("冰", order.display_text)
+        self.assertIn("ice", order.preference_tags)
+        self.assertIn("strong", order.preference_tags)
+        result = evaluate_service(
+            order, submission((4, 0, 1, 2, 3), ice=True, aged=True)
+        )
+        self.assertEqual(result.category, ServiceCategory.EXACT)
+
+        # A different iced alcoholic recipe still satisfies the public
+        # descriptive preferences and is therefore ACCEPTABLE.
+        alternate = evaluate_service(
+            order, submission((2, 0, 0, 3, 5), ice=True)
+        )
+        self.assertEqual(alternate.category, ServiceCategory.ACCEPTABLE)
 
     def test_submission_schema_rejects_client_claims_and_invalid_amounts(self) -> None:
         with self.assertRaisesRegex(ValueError, "fields"):

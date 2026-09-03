@@ -279,6 +279,15 @@ class DailyStoryGraphTests(unittest.TestCase):
         self.assertNotIn("听说", text)
         self.assertNotIn("今晚还真让人碰上了", text)
 
+    def test_fallback_departures_vary_by_durable_event_identity(self) -> None:
+        first = WorldSceneService._fallback_departure("alma", "安排", None, 21)
+        repeat = WorldSceneService._fallback_departure("alma", "安排", None, 21)
+        next_day = WorldSceneService._fallback_departure("alma", "安排", None, 22)
+        self.assertEqual(first, repeat)
+        self.assertNotEqual(first, next_day)
+        self.assertTrue(first.startswith("我先走了"))
+        self.assertTrue(next_day.startswith("我先走了"))
+
         anchored = WorldSceneService._fallback_scene(
             {
                 "event_id": 2,

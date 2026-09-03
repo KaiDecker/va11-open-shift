@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from open_shift.bridge import BridgeApplication, BridgeConfig, BridgeError
 from open_shift.providers import MockProvider
@@ -101,6 +103,30 @@ class WorldEventTests(unittest.TestCase):
                 self.assertEqual(selection["event_key"], event.event_key)
                 records = [item for item in store.list_events() if item["event_type"] == "public_world_event"]
                 self.assertEqual(len(records), 1)
+
+    def test_provider_error_diagnostics_are_type_only_in_timing_and_meta(self) -> None:
+        class LeakyProvider(MockProvider):
+            def generate_public_world_event_candidates(self, day, context):
+                raise RuntimeError("API key=secret-key prompt=private model response")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            timing = Path(temp_dir) / "timing.log"
+            service = WorldSceneService(
+                path, provider_factory=LeakyProvider, advance_minutes=0
+            )
+            with WorldStore(path) as store:
+                store.set_meta("current_story_day", "2")
+            with patch.dict(os.environ, {"OPEN_SHIFT_TIMING_LOG": str(timing)}):
+                service.prepare_story_day({"request_id": "safe-error-1"})
+            timing_text = timing.read_text(encoding="utf-8")
+            self.assertNotIn("secret-key", timing_text)
+            self.assertNotIn("private model response", timing_text)
+            with WorldStore(path) as store:
+                attempt = json.loads(store.get_meta("llm_public_event_attempt:2") or "{}")
+            self.assertEqual(attempt.get("status"), "fallback")
+            self.assertEqual(attempt.get("error_type"), "RuntimeError")
+            self.assertNotIn("error_detail", attempt)
 
     def test_supported_provider_can_persist_day_thirteen_candidates(self) -> None:
         event = PublicWorldEvent(

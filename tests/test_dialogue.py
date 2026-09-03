@@ -12,6 +12,7 @@ from open_shift.byok import (
     BYOKBudgetExceeded,
     BYOKConfig,
     BYOKProvider,
+    BYOKValidationError,
     ResponseFormat,
     ThinkingMode,
 )
@@ -607,6 +608,42 @@ class DialogueContractTests(unittest.TestCase):
         self.assertEqual(result.text, "先把今天的事情说清楚。")
         self.assertEqual(provider.calls_used, 2)
         self.assertEqual(len(transport.calls), 2)
+
+    def test_byok_dialogue_validation_does_not_echo_model_text_or_keys(self) -> None:
+        transport = FakeTransport(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "expression_id": "neutral",
+                                    "text": "模型秘密不应出现在异常里。",
+                                    "api_key": "provider-secret",
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+        provider = BYOKProvider(
+            BYOKConfig(
+                "https://api.example.test/v1",
+                "test-model",
+                max_calls=1,
+            ),
+            _api_key="secret",
+            transport=transport,
+        )
+
+        with self.assertRaises(BYOKValidationError) as caught:
+            provider.generate_dialogue_line(turn_context())
+        message = str(caught.exception)
+        self.assertNotIn("api_key", message)
+        self.assertNotIn("provider-secret", message)
+        self.assertNotIn("模型秘密", message)
 
     def test_thinking_dialogue_retries_once_without_reasoning(self) -> None:
         transport = SequenceTransport(
