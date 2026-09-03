@@ -127,8 +127,66 @@ class BYOKProviderTests(unittest.TestCase):
             BYOKConfig("https://api.example.test/v1", "test-model"),
             _api_key="secret", transport=transport,
         )
-        with self.assertRaises(BYOKValidationError):
+        with self.assertRaises(BYOKValidationError) as caught:
             provider.generate_public_world_event_candidates(3, {})
+        self.assertNotIn("mutate_world", str(caught.exception))
+
+    def test_world_event_candidates_accept_direct_array_from_deepseek(self) -> None:
+        # Some DeepSeek-compatible JSON-object gateways ignore the requested
+        # wrapper and return the array itself. This is a transport shape, not
+        # a relaxation of the event schema.
+        event = {
+            "event_key": "district_power_check_direct",
+            "category": "technology",
+            "status": "developing",
+            "headline": "旧城区今晚进行电网检查",
+            "summary": "供电公司提醒商户检查冷藏设备。",
+            "affected_agents": ["dana", "sei"],
+        }
+        transport = FakeTransport({
+            "choices": [{"message": {"content": json.dumps([event], ensure_ascii=False)}}]
+        })
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret", transport=transport,
+        )
+        events = provider.generate_public_world_event_candidates(3, {})
+        self.assertEqual(events[0].event_key, "district_power_check_direct")
+
+    def test_world_event_candidates_accept_nested_json_event_strings(self) -> None:
+        event = {
+            "event_key": "district_power_check_nested",
+            "category": "technology",
+            "status": "developing",
+            "headline": "旧城区今晚进行电网检查",
+            "summary": "供电公司提醒商户检查冷藏设备。",
+            "affected_agents": ["dana", "sei"],
+        }
+        response = {
+            "choices": [{"message": {"content": json.dumps(
+                {"result": {"event_candidates": [json.dumps(event, ensure_ascii=False)]}},
+                ensure_ascii=False,
+            )}}]
+        }
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret", transport=FakeTransport(response),
+        )
+        events = provider.generate_public_world_event_candidates(3, {})
+        self.assertEqual(events[0].event_key, "district_power_check_nested")
+
+    def test_world_event_shape_diagnostic_does_not_include_model_text(self) -> None:
+        response = {"choices": [{"message": {"content": json.dumps(
+            {"events": ["not an event"]}, ensure_ascii=False
+        )}}]}
+        provider = BYOKProvider(
+            BYOKConfig("https://api.example.test/v1", "test-model"),
+            _api_key="secret", transport=FakeTransport(response),
+        )
+        with self.assertRaises(BYOKValidationError) as caught:
+            provider.generate_public_world_event_candidates(3, {})
+        self.assertIn("item_types=str", str(caught.exception))
+        self.assertNotIn("not an event", str(caught.exception))
     def test_missing_optional_key_keeps_local_bridge_playable(self) -> None:
         args = Namespace(
             provider_base_url="https://api.deepseek.com",
@@ -360,7 +418,7 @@ class BYOKProviderTests(unittest.TestCase):
         )
         self.assertEqual(normalized["action_type"], "rest")
         self.assertIsNone(normalized["target_id"])
-        with self.assertRaisesRegex(BYOKValidationError, "unknown fields: amount"):
+        with self.assertRaisesRegex(BYOKValidationError, r"unknown fields \(count=1\)"):
             normalize_json_object_output(
                 {
                     "action_type": "work",
@@ -368,6 +426,37 @@ class BYOKProviderTests(unittest.TestCase):
                     "amount": 999,
                 }
             )
+
+    def test_validation_diagnostics_do_not_include_model_controlled_keys(self) -> None:
+        with self.assertRaises(BYOKValidationError) as caught:
+            normalize_json_object_output(
+                {
+                    "action_type": "work",
+                    "reason_code": "earn_money",
+                    "api_key": "model-controlled-secret",
+                }
+            )
+        message = str(caught.exception)
+        self.assertIn("count=1", message)
+        self.assertNotIn("api_key", message)
+        self.assertNotIn("model-controlled-secret", message)
+
+        with self.assertRaises(BYOKValidationError) as caught:
+            validate_action_output(
+                {
+                    "action_type": "work",
+                    "target_id": None,
+                    "location": None,
+                    "duration_minutes": 0,
+                    "reason_code": "earn_money",
+                    "prompt": "model text must not escape",
+                },
+                context(),
+            )
+        message = str(caught.exception)
+        self.assertIn("extra_count=1", message)
+        self.assertNotIn("prompt", message)
+        self.assertNotIn("model text must not escape", message)
 
     def test_model_output_accepts_bounded_markdown_json_wrapper(self) -> None:
         from open_shift.byok import _as_action_object
