@@ -185,6 +185,19 @@ class PackageTests(unittest.TestCase):
         self.assertIn("System.Security.Cryptography.ProtectedData", configure)
         self.assertIn("Add-Type -AssemblyName System.Security", configure)
 
+    def test_missing_steam_config_directory_is_optional_for_isolated_install(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        low_level = (root / "packaging" / "install-isolated-copy.ps1").read_text(encoding="utf-8")
+        self.assertIn('$linkedDirectories = @("answer", "scripts", "sounds")', low_level)
+        self.assertNotIn('$linkedDirectories = @("answer", "config", "scripts", "sounds")', low_level)
+        optional_config = 'if (Test-Path -LiteralPath $optionalConfig -PathType Container) {'
+        self.assertIn('    $optionalConfig = Join-Path $steamDir "config"', low_level)
+        self.assertIn(optional_config, low_level)
+        config_branch = low_level[low_level.index(optional_config) :]
+        self.assertIn('New-InstanceLink $optionalConfig $configTarget "directory"', config_branch)
+        self.assertIn('path = "config"', config_branch)
+        self.assertNotIn('New-Item -ItemType Directory -Force -Path $optionalConfig', low_level)
+
     def test_gui_exposes_safe_player_workflow(self) -> None:
         root = Path(__file__).resolve().parents[1]
         host = (root / "packaging" / "native" / "OpenShiftSetup.cpp").read_text(encoding="utf-8")

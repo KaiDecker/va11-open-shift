@@ -53,11 +53,15 @@ _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 _REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 _WORLD_EVENT_SYSTEM_INSTRUCTION = """You propose public background events for an ongoing fictional city.
-Return JSON only in the exact form {\"events\":[...]} with one to three events.
-Events must be concise, plausible, non-sensitive city facts that can motivate
-conversation. Do not include dialogue, instructions, secrets, world mutations,
-or claims about information not present in the input. Use only the listed
-categories and character ids. The host validates every field before persistence."""
+Return JSON only in the exact form {\"events\":[{...}]} with one to three events.
+The value of events MUST be an array of JSON OBJECTS, never an array of strings,
+prose, or JSON encoded strings. Every object must contain exactly these fields:
+event_key, category, status, headline, summary, affected_agents. Do not wrap the
+answer in another key. Events must be concise, plausible, non-sensitive city
+facts that can motivate conversation. Do not include dialogue, instructions,
+secrets, world mutations, or claims about information not present in the input.
+Use only the listed categories and character ids. The host validates every
+field before persistence."""
 
 
 class APIProtocol(str, Enum):
@@ -683,6 +687,121 @@ def _as_action_object(raw: str | dict[str, Any]) -> dict[str, Any]:
     raise BYOKResponseError("model output was not a JSON object")
 
 
+def _safe_output_shape(value: Any) -> str:
+    """Describe an untrusted model result without logging its contents."""
+
+    if isinstance(value, Mapping):
+        value_types = sorted({type(item).__name__ for item in list(value.values())[:8]})
+        detail = (
+            f"object field_count={len(value)} "
+            f"value_types={','.join(value_types) or 'none'}"
+        )
+        events = value.get("events") if isinstance(value, Mapping) else None
+        if isinstance(events, (list, tuple)):
+            kinds = sorted({type(item).__name__ for item in events[:8]})
+            detail += f" events_array length={len(events)} item_types={','.join(kinds) or 'none'}"
+        return detail
+    if isinstance(value, (list, tuple)):
+        kinds = sorted({type(item).__name__ for item in value[:8]})
+        return f"array length={len(value)} item_types={','.join(kinds) or 'none'}"
+    if isinstance(value, str):
+        return f"text length={len(value)}"
+    return type(value).__name__
+
+
+def _as_world_event_output(raw: str | dict[str, Any] | list[Any]) -> Any:
+    """Parse common DeepSeek JSON-only envelopes at the event boundary.
+
+    The semantic validator remains strict. This function only handles transport
+    presentation differences (fenced JSON, a direct array, or a documented
+    single-key envelope) and never invents event fields.
+    """
+
+    if isinstance(raw, (Mapping, list, tuple)):
+        value: Any = raw
+    elif isinstance(raw, str):
+        text = re.sub(r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>", "", raw,
+                      flags=re.IGNORECASE | re.DOTALL).strip()
+        text = re.sub(r"<analysis\b[^>]*>.*?</analysis>", "", text,
+                      flags=re.IGNORECASE | re.DOTALL).strip()
+        candidates = [text]
+        if text.startswith("```") and text.endswith("```"):
+            fenced = text[3:-3].strip()
+            if fenced.lower().startswith("json"):
+                fenced = fenced[4:].lstrip()
+            candidates.insert(0, fenced)
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char not in "[{":
+                continue
+            try:
+                parsed, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, (dict, list)):
+                candidates.append(parsed)
+        value = None
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                parsed = candidate
+            else:
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(parsed, (dict, list)):
+                value = parsed
+                break
+        if value is None:
+            raise BYOKResponseError(
+                f"world event output was not JSON ({_safe_output_shape(raw)})"
+            )
+    else:
+        raise BYOKResponseError(
+            f"world event output had unsupported shape ({_safe_output_shape(raw)})"
+        )
+
+    def decode_event_items(events: Any) -> Any:
+        if not isinstance(events, (list, tuple)):
+            return events
+        decoded = []
+        for item in events:
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except json.JSONDecodeError:
+                    pass
+            decoded.append(item)
+        return decoded
+
+    # DeepSeek-compatible gateways occasionally add a harmless result/data
+    # envelope. Unwrap only known keys and only one level at a time.
+    for _ in range(3):
+        if isinstance(value, Mapping):
+            if "events" in value:
+                events = value["events"]
+                if isinstance(events, str):
+                    try:
+                        events = json.loads(events)
+                    except json.JSONDecodeError:
+                        pass
+                events = decode_event_items(events)
+                return {"events": events}
+            wrapped = next(
+                (value[key] for key in ("event_candidates", "candidates", "data", "result", "output")
+                 if key in value and isinstance(value[key], (Mapping, list, tuple, str))),
+                None,
+            )
+            if wrapped is not None:
+                value = wrapped
+                continue
+            required = {"event_key", "category", "status", "headline", "summary", "affected_agents"}
+            if required.issubset(value):
+                return {"events": [value]}
+        return {"events": decode_event_items(value)} if isinstance(value, (list, tuple)) else value
+    return value
+
+
 def normalize_json_object_output(value: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize omissions common to JSON-only compatibility providers.
 
@@ -708,12 +827,12 @@ def normalize_json_object_output(value: Mapping[str, Any]) -> dict[str, Any]:
     extra = sorted(set(normalized) - allowed)
     if extra:
         raise BYOKValidationError(
-            f"action output contained unknown fields: {', '.join(extra)}"
+            f"action output contained unknown fields (count={len(extra)})"
         )
     missing_core = sorted({"action_type", "reason_code"} - set(normalized))
     if missing_core:
         raise BYOKValidationError(
-            f"action output omitted required fields: {', '.join(missing_core)}"
+            f"action output omitted required fields (count={len(missing_core)})"
         )
     return {
         "action_type": normalized["action_type"],
@@ -737,12 +856,7 @@ def validate_action_output(
     if set(value) != required:
         missing = sorted(required - set(value))
         extra = sorted(set(value) - required)
-        details: list[str] = []
-        if missing:
-            details.append(f"missing={','.join(missing)}")
-        if extra:
-            details.append(f"extra={','.join(extra)}")
-        suffix = f": {'; '.join(details)}" if details else ""
+        suffix = f" (field_count={len(value)}, missing_count={len(missing)}, extra_count={len(extra)})"
         raise BYOKValidationError(
             f"action output fields did not match the schema{suffix}"
         )
@@ -875,11 +989,15 @@ class BYOKProvider:
             if operation_config.protocol is APIProtocol.RESPONSES
             else _extract_chat_output(response)
         )
-        value = _as_action_object(raw)
+        value = _as_world_event_output(raw)
         try:
             return validate_public_world_event_candidates(value)
-        except (TypeError, ValueError) as exc:
-            raise BYOKValidationError(str(exc)) from None
+        except (TypeError, ValueError):
+            # Keep diagnostics useful without recording headlines, summaries,
+            # prompts, or any other model-controlled content.
+            raise BYOKValidationError(
+                f"world event candidate validation failed ({_safe_output_shape(value)})"
+            ) from None
 
     # Short alias for providers and integrations that call these simply
     # ``world_event`` candidates.  Keep one implementation and one budgeted
@@ -990,12 +1108,16 @@ class BYOKProvider:
                 if self.config.response_format is ResponseFormat.JSON_OBJECT:
                     try:
                         value = normalize_dialogue_output(value)
-                    except ValueError as exc:
-                        raise BYOKValidationError(str(exc)) from None
+                    except ValueError:
+                        raise BYOKValidationError(
+                            f"dialogue output validation failed ({_safe_output_shape(value)})"
+                        ) from None
                 try:
                     return validate_dialogue_output(value, context)
-                except ValueError as exc:
-                    raise BYOKValidationError(str(exc)) from None
+                except ValueError:
+                    raise BYOKValidationError(
+                        f"dialogue output validation failed ({_safe_output_shape(value)})"
+                    ) from None
             except (BYOKResponseError, BYOKValidationError):
                 if attempt == len(payloads) - 1 or self.calls_used >= self.config.max_calls:
                     raise
@@ -1033,12 +1155,16 @@ class BYOKProvider:
                 if self.config.response_format is ResponseFormat.JSON_OBJECT:
                     try:
                         value = normalize_dialogue_output(value)
-                    except ValueError as exc:
-                        raise BYOKValidationError(str(exc)) from None
+                    except ValueError:
+                        raise BYOKValidationError(
+                            f"player dialogue output validation failed ({_safe_output_shape(value)})"
+                        ) from None
                 try:
                     return validate_player_dialogue_output(value, context)
-                except ValueError as exc:
-                    raise BYOKValidationError(str(exc)) from None
+                except ValueError:
+                    raise BYOKValidationError(
+                        f"player dialogue output validation failed ({_safe_output_shape(value)})"
+                    ) from None
             except (BYOKResponseError, BYOKValidationError):
                 if attempt == len(payloads) - 1 or self.calls_used >= self.config.max_calls:
                     raise

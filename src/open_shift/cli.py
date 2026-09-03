@@ -411,7 +411,18 @@ def _probe_dialogue(args: argparse.Namespace) -> int:
 
 
 def _report_world_error(operation: str, error: Exception) -> None:
-    detail = str(error) if isinstance(error, BYOKError) else "unexpected internal error"
+    # Provider exception messages are untrusted (a custom transport may
+    # include response text). Keep the console diagnostic type-only so model
+    # output, prompts, and credentials cannot escape through stderr.
+    detail = (
+        f"provider error type={type(error).__name__}"
+        if isinstance(error, BYOKError)
+        else (
+            f"validation error={str(error)[:160]}"
+            if isinstance(error, ValueError) and str(error).strip()
+            else "unexpected internal error"
+        )
+    )
     print(
         f"World {operation} failed ({type(error).__name__}): {detail}",
         file=sys.stderr,

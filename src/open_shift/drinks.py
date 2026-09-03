@@ -197,10 +197,16 @@ class ClassifiedDrink:
     alcoholic: bool
     doubled: bool
     price: int
+    iced: bool = False
 
     @property
     def tags(self) -> frozenset[str]:
-        return frozenset({self.flavor, self.style, self.size})
+        tags = {self.flavor, self.style, self.size}
+        if self.iced:
+            tags.add("ice")
+        if self.alcoholic:
+            tags.add("strong")
+        return frozenset(tags)
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +350,7 @@ def classify_drink(submission: DrinkSubmission) -> ClassifiedDrink | None:
                 submission.karmotrine > 0,
                 scale == 2,
                 recipe.price,
+                recipe.ice,
             )
     return None
 
@@ -400,52 +407,169 @@ def service_income(result: ServiceResult, submission: DrinkSubmission) -> int:
     return drink.price + (100 if drink.doubled else 0)
 
 
-_ORDER_BLUEPRINTS: dict[str, tuple[str, tuple[str, ...], AlcoholRequirement, str]] = {
+@dataclass(frozen=True, slots=True)
+class _OrderProfile:
+    drink_id: str
+    preference_tags: tuple[str, ...]
+    request_variants: tuple[str, ...]
+    alcohol_requirement: AlcoholRequirement = AlcoholRequirement.REQUIRED
+
+
+# The original game exposes five flavor filters and five style filters. Keep
+# each profile tied to a real recipe, then rotate profiles deterministically
+# after the initial compatibility window so a new day can exercise every
+# category without changing an already materialized early-day order.
+_ORDER_PROFILES: dict[str, tuple[_OrderProfile, ...]] = {
     "dana": (
-        "beer",
-        ("bubbly", "classic"),
-        AlcoholRequirement.REQUIRED,
-        "Jill，给我一杯 Beer。老板偶尔也有当顾客的权利。",
+        _OrderProfile(
+            "beer",
+            ("bubbly", "classic", "strong"),
+            (
+                "Jill，来杯清爽的、带点泡沫，而且要有酒精。",
+                "给我一杯 Beer，要有酒精，今天想喝点简单的。",
+            ),
+        ),
+        _OrderProfile(
+            "pdriver",
+            ("bitter", "manly", "strong"),
+            (
+                "Jill，来点苦的、硬朗的，要有酒精。",
+                "给我一杯 Piledriver，苦一点，酒精别省。",
+            ),
+        ),
+        _OrderProfile(
+            "bjane",
+            ("spicy", "classic", "strong"),
+            (
+                "Jill，想喝辛辣又经典的，要有酒精。",
+                "来一杯 Bleeding Jane，带酒精，辛辣一点。",
+            ),
+        ),
     ),
     "dorothy": (
-        "pwman",
-        ("sweet", "promo"),
-        AlcoholRequirement.REQUIRED,
-        "Jill，来一杯 Piano Woman。今晚需要一点漂亮的气势。",
+        _OrderProfile(
+            "pwman",
+            ("sweet", "girly", "promo"),
+            (
+                "Jill，来点甜的，要有酒精，做得漂亮些。",
+                "给我一杯 Piano Woman，甜口、带酒精，今晚要点气势。",
+            ),
+        ),
+        _OrderProfile(
+            "gtemple",
+            ("bitter", "promo"),
+            (
+                "Jill，想喝苦一点的，要有酒精，来点特别的气势。",
+                "给我一杯 Grizzly Temple，苦口而且带酒精。",
+            ),
+        ),
+        _OrderProfile(
+            "zstar",
+            ("sour", "promo"),
+            (
+                "Jill，来点酸的，要有酒精，做得漂亮些。",
+                "给我一杯 Zen Star，酸一点，酒精要有。",
+            ),
+        ),
     ),
     "alma": (
-        "btini",
-        ("sweet", "classy"),
-        AlcoholRequirement.REQUIRED,
-        "Jill，一杯 Brandtini，照老样子来。",
+        _OrderProfile(
+            "btini",
+            ("sweet", "classy"),
+            (
+                "Jill，甜一点的，但要带酒精，别把味道做得太重。",
+                "一杯 Brandtini，要有酒精，照老样子来。",
+            ),
+        ),
+        _OrderProfile(
+            "btouch",
+            ("sour", "classy"),
+            (
+                "Jill，想喝酸一点、精致的，要有酒精。",
+                "来一杯 Bad Touch，酸口、带酒精，别太随便。",
+            ),
+        ),
+        _OrderProfile(
+            "cvelvet",
+            ("bubbly", "classy"),
+            (
+                "Jill，来杯带气泡的、精致的，要有酒精。",
+                "给我一杯 Cobalt Velvet，带酒精，气泡感要在。",
+            ),
+        ),
     ),
     "stella": (
-        "blight",
-        ("spicy", "promo"),
-        AlcoholRequirement.REQUIRED,
-        "Jill，一杯 Bloom Light。冰别省掉。",
+        _OrderProfile(
+            "blight",
+            ("spicy", "promo", "ice", "strong"),
+            (
+                "Jill，来杯冰多一点、带劲的，要有酒精。",
+                "一杯 Bloom Light，冰别省掉，酒精也别省。",
+            ),
+        ),
+        _OrderProfile(
+            "meblast",
+            ("sour", "classy", "ice"),
+            (
+                "Jill，想喝酸一点、冰的，要有酒精。",
+                "给我一杯 Mercuryblast，酸口、带酒精，冰要足。",
+            ),
+        ),
+        _OrderProfile(
+            "cvelvet",
+            ("bubbly", "classy", "ice"),
+            (
+                "Jill，来点气泡、冰的，要有酒精。",
+                "给我一杯 Cobalt Velvet，带酒精，冰别忘了。",
+            ),
+        ),
     ),
     "sei": (
-        "moblast",
-        ("sweet", "girly"),
-        AlcoholRequirement.REQUIRED,
-        "Jill，我想要一杯 Moonblast。照配方来就好。",
+        _OrderProfile(
+            "moblast",
+            ("sweet", "girly"),
+            (
+                "Jill，我想喝点甜的，带酒精，最好有点女性化的感觉。",
+                "给我一杯 Moonblast，做得漂亮些，而且要有酒精。",
+            ),
+        ),
+        _OrderProfile(
+            "fdream",
+            ("sour", "girly"),
+            (
+                "Jill，来点酸的、女性化的，要有酒精。",
+                "给我一杯 Fluffy Dream，酸口但要带酒精。",
+            ),
+        ),
+        _OrderProfile(
+            "scloud",
+            ("bitter", "girly", "ice"),
+            (
+                "Jill，想喝苦一点、冰的，要有酒精。",
+                "给我一杯 Sun Cloud，苦口、带酒精，冰多些。",
+            ),
+        ),
     ),
 }
 
 
 def order_for_customer(customer_id: str, event_id: int) -> DrinkOrder:
     try:
-        drink_id, tags, alcohol, display_text = _ORDER_BLUEPRINTS[customer_id]
+        profiles = _ORDER_PROFILES[customer_id]
     except KeyError:
         raise ValueError("customer did not have a drink order blueprint") from None
-    recipe = next(item for item in DRINK_RECIPES if item.drink_id == drink_id)
+    # Existing DAY1 records use the original profile. Later event ids rotate
+    # through the expanded category set while remaining deterministic.
+    profile_index = 0 if event_id < 20 else (event_id - 20) % len(profiles)
+    profile = profiles[profile_index]
+    recipe = next(item for item in DRINK_RECIPES if item.drink_id == profile.drink_id)
+    display_text = profile.request_variants[event_id % len(profile.request_variants)]
     return DrinkOrder(
         f"order_{event_id}",
         customer_id,
-        drink_id,
+        profile.drink_id,
         recipe.display_name,
-        tags,
-        alcohol,
+        profile.preference_tags,
+        profile.alcohol_requirement,
         display_text,
     )
