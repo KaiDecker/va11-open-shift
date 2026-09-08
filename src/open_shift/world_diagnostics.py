@@ -242,6 +242,69 @@ def _days_from(*groups: Iterable[int]) -> list[int]:
     return sorted(values)
 
 
+def _consistency_report(
+    database_transcripts: list[dict[str, Any]],
+    timing_log: dict[str, Any],
+    dialogue_log: dict[str, Any],
+    generation_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare persisted transcripts with an optional rendered dialogue log."""
+
+    db_scene_ids = {
+        str(item["scene_id"])
+        for item in database_transcripts
+        if item.get("scene_id")
+    }
+    log_scene_ids = {
+        str(item.get("scene_id"))
+        for item in dialogue_log.get("records", [])
+        if item.get("event") == "dialogue_transcript" and item.get("scene_id")
+    }
+    missing_in_log = sorted(db_scene_ids - log_scene_ids) if dialogue_log.get("path") else []
+    missing_in_database = sorted(log_scene_ids - db_scene_ids) if dialogue_log.get("path") else []
+    statuses = {
+        key: value.get("status")
+        for key, value in generation_metadata.items()
+        if key.startswith("background_generation:") and isinstance(value, dict)
+    }
+    timing_events = {
+        str(item.get("event"))
+        for item in timing_log.get("records", [])
+        if item.get("event")
+    }
+    expected_timing_events = {
+        "ready": "background_generation_ready",
+        "fallback": "background_generation_fallback",
+        "error": "background_generation_error",
+        "timeout": "background_generation_cancel",
+        "running": "background_generation_start",
+    }
+    generation_timing = {
+        key: expected_timing_events.get(status)
+        for key, status in statuses.items()
+        if status in expected_timing_events
+    }
+    missing_timing = (
+        {
+            key: event
+            for key, event in generation_timing.items()
+            if event not in timing_events
+        }
+        if timing_log.get("path")
+        else {}
+    )
+    return {
+        "ok": not missing_in_log and not missing_in_database and not missing_timing,
+        "database_transcript_count": len(db_scene_ids),
+        "dialogue_log_transcript_count": len(log_scene_ids),
+        "dialogue_scene_ids_missing_in_log": missing_in_log,
+        "dialogue_scene_ids_missing_in_database": missing_in_database,
+        "background_generation_statuses": statuses,
+        "background_generation_timing_events": generation_timing,
+        "background_generation_timing_missing": missing_timing,
+    }
+
+
 def inspect_world_database(
     database: str | Path,
     *,
@@ -315,6 +378,7 @@ def inspect_world_database(
         Path(dialogue_log).expanduser().resolve() if dialogue_log is not None else None,
         day=day,
     )
+    consistency = _consistency_report(db_transcripts, timing, dialogue, metadata)
     days = _days_from(
         (day,) if day is not None else (),
         event_days,
@@ -346,4 +410,5 @@ def inspect_world_database(
             "metadata": metadata,
         },
         "logs": {"timing": timing, "dialogue": dialogue},
+        "consistency": consistency,
     }

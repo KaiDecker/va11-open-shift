@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -513,6 +514,89 @@ class WorldEventTests(unittest.TestCase):
                 self.assertEqual(background.get("status"), "fallback")
                 graph = store.get_daily_story_graph(2, DAILY_STORY_GRAPH_VERSION)
                 self.assertIsNotNone(graph)
+
+    def test_prefetch_timeout_is_persisted_and_does_not_block_later_completion(self) -> None:
+        class BlockingProvider(MockProvider):
+            started = threading.Event()
+            release = threading.Event()
+
+            def generate_world_event_candidates(self, day, context):
+                type(self).started.set()
+                type(self).release.wait(5)
+                return (
+                    PublicWorldEvent(
+                        "prefetched_timeout_day_2",
+                        "city",
+                        "developing",
+                        "延迟生成的交通事件",
+                        "后台任务稍后完成。",
+                        ("alma", "stella"),
+                    ),
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=BlockingProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                prefetch_days=1,
+            )
+            service.prepare_story_day({"request_id": "prefetch-timeout"})
+            self.assertTrue(BlockingProvider.started.wait(2))
+            service.wait_for_background_generation(0.01)
+            with WorldStore(service.db_path) as store:
+                timed_out = json.loads(
+                    store.get_meta("background_generation:2") or "{}"
+                )
+            self.assertEqual(timed_out.get("status"), "timeout")
+            self.assertEqual(timed_out.get("timeout_seconds"), 0.01)
+
+            BlockingProvider.release.set()
+            service.wait_for_background_generation(5)
+            with WorldStore(service.db_path) as store:
+                completed = json.loads(
+                    store.get_meta("background_generation:2") or "{}"
+                )
+                self.assertIn(completed.get("status"), {"ready", "fallback"})
+                self.assertTrue(completed.get("timeout_observed"))
+                self.assertIsNotNone(
+                    store.get_daily_story_graph(2, DAILY_STORY_GRAPH_VERSION)
+                )
+
+    def test_three_consecutive_story_days_materialize_and_replay_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = WorldSceneService(
+                Path(temp_dir) / "world.sqlite3",
+                provider_factory=MockProvider,
+                advance_minutes=0,
+                daily_story_mode=True,
+                prefetch_days=0,
+            )
+            graphs = [service.prepare_daily_story_graph(day) for day in (1, 2, 3)]
+            replayed = [service.prepare_daily_story_graph(day) for day in (1, 2, 3)]
+            self.assertEqual(replayed, graphs)
+            with WorldStore(service.db_path) as store:
+                records = store.list_daily_story_graphs()
+                self.assertEqual(
+                    [(item["day_index"], item["status"]) for item in records],
+                    [(1, "ready"), (2, "ready"), (3, "ready")],
+                )
+                source_ids = [
+                    tuple(item["source_event_ids"])
+                    for item in records
+                ]
+                self.assertEqual(len({ids for ids in source_ids}), 3)
+                self.assertEqual(
+                    len(
+                        [
+                            event
+                            for event in store.list_events()
+                            if event["event_type"] == "public_world_event"
+                        ]
+                    ),
+                    5,
+                )
 
 
 if __name__ == "__main__":

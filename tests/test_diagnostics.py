@@ -103,6 +103,7 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(report["logs"]["timing"]["records"][0]["event"], "background_generation_ready")
             self.assertEqual(report["logs"]["timing"]["malformed_lines"], 1)
             self.assertEqual(len(report["logs"]["dialogue"]["records"]), 1)
+            self.assertTrue(report["consistency"]["ok"])
 
             from io import StringIO
             from unittest.mock import patch
@@ -110,6 +111,98 @@ class DiagnosticsTests(unittest.TestCase):
                 self.assertEqual(main(["diagnose-world", "--db", str(database)]), 0)
             cli_report = json.loads(stdout.getvalue())
             self.assertEqual(cli_report["report_version"], 1)
+
+            self.assertTrue(cli_report["consistency"]["ok"])
+
+    def test_world_report_flags_dialogue_log_drift_without_mutating_database(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "world.sqlite3"
+            with WorldStore(database) as store:
+                event_id = store.append_event(
+                    1_440,
+                    "dialogue_transcript",
+                    None,
+                    payload={
+                        "story_day": 2,
+                        "scene_id": "day_2_customer_1_order",
+                        "lines": [],
+                    },
+                )
+                store.set_meta(
+                    "background_generation:2",
+                    json.dumps({"day": 2, "status": "ready"}),
+                )
+            dialogue = root / "dialogue.log"
+            dialogue.write_text(
+                json.dumps(
+                    {
+                        "event": "dialogue_transcript",
+                        "story_day": 2,
+                        "scene_id": "day_2_customer_9_order",
+                        "lines": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = inspect_world_database(database, day=2, dialogue_log=dialogue)
+            self.assertFalse(report["consistency"]["ok"])
+            self.assertEqual(
+                report["consistency"]["dialogue_scene_ids_missing_in_log"],
+                ["day_2_customer_1_order"],
+            )
+            self.assertEqual(
+                report["consistency"]["dialogue_scene_ids_missing_in_database"],
+                ["day_2_customer_9_order"],
+            )
+            self.assertEqual(
+                report["consistency"]["background_generation_statuses"],
+                {"background_generation:2": "ready"},
+            )
+            self.assertEqual(event_id, 1)
+
+    def test_world_report_flags_missing_background_timing_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "world.sqlite3"
+            with WorldStore(database) as store:
+                store.set_meta(
+                    "background_generation:2",
+                    json.dumps({"day": 2, "status": "fallback"}),
+                )
+            timing = root / "timing.log"
+            timing.write_text(
+                json.dumps({"event": "background_generation_start", "day": 2}) + "\n",
+                encoding="utf-8",
+            )
+            report = inspect_world_database(database, day=2, timing_log=timing)
+            self.assertFalse(report["consistency"]["ok"])
+            self.assertEqual(
+                report["consistency"]["background_generation_timing_missing"],
+                {"background_generation:2": "background_generation_fallback"},
+            )
+
+    def test_world_report_includes_background_generation_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "world.sqlite3"
+            with WorldStore(database) as store:
+                store.set_meta("current_story_day", 2)
+                store.set_meta(
+                    "background_generation:2",
+                    json.dumps(
+                        {
+                            "day": 2,
+                            "status": "timeout",
+                            "generation_version": "stage_21_event_flow_v6",
+                            "timeout_seconds": 0.01,
+                        }
+                    ),
+                )
+            report = inspect_world_database(database, day=2)
+            lifecycle = report["generation"]["metadata"]["background_generation:2"]
+            self.assertEqual(lifecycle["status"], "timeout")
+            self.assertEqual(lifecycle["timeout_seconds"], 0.01)
 
 
 if __name__ == "__main__":

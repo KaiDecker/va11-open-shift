@@ -3027,8 +3027,37 @@ class WorldSceneService:
         if self.prefetch_days != 1:
             return
 
+        def persist_status(status: str, **fields: Any) -> None:
+            """Persist a bounded background-generation receipt for diagnostics."""
+            try:
+                with WorldStore(self.db_path) as store:
+                    prior = store.get_meta(f"background_generation:{day_index}")
+                    try:
+                        previous = json.loads(prior or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        previous = {}
+                    if not isinstance(previous, dict):
+                        previous = {}
+                    payload: dict[str, Any] = {
+                        "day": day_index,
+                        "status": status,
+                        "generation_version": DAILY_STORY_GRAPH_VERSION,
+                        **fields,
+                    }
+                    if previous.get("status") == "timeout" or previous.get("timeout_observed"):
+                        payload["timeout_observed"] = True
+                    with store.transaction():
+                        store.set_meta(
+                            f"background_generation:{day_index}",
+                            json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                        )
+            except Exception as exc:
+                # Diagnostics must never make the player flow fail.
+                self._report_error("background generation receipt", exc)
+
         def generate() -> None:
             started = monotonic_seconds()
+            persist_status("running")
             try:
                 graph = self.prepare_daily_story_graph(day_index)
                 with WorldStore(self.db_path) as store:
@@ -3042,19 +3071,11 @@ class WorldSceneService:
                         except (TypeError, ValueError, json.JSONDecodeError):
                             pass
                     status = "fallback" if used_fallback else "ready"
-                    with store.transaction():
-                        store.set_meta(
-                            f"background_generation:{day_index}",
-                            json.dumps(
-                                {
-                                    "day": day_index,
-                                    "status": status,
-                                    "generation_version": DAILY_STORY_GRAPH_VERSION,
-                                },
-                                separators=(",", ":"),
-                                sort_keys=True,
-                            ),
-                        )
+                    persist_status(
+                        status,
+                        node_count=len(graph.nodes),
+                        elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                    )
                 emit_timing(
                     "background_generation_fallback" if used_fallback else "background_generation_ready",
                     day=day_index,
@@ -3068,6 +3089,11 @@ class WorldSceneService:
                 emit_timing(
                     "background_generation_error",
                     day=day_index,
+                    error_type=type(exc).__name__,
+                    elapsed_ms=round((monotonic_seconds() - started) * 1000),
+                )
+                persist_status(
+                    "error",
                     error_type=type(exc).__name__,
                     elapsed_ms=round((monotonic_seconds() - started) * 1000),
                 )
@@ -3112,6 +3138,28 @@ class WorldSceneService:
                     reason="wait_timeout",
                     force_cancelled=False,
                 )
+                with WorldStore(self.db_path) as store:
+                    prior = store.get_meta(f"background_generation:{day_index}")
+                try:
+                    payload = json.loads(prior or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload.update(
+                    {
+                        "day": day_index,
+                        "status": "timeout",
+                        "generation_version": DAILY_STORY_GRAPH_VERSION,
+                        "timeout_seconds": timeout_seconds,
+                        "timeout_observed": True,
+                    }
+                )
+                with WorldStore(self.db_path) as store, store.transaction():
+                    store.set_meta(
+                        f"background_generation:{day_index}",
+                        json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                    )
                 self._generation_cancel_reports.add(day_index)
 
     @staticmethod
