@@ -1400,6 +1400,41 @@ class WorldSceneService:
         return ScenePackage(f"{kind}_day_{day_index}", scenes[kind])
 
     @staticmethod
+    def _validate_dialogue_scene_flow(
+        scene: ScenePackage,
+        *,
+        scene_type: str,
+        customer_id: str | None = None,
+    ) -> ScenePackage:
+        """Enforce the small speaker/beat contracts used by vanilla-like scenes."""
+
+        speakers = [line.speaker_id for line in scene.lines]
+        if any(line.speaker_id is None for line in scene.lines):
+            raise ValueError("dialogue scene contained an environment line")
+        if scene_type == "pre_opening":
+            if (
+                customer_id is not None
+                or scene.order is not None
+                or speakers != ["dana", "jill", "dana", "jill"]
+            ):
+                raise ValueError("pre-opening dialogue structure was invalid")
+        elif scene_type == "arrival_order":
+            expected = [customer_id, "jill", customer_id, "jill", customer_id, "jill"]
+            if scene.order is None or customer_id is None or speakers != expected:
+                raise ValueError("arrival dialogue structure was invalid")
+            if scene.lines[-2].speaker_id != customer_id or scene.lines[-2].text != scene.order.display_text:
+                raise ValueError("arrival dialogue did not place the order as a beat")
+        elif scene_type == "service_reaction":
+            expected = [customer_id, "jill", customer_id, customer_id]
+            if scene.order is not None or customer_id is None or speakers != expected:
+                raise ValueError("reaction dialogue structure was invalid")
+            if not scene.lines[-1].text.startswith("我先走了"):
+                raise ValueError("reaction dialogue closing beat was invalid")
+        else:
+            raise ValueError("dialogue scene type was invalid")
+        return scene
+
+    @staticmethod
     def _event_anchor_terms(event_topic: str) -> tuple[str, ...]:
         """Return concrete two-character terms usable as dialogue anchors."""
 
@@ -1592,6 +1627,7 @@ class WorldSceneService:
                     SceneLine("preopen_4", "jill", None, "neutral", jill2.text),
                 ),
             )
+            self._validate_dialogue_scene_flow(generated, scene_type="pre_opening")
             if self._scene_mentions_event(generated, event_topic):
                 return generated
         except Exception as exc:
@@ -1942,6 +1978,9 @@ class WorldSceneService:
             SceneLine("dialogue_6", "jill", None, "neutral", fifth.text),
         )
         generated = ScenePackage(scene_id, lines, order=order)
+        self._validate_dialogue_scene_flow(
+            generated, scene_type="arrival_order", customer_id=customer
+        )
         # A fluent but generic scene is worse than a short local fallback:
         # the day's event must be audible in at least one displayed line.
         if not self._scene_mentions_event(generated, perspective.anchor):
@@ -2292,9 +2331,17 @@ class WorldSceneService:
                     order.customer_id,
                     SPEAKER_PORTRAITS[order.customer_id],
                     "neutral",
-                    "那我先走了，回头再聊。",
+                    self._fallback_departure(
+                        order.customer_id,
+                        self._short_event_topic(event_topic or ""),
+                        personal_stake,
+                        service_event_id,
+                    ),
                 ),
             ),
+        )
+        self._validate_dialogue_scene_flow(
+            generated, scene_type="service_reaction", customer_id=order.customer_id
         )
         if event_topic and not self._scene_mentions_event(generated, event_topic):
             return self._fallback_reaction(

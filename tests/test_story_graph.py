@@ -13,7 +13,7 @@ from open_shift.dialogue import (
     DialogueTurnContext,
     PlayerDialogueTurnContext,
 )
-from open_shift.bridge import BridgeError
+from open_shift.bridge import BridgeError, SceneLine, ScenePackage
 from open_shift.byok import BYOKTransportError
 from open_shift.drinks import AlcoholRequirement, DRINK_RECIPES, DrinkOrder, ServiceCategory, ServiceResult
 from open_shift.models import DecisionContext, Memory, AgentState
@@ -934,6 +934,74 @@ class DailyStoryGraphTests(unittest.TestCase):
                         for event in store.list_events()
                     )
                 )
+
+    def test_dialogue_scene_flow_contract_matches_vanilla_beats(self) -> None:
+        pre_opening = ScenePackage(
+            "flow_pre_opening",
+            (
+                SceneLine("line_1", "dana", "sprite_dana", "neutral", "外面又有新消息了。"),
+                SceneLine("line_2", "jill", None, "neutral", "今晚总会有人说起。"),
+                SceneLine("line_3", "dana", "sprite_dana", "neutral", "那就先听听他们怎么说。"),
+                SceneLine("line_4", "jill", None, "neutral", "嗯，开门吧。"),
+            ),
+        )
+        self.assertIs(
+            WorldSceneService._validate_dialogue_scene_flow(
+                pre_opening, scene_type="pre_opening"
+            ),
+            pre_opening,
+        )
+        order = DrinkOrder(
+            "flow_order", "alma", "btini", "Brandtini", ("sweet",),
+            AlcoholRequirement.REQUIRED, "Jill，一杯 Brandtini。",
+        )
+        arrival = ScenePackage(
+            "flow_arrival",
+            (
+                SceneLine("line_1", "alma", "sprite_alma", "neutral", "客户资料又绕回我手里了。"),
+                SceneLine("line_2", "jill", None, "neutral", "先把话说清楚。"),
+                SceneLine("line_3", "alma", "sprite_alma", "neutral", "明早之前还得重新确认。"),
+                SceneLine("line_4", "jill", None, "neutral", "先别替明天发愁。"),
+                SceneLine("line_5", "alma", "sprite_alma", "neutral", order.display_text),
+                SceneLine("line_6", "jill", None, "neutral", "好，我来做。"),
+            ),
+            order=order,
+        )
+        self.assertIs(
+            WorldSceneService._validate_dialogue_scene_flow(
+                arrival, scene_type="arrival_order", customer_id="alma"
+            ),
+            arrival,
+        )
+        reaction = ScenePackage(
+            "flow_reaction",
+            (
+                SceneLine("line_1", "alma", "sprite_alma", "neutral", "这杯还行。"),
+                SceneLine("line_2", "jill", None, "neutral", "嗯。"),
+                SceneLine("line_3", "alma", "sprite_alma", "neutral", "明早还得再确认一次。"),
+                SceneLine("line_4", "alma", "sprite_alma", "neutral", "我先走了，明早再确认。"),
+            ),
+        )
+        self.assertIs(
+            WorldSceneService._validate_dialogue_scene_flow(
+                reaction, scene_type="service_reaction", customer_id="alma"
+            ),
+            reaction,
+        )
+        with self.assertRaisesRegex(ValueError, "closing beat"):
+            WorldSceneService._validate_dialogue_scene_flow(
+                ScenePackage(
+                    "flow_invalid",
+                    (
+                        SceneLine("line_1", "alma", "sprite_alma", "neutral", "还没完。"),
+                        SceneLine("line_2", "jill", None, "neutral", "嗯。"),
+                        SceneLine("line_3", "alma", "sprite_alma", "neutral", "明早再确认。"),
+                        SceneLine("line_4", "alma", "sprite_alma", "neutral", "回头再聊。"),
+                    ),
+                ),
+                scene_type="service_reaction",
+                customer_id="alma",
+            )
 
     def test_only_the_served_result_branch_is_committed_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
