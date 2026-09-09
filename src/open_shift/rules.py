@@ -149,12 +149,14 @@ class RuleEngine:
         target_id: str,
         trust_delta: float,
         warmth_delta: float,
+        reason: str = "social_interaction",
     ) -> Relationship:
         current = self.store.get_relationship(source_id, target_id)
         updated = replace(
             current,
             trust=_clamp(current.trust + trust_delta, -1.0, 1.0),
             warmth=_clamp(current.warmth + warmth_delta, -1.0, 1.0),
+            last_change_reason=reason,
         )
         self.store.upsert_relationship(updated)
         return updated
@@ -223,7 +225,7 @@ class RuleEngine:
         if target is None:
             return ActionResult(False, "invalid_target")
         relationship = self._change_relationship(
-            actor.agent_id, target.agent_id, 0.02, 0.03
+            actor.agent_id, target.agent_id, 0.02, 0.03, "message_sent"
         )
         event_id = self._event(
             tick,
@@ -257,7 +259,7 @@ class RuleEngine:
         payload: dict[str, object] = {"cost": cost}
         if target is not None:
             relationship = self._change_relationship(
-                actor.agent_id, target.agent_id, 0.01, 0.04
+                actor.agent_id, target.agent_id, 0.01, 0.04, "visited_bar_together"
             )
             payload.update(
                 {"trust": relationship.trust, "warmth": relationship.warmth}
@@ -292,7 +294,7 @@ class RuleEngine:
         if target.location != actor.location:
             return ActionResult(False, "not_co_located")
         relationship = self._change_relationship(
-            actor.agent_id, target.agent_id, 0.02, 0.02
+            actor.agent_id, target.agent_id, 0.02, 0.02, "conversation"
         )
         event_id = self._event(
             tick,
@@ -401,8 +403,9 @@ class RuleEngine:
         )
         self._remember_social_event(invitee, inviter, event_id, "Met with" if accepted else "Declined", 0.6)
         delta = 0.05 if accepted else -0.03
-        self._change_relationship(inviter.agent_id, invitee.agent_id, delta, delta)
-        self._change_relationship(invitee.agent_id, inviter.agent_id, delta, delta)
+        reason = "invitation_kept" if accepted else "invitation_declined"
+        self._change_relationship(inviter.agent_id, invitee.agent_id, delta, delta, reason)
+        self._change_relationship(invitee.agent_id, inviter.agent_id, delta, delta, reason)
         if accepted:
             self._advance_social_arcs(tick, inviter, invitee)
 
@@ -437,8 +440,9 @@ class RuleEngine:
         )
         self.store.resolve_commitment(commitment_id, status, event_id)
         delta = 0.08 if fulfilled else -0.12
-        self._change_relationship(actor.agent_id, target.agent_id, delta, delta)
-        self._change_relationship(target.agent_id, actor.agent_id, delta, delta)
+        reason = "promise_fulfilled" if fulfilled else "promise_broken"
+        self._change_relationship(actor.agent_id, target.agent_id, delta, delta, reason)
+        self._change_relationship(target.agent_id, actor.agent_id, delta, delta, reason)
         self._remember_social_event(
             actor,
             target,

@@ -347,6 +347,43 @@ def _service_result_payload(result: ServiceResult | None) -> dict[str, Any] | No
     }
 
 
+def _memory_observation(memory: Any, tick: int) -> dict[str, Any]:
+    """Expose bounded cognition cues without exposing storage internals."""
+
+    age_days = max(0.0, (tick - int(memory.tick)) / 1_440)
+    if age_days <= 1:
+        freshness = "fresh"
+    elif age_days <= 7:
+        freshness = "recent"
+    else:
+        freshness = "old"
+    confidence = float(memory.confidence)
+    confidence_label = (
+        "certain" if confidence >= 0.85 else
+        "likely" if confidence >= 0.6 else
+        "uncertain"
+    )
+    return {
+        "summary": memory.summary,
+        "tags": list(memory.tags),
+        "source": memory.source_type,
+        "confidence": round(confidence, 2),
+        "confidence_label": confidence_label,
+        "freshness": freshness,
+        "visibility": memory.visibility,
+    }
+
+
+def _goal_observation(goal: Any) -> dict[str, Any]:
+    metadata = goal.metadata if isinstance(goal.metadata, dict) else {}
+    return {
+        "kind": goal.kind,
+        "target_id": goal.target_id,
+        "horizon": str(metadata.get("horizon", "ongoing")),
+        "motivation": str(metadata.get("motivation", "未说明")),
+    }
+
+
 def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
     actor = context.speaker.actor
     direction = context.scene_direction or _inferred_scene_direction(
@@ -395,26 +432,18 @@ def dialogue_observation(context: DialogueTurnContext) -> dict[str, Any]:
             {
                 "target_id": item.target_id,
                 "social_stance": relationship_stance(item.trust, item.warmth),
+                "last_change_reason": item.last_change_reason,
             }
             for item in context.speaker.relationships
             if item.target_id in participant_set
         ],
         "active_goals": [
-            {
-                "kind": item.kind,
-                "target_id": item.target_id,
-            }
+            _goal_observation(item)
             for item in context.speaker.goals
             if item.status is GoalStatus.ACTIVE and item.kind != "savings"
         ],
         "private_relevant_memories": [
-            {
-                "summary": item.summary,
-                "tags": list(item.tags),
-                "source": item.source_type,
-                "confidence": round(item.confidence, 2),
-                "visibility": item.visibility,
-            }
+            _memory_observation(item, context.speaker.tick)
             for item in context.speaker.memories
         ],
         "pending_invitations": [

@@ -263,6 +263,15 @@ class DialogueContractTests(unittest.TestCase):
             observation["private_relevant_memories"][0]["summary"],
             "Dana privately remembers Dorothy checking in.",
         )
+        self.assertEqual(
+            observation["private_relevant_memories"][0]["freshness"], "fresh"
+        )
+        self.assertEqual(
+            observation["private_relevant_memories"][0]["confidence_label"], "likely"
+        )
+        self.assertEqual(
+            observation["relationships"][0]["last_change_reason"], "initial"
+        )
         dorothy = next(
             item for item in observation["participants"] if item["agent_id"] == "dorothy"
         )

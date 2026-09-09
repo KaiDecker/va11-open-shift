@@ -47,7 +47,7 @@ class WorldStoreTests(unittest.TestCase):
                 store.set_meta("schema_version", 1)
 
             with WorldStore(path) as upgraded:
-                self.assertEqual(upgraded.get_meta("schema_version"), "4")
+                self.assertEqual(upgraded.get_meta("schema_version"), "5")
                 self.assertEqual(upgraded.get_agent("a").display_name, "A")
                 self.assertEqual(upgraded.list_invitations(), [])
                 self.assertEqual(upgraded.list_commitments(), [])
@@ -115,7 +115,7 @@ class WorldStoreTests(unittest.TestCase):
             connection.close()
             with WorldStore(path) as store:
                 memory = store.list_memories("a")[0]
-                self.assertEqual(store.get_meta("schema_version"), "4")
+                self.assertEqual(store.get_meta("schema_version"), "5")
                 self.assertEqual(memory["source_type"], "legacy")
                 self.assertEqual(memory["confidence"], 0.5)
                 self.assertEqual(memory["archived"], False)
@@ -184,6 +184,17 @@ class WorldStoreTests(unittest.TestCase):
                         """,
                         (event_id,),
                     )
+
+    def test_relationship_change_reason_survives_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            with WorldStore(path) as store:
+                store.add_agent(AgentState("a", "A", "home", 10, 0.2, "ok", 60))
+                store.add_agent(AgentState("b", "B", "home", 10, 0.2, "ok", 60))
+                store.upsert_relationship(Relationship("a", "b", 0.4, 0.5, 0, "conversation"))
+            with WorldStore(path) as reopened:
+                relationship = reopened.get_relationship("a", "b")
+                self.assertEqual(relationship.last_change_reason, "conversation")
 
 
 if __name__ == "__main__":

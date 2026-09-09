@@ -43,6 +43,7 @@ class Relationship:
     trust: float = 0.0
     warmth: float = 0.0
     debt: int = 0
+    last_change_reason: str = "initial"
 
 
 @dataclass(slots=True)

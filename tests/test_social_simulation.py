@@ -123,6 +123,19 @@ class SocialSimulationTests(unittest.TestCase):
                 self.assertIn("Dana secret", summaries)
                 self.assertNotIn("Alma secret", summaries)
 
+    def test_agent_observation_exposes_bounded_motivation_without_private_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with WorldStore(Path(temp_dir) / "world.sqlite3") as store:
+                engine = create_demo_world(store, MockProvider(), seed=7)
+                observation = decision_observation(engine.context_for_agent(0, "dana"))
+                savings = next(
+                    item for item in observation["active_goals"]
+                    if item["goal_id"] == "dana_savings"
+                )
+                self.assertEqual(savings["horizon"], "long_term")
+                self.assertEqual(savings["motivation"], "让酒吧继续营业")
+                self.assertIn("last_change_reason", observation["relationships"][0])
+
     def test_social_actions_advance_and_replace_story_arcs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with WorldStore(Path(temp_dir) / "world.sqlite3") as store:

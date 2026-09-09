@@ -46,13 +46,13 @@ def create_demo_world(
         for agent in agents:
             store.add_agent(agent)
         _seed_relationships(store, [agent.agent_id for agent in agents])
-        store.add_goal(Goal("dana_savings", "dana", "savings", None, 150, 0.7))
+        store.add_goal(Goal("dana_savings", "dana", "savings", None, 150, 0.7, metadata={"horizon": "long_term", "motivation": "让酒吧继续营业"}))
         store.add_goal(
-            Goal("dorothy_savings", "dorothy", "savings", None, 80, 0.8)
+            Goal("dorothy_savings", "dorothy", "savings", None, 80, 0.8, metadata={"horizon": "short_term", "motivation": "应付眼前开销"})
         )
-        store.add_goal(Goal("alma_savings", "alma", "savings", None, 120, 0.65))
-        store.add_goal(Goal("stella_savings", "stella", "savings", None, 180, 0.6))
-        store.add_goal(Goal("sei_savings", "sei", "savings", None, 140, 0.75))
+        store.add_goal(Goal("alma_savings", "alma", "savings", None, 120, 0.65, metadata={"horizon": "short_term", "motivation": "留出缓冲"}))
+        store.add_goal(Goal("stella_savings", "stella", "savings", None, 180, 0.6, metadata={"horizon": "long_term", "motivation": "保留未来选择"}))
+        store.add_goal(Goal("sei_savings", "sei", "savings", None, 140, 0.75, metadata={"horizon": "short_term", "motivation": "补回失去的收入"}))
         store.add_goal(
             Goal("dana_trust_dorothy", "dana", "relationship", "dorothy", 0.35, 0.6)
         )

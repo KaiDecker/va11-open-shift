@@ -21,7 +21,7 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _ERROR_CODE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
@@ -109,6 +109,7 @@ class WorldStore:
                     trust REAL NOT NULL CHECK (trust >= -1 AND trust <= 1),
                     warmth REAL NOT NULL CHECK (warmth >= -1 AND warmth <= 1),
                     debt INTEGER NOT NULL,
+                    last_change_reason TEXT NOT NULL DEFAULT 'initial',
                     PRIMARY KEY (source_id, target_id),
                     CHECK (source_id <> target_id)
                 );
@@ -266,6 +267,11 @@ class WorldStore:
             )
             # Additive migration keeps Stage 21 databases readable in place.
             columns = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(memories)")}
+            relationship_columns = {str(row["name"]) for row in self._conn.execute("PRAGMA table_info(relationships)")}
+            if "last_change_reason" not in relationship_columns:
+                self._conn.execute(
+                    "ALTER TABLE relationships ADD COLUMN last_change_reason TEXT NOT NULL DEFAULT 'legacy'"
+                )
             for name, definition in (
                 ("source_type", "TEXT NOT NULL DEFAULT 'legacy'"),
                 ("confidence", "REAL NOT NULL DEFAULT 0.5"),
@@ -819,12 +825,14 @@ class WorldStore:
         with self._write_scope():
             self._conn.execute(
                 """
-                INSERT INTO relationships(source_id, target_id, trust, warmth, debt)
-                VALUES(?, ?, ?, ?, ?)
+                INSERT INTO relationships(
+                    source_id, target_id, trust, warmth, debt, last_change_reason
+                ) VALUES(?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id, target_id) DO UPDATE SET
                     trust = excluded.trust,
                     warmth = excluded.warmth,
-                    debt = excluded.debt
+                    debt = excluded.debt,
+                    last_change_reason = excluded.last_change_reason
                 """,
                 (
                     relationship.source_id,
@@ -832,6 +840,7 @@ class WorldStore:
                     relationship.trust,
                     relationship.warmth,
                     relationship.debt,
+                    relationship.last_change_reason,
                 ),
             )
 
@@ -850,6 +859,7 @@ class WorldStore:
             trust=float(row["trust"]),
             warmth=float(row["warmth"]),
             debt=int(row["debt"]),
+            last_change_reason=str(row["last_change_reason"]),
         )
 
     def list_relationships(self, source_id: str | None = None) -> list[Relationship]:
@@ -872,6 +882,7 @@ class WorldStore:
                 trust=float(row["trust"]),
                 warmth=float(row["warmth"]),
                 debt=int(row["debt"]),
+                last_change_reason=str(row["last_change_reason"]),
             )
             for row in rows
         ]

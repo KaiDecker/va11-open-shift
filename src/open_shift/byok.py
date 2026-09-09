@@ -313,6 +313,7 @@ def decision_observation(context: DecisionContext) -> dict[str, Any]:
                 "trust": relationship.trust,
                 "warmth": relationship.warmth,
                 "debt": relationship.debt,
+                "last_change_reason": relationship.last_change_reason,
             }
             for relationship in context.relationships
         ],
@@ -323,6 +324,8 @@ def decision_observation(context: DecisionContext) -> dict[str, Any]:
                 "target_id": goal.target_id,
                 "target_value": goal.target_value,
                 "priority": goal.priority,
+                "horizon": str(goal.metadata.get("horizon", "ongoing")),
+                "motivation": str(goal.metadata.get("motivation", "未说明")),
             }
             for goal in context.goals
             if goal.status is GoalStatus.ACTIVE
