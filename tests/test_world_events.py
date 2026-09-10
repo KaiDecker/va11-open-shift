@@ -21,6 +21,7 @@ from open_shift.store import WorldStore
 from open_shift.story_graph import DAILY_STORY_GRAPH_VERSION
 from open_shift.world_events import (
     CHARACTER_STORY_ARCS,
+    CITY_EVENT_CHAINS,
     EVENT_AGENTS,
     EVENT_CATEGORIES,
     EVENT_STATUSES,
@@ -372,6 +373,27 @@ class WorldEventTests(unittest.TestCase):
         self.assertEqual(payload["event_key"], "alma_client_file_day_1")
         self.assertNotIn("story_arc_started", repr(payload))
         self.assertIn("facts", payload)
+
+    def test_city_event_chain_materializes_three_days_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "world.sqlite3"
+            service = WorldSceneService(path, advance_minutes=0)
+            with WorldStore(path) as store:
+                service._ensure_city_event_chain(store, 2)
+                service._ensure_city_event_chain(store, 2)
+                first = [event for event in store.list_events() if event["event_type"] == "city_event_chain_stage"]
+                self.assertEqual(len(first), 1)
+                self.assertEqual(first[0]["payload"]["lifecycle"], "rumor")
+                service._ensure_city_event_chain(store, 4)
+                second = [event for event in store.list_events() if event["event_type"] == "city_event_chain_stage"]
+                self.assertEqual(len(second), 3)
+                self.assertEqual([event["payload"]["lifecycle"] for event in second], ["rumor", "developing", "concluded"])
+                self.assertEqual(len(CITY_EVENT_CHAINS), 3)
+                store.set_meta("current_story_day", 4)
+
+            feed = service.tablet_feed({"limit": 8})
+            self.assertEqual(len(feed["items"]), 3)
+            self.assertEqual(feed["items"][0]["lifecycle"], "concluded")
 
     def test_tablet_feed_deduplicates_event_keys_and_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

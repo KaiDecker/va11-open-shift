@@ -46,9 +46,13 @@ from .scenario import create_demo_world
 from .store import WorldStore
 from .world_events import (
     CODE_OWNED_DAY_ONE_EVENTS,
+    CITY_EVENT_CHAINS,
+    CityEventChainStage,
     PublicWorldEvent,
     character_story_arcs_for_day,
     character_story_event,
+    city_event_chain_stages_through_day,
+    tablet_chain_stage_item,
     tablet_feed_item,
     validate_public_world_event_candidates,
 )
@@ -79,6 +83,7 @@ _NON_NARRATIVE_EVENTS = {
 _NARRATIVE_EVENT_TYPES = frozenset(
     {
         "public_world_event",
+        "city_event_chain_stage",
         "character_story_stage",
         "worked",
         "rested",
@@ -1108,6 +1113,33 @@ class WorldSceneService:
             )
 
     @staticmethod
+    def _ensure_city_event_chain(store: WorldStore, day: int) -> None:
+        """Materialize each rule-owned lifecycle stage once, without provider calls."""
+
+        for stage in city_event_chain_stages_through_day(day):
+            receipt_key = f"city_event_chain_stage:{stage.chain_id}:{stage.stage_day}"
+            if store.get_meta(receipt_key) is not None:
+                continue
+            with store.transaction():
+                if store.get_meta(receipt_key) is not None:
+                    continue
+                payload = stage.to_dict()
+                event_id = store.append_event(
+                    store.current_tick,
+                    "city_event_chain_stage",
+                    stage.affected_agents[0],
+                    stage.affected_agents[1] if len(stage.affected_agents) > 1 else None,
+                    payload=payload,
+                )
+                store.set_meta(
+                    receipt_key,
+                    json.dumps(
+                        {"event_id": event_id, "chain_id": stage.chain_id, "stage_day": stage.stage_day},
+                        separators=(",", ":"), sort_keys=True,
+                    ),
+                )
+
+    @staticmethod
     def _ensure_character_story_events(store: WorldStore, day: int) -> None:
         """Materialize one stage of each canon arc, once per arc and day.
 
@@ -1187,6 +1219,10 @@ class WorldSceneService:
                 for event in store.list_events()
                 if event["event_type"] == "public_world_event"
             ]
+            chain_events = [
+                event for event in store.list_events()
+                if event["event_type"] == "city_event_chain_stage"
+            ]
             items = []
             seen_keys: set[str] = set()
             seen_content: set[tuple[str, str]] = set()
@@ -1212,6 +1248,24 @@ class WorldSceneService:
                 seen_content.add(content_key)
                 if len(items) == raw_limit:
                     break
+            for record in reversed(chain_events):
+                if len(items) >= raw_limit:
+                    break
+                payload = record["payload"]
+                if not isinstance(payload, Mapping):
+                    raise ValueError("persisted city event chain stage was invalid")
+                stage = CityEventChainStage(
+                    str(payload["chain_id"]), int(payload["stage_day"]),
+                    str(payload["lifecycle"]), str(payload["status"]),
+                    str(payload["headline"]), str(payload["summary"]),
+                    tuple(payload["affected_agents"]),
+                )
+                item = tablet_chain_stage_item(record["event_id"], record["tick"], stage)
+                if item["event_key"] in seen_keys or (stage.headline, stage.summary) in seen_content:
+                    continue
+                items.append(item)
+                seen_keys.add(item["event_key"])
+                seen_content.add((stage.headline, stage.summary))
             return {
                 "world_day": day,
                 "items": items,
@@ -1222,6 +1276,7 @@ class WorldSceneService:
 
         with self._lock, WorldStore(self.db_path) as store:
             day_index = int(store.get_meta("current_story_day", "1") or 1)
+            self._ensure_city_event_chain(store, day_index)
             with store.transaction():
                 migration = store.migrate_incompatible_daily_story(
                     day_index, DAILY_STORY_GRAPH_VERSION
@@ -1640,6 +1695,7 @@ class WorldSceneService:
         if isinstance(day_index, bool) or not isinstance(day_index, int) or day_index < 1:
             raise ValueError("day_index must be a positive integer")
         with self._generation_lock, self._lock, WorldStore(self.db_path) as store:
+            self._ensure_city_event_chain(store, day_index)
             with store.transaction():
                 migration = store.migrate_incompatible_daily_story(
                     day_index, DAILY_STORY_GRAPH_VERSION
@@ -2563,6 +2619,7 @@ class WorldSceneService:
         started = monotonic_seconds()
         emit_timing("story_graph_start", day=day_index)
         with self._generation_lock, WorldStore(self.db_path) as store:
+            self._ensure_city_event_chain(store, day_index)
             provider: Any | None = None
             provider_error: Exception | None = None
             record = store.get_daily_story_graph(
@@ -2731,7 +2788,7 @@ class WorldSceneService:
         records = [
             event
             for event in store.list_events()
-            if event.get("event_type") == "public_world_event"
+            if event.get("event_type") in {"public_world_event", "city_event_chain_stage"}
             and isinstance(event.get("payload"), Mapping)
         ]
         if not records:
@@ -2774,6 +2831,17 @@ class WorldSceneService:
         scheduled = event_from_meta(f"scheduled_public_event_selection:{day_index}")
         if scheduled is not None:
             return scheduled
+        chain_stages = [
+            event for event in records
+            if event.get("event_type") == "city_event_chain_stage"
+            and isinstance(event.get("payload"), Mapping)
+            and int(event["payload"].get("stage_day", 0)) <= day_index
+        ]
+        if chain_stages:
+            return max(
+                chain_stages,
+                key=lambda event: int(event["payload"].get("stage_day", 0)),
+            )
         if day_index == 1:
             for event in reversed(records):
                 event_key = event.get("payload", {}).get("event_key")

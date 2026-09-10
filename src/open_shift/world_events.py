@@ -246,6 +246,84 @@ def tablet_feed_item(event_id: int, tick: int, event: PublicWorldEvent) -> dict[
     }
 
 
+@dataclass(frozen=True, slots=True)
+class CityEventChainStage:
+    """Rule-owned public event lifecycle stage shared across several days."""
+
+    chain_id: str
+    stage_day: int
+    lifecycle: str
+    status: str
+    headline: str
+    summary: str
+    affected_agents: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not _EVENT_KEY.fullmatch(self.chain_id):
+            raise ValueError("city event chain id was invalid")
+        if self.stage_day < 1 or self.lifecycle not in {"rumor", "developing", "concluded"}:
+            raise ValueError("city event chain stage was invalid")
+        PublicWorldEvent(
+            f"{self.chain_id}_stage_{self.stage_day}",
+            "city",
+            self.status,
+            self.headline,
+            self.summary,
+            self.affected_agents,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event_key": f"{self.chain_id}_stage_{self.stage_day}",
+            "chain_id": self.chain_id,
+            "stage_day": self.stage_day,
+            "lifecycle": self.lifecycle,
+            "category": "city",
+            "status": self.status,
+            "headline": self.headline,
+            "summary": self.summary,
+            "affected_agents": list(self.affected_agents),
+        }
+
+
+CITY_EVENT_CHAINS: tuple[CityEventChainStage, ...] = (
+    CityEventChainStage(
+        "old_town_power_route", 2, "rumor", "developing",
+        "旧城区的电力检查可能提前",
+        "商户之间开始传说检查时间会提前，夜间营业的人还没有收到正式通知。",
+        ("dana", "sei"),
+    ),
+    CityEventChainStage(
+        "old_town_power_route", 3, "developing", "active",
+        "旧城区电力检查进入夜间时段",
+        "供电部门确认检查提前，几家商户短暂降压，夜班路线也被迫重新安排。",
+        ("dana", "sei"),
+    ),
+    CityEventChainStage(
+        "old_town_power_route", 4, "concluded", "resolved",
+        "旧城区电力检查结束",
+        "检查结束后供电恢复稳定，但商户决定保留临时应急路线以防再次停电。",
+        ("dana", "sei"),
+    ),
+)
+
+
+def city_event_chain_stages_through_day(day: int) -> tuple[CityEventChainStage, ...]:
+    if isinstance(day, bool) or not isinstance(day, int) or day < 1:
+        raise ValueError("day must be a positive integer")
+    return tuple(stage for stage in CITY_EVENT_CHAINS if stage.stage_day <= day)
+
+
+def tablet_chain_stage_item(event_id: int, tick: int, stage: CityEventChainStage) -> dict[str, Any]:
+    if event_id < 1 or tick < 0:
+        raise ValueError("persisted city chain identity was invalid")
+    return {"event_id": event_id, "event_key": stage.to_dict()["event_key"],
+            "chain_id": stage.chain_id, "stage_day": stage.stage_day,
+            "lifecycle": stage.lifecycle, "category": "city", "status": stage.status,
+            "headline": stage.headline, "summary": stage.summary,
+            "occurred_tick": tick, "affected_agents": list(stage.affected_agents)}
+
+
 CODE_OWNED_DAY_ONE_EVENTS = (
     PublicWorldEvent(
         "city_news_day_1_transit",
