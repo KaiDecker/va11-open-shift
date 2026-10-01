@@ -537,6 +537,69 @@ class DailyStoryGraphTests(unittest.TestCase):
             ).prepare_daily_story_graph(1)
             self.assertEqual(replay, graph)
 
+    def test_local_experience_builds_taste_only_graph_without_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+
+            def forbidden_factory():
+                raise AssertionError("local experience constructed a provider")
+
+            graph = WorldSceneService(
+                db_path,
+                provider_factory=forbidden_factory,
+                experience_mode="local",
+                advance_minutes=0,
+            ).prepare_daily_story_graph(1)
+            self.assertTrue(graph.generation_version.endswith("_local"))
+            arrival = next(
+                node for node in graph.nodes if node.kind is StoryNodeKind.ARRIVAL_ORDER
+            )
+            assert arrival.scene is not None and arrival.scene.order is not None
+            self.assertIn("来杯", arrival.scene.order.display_text)
+            self.assertNotIn("事件", "".join(line.text for line in arrival.scene.lines))
+
+    def test_local_experience_resolves_drink_without_provider_dialogue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "world.sqlite3"
+
+            def forbidden_factory():
+                raise AssertionError("local experience constructed a provider")
+
+            service = WorldSceneService(
+                db_path,
+                provider_factory=forbidden_factory,
+                experience_mode="local",
+                daily_story_mode=True,
+                advance_minutes=0,
+            )
+            service.prepare_story_day({"request_id": "local-prepare"})
+            opening = service.open_scene(
+                {"protocol_version": 1, "request_id": "local-open-1", "client_session_id": "local"}
+            )
+            service.ack_scene(self._ack(opening.scene_id, "local-ack-1", "continued_in_bar"))
+            doorbell = service.open_scene(
+                {"protocol_version": 1, "request_id": "local-open-2", "client_session_id": "local"}
+            )
+            service.ack_scene(self._ack(doorbell.scene_id, "local-ack-2", "continued_in_bar"))
+            self._ack_opening_gates(service, "local")
+            arrival = service.open_scene(
+                {"protocol_version": 1, "request_id": "local-open-3", "client_session_id": "local"}
+            )
+            assert arrival.order is not None
+            service.ack_scene(self._ack(arrival.scene_id, "local-ack-3", "order_started"))
+            result = service.resolve_order(
+                {
+                    "protocol_version": 1,
+                    "request_id": "local-order-1",
+                    "client_session_id": "local",
+                    "scene_id": arrival.scene_id,
+                    "order_id": arrival.order.order_id,
+                    "drink": self._exact_drink(arrival.order.requested_drink_id),
+                }
+            )
+            self.assertIn("我先走了", result.scene.lines[-1].text)
+            self.assertNotIn("安排", "".join(line.text for line in result.scene.lines))
+
     def test_on_demand_mode_generates_only_reached_scene_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "world.sqlite3"

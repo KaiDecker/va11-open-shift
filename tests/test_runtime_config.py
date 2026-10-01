@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from open_shift.cli import main
 from open_shift.byok import ThinkingMode
-from open_shift.runtime_config import RuntimeConfigError, load_runtime_config
+from open_shift.runtime_config import ExperienceMode, RuntimeConfigError, load_runtime_config
 
 
 class RuntimeConfigTests(unittest.TestCase):
@@ -111,6 +111,54 @@ prefetch_days = 2
 """,
                     )
                 )
+
+    def test_local_mode_does_not_require_provider_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = load_runtime_config(
+                self.write(
+                    Path(temp_dir),
+                    """
+[world]
+experience_mode = "local"
+prefetch_days = 0
+""",
+                )
+            )
+            self.assertIs(config.experience_mode, ExperienceMode.LOCAL)
+            self.assertEqual(config.redacted_dict()["world"]["experience_mode"], "local")
+
+    def test_launch_forwards_local_experience_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = self.write(
+                root,
+                """
+[world]
+experience_mode = "local"
+""",
+            )
+            with patch("open_shift.cli.RuntimeSession") as session:
+                session.return_value.run.return_value = 0
+                self.assertEqual(
+                    main(
+                        [
+                            "launch",
+                            "--config",
+                            str(config_path),
+                            "--db",
+                            str(root / "world.sqlite3"),
+                            "--runtime-file",
+                            str(root / "open-shift-runtime.ini"),
+                            "--game-cwd",
+                            str(root),
+                            "--game-command",
+                            "game.exe",
+                        ]
+                    ),
+                    0,
+                )
+            arguments = list(session.call_args.args[0].bridge_extra_args)
+            self.assertEqual(arguments[arguments.index("--experience-mode") + 1], "local")
 
     def test_launch_maps_validated_config_to_bridge_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,13 @@ from .byok import APIProtocol, BYOKConfig, BYOKError, ResponseFormat, ThinkingMo
 
 class RuntimeConfigError(ValueError):
     pass
+
+
+class ExperienceMode(str, Enum):
+    """Player-facing dialogue mode selected by the launcher."""
+
+    LOCAL = "local"
+    AGENT = "agent"
 
 
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
@@ -27,7 +35,7 @@ _PROVIDER_FIELDS = {
     "max_calls",
     "thinking",
 }
-_WORLD_FIELDS = {"prefetch_days"}
+_WORLD_FIELDS = {"prefetch_days", "experience_mode"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +49,7 @@ class RuntimeConfig:
     provider_max_calls: int = 100000
     provider_thinking: ThinkingMode = ThinkingMode.DEFAULT
     prefetch_days: int = 0
+    experience_mode: ExperienceMode = ExperienceMode.AGENT
 
     def __post_init__(self) -> None:
         if (self.provider_base_url is None) != (self.provider_model is None):
@@ -53,6 +62,11 @@ class RuntimeConfig:
             raise RuntimeConfigError("provider max_calls must be between 1 and 100000")
         if self.prefetch_days not in {0, 1}:
             raise RuntimeConfigError("world prefetch_days must be 0 or 1")
+        if not isinstance(self.experience_mode, ExperienceMode):
+            try:
+                object.__setattr__(self, "experience_mode", ExperienceMode(self.experience_mode))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeConfigError("world experience_mode must be local or agent") from exc
         if self.provider_base_url is not None:
             self.to_byok_config()
 
@@ -85,7 +99,10 @@ class RuntimeConfig:
                 "max_calls": self.provider_max_calls,
                 "thinking": self.provider_thinking.value,
             },
-            "world": {"prefetch_days": self.prefetch_days},
+            "world": {
+                "prefetch_days": self.prefetch_days,
+                "experience_mode": self.experience_mode.value,
+            },
         }
 
 
@@ -128,6 +145,7 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
             provider_max_calls=int(provider.get("max_calls", 100000)),
             provider_thinking=ThinkingMode(provider.get("thinking", ThinkingMode.DEFAULT.value)),
             prefetch_days=int(world.get("prefetch_days", 0)),
+            experience_mode=ExperienceMode(world.get("experience_mode", ExperienceMode.AGENT.value)),
         )
     except (TypeError, ValueError) as exc:
         raise RuntimeConfigError(f"runtime config values were invalid: {exc}") from exc

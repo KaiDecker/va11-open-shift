@@ -22,7 +22,7 @@ from .distribution import (
     uninstall_patch,
     verify_patch_output,
 )
-from .runtime_config import RuntimeConfigError, load_runtime_config
+from .runtime_config import ExperienceMode, RuntimeConfigError, load_runtime_config
 from .world_bridge import WorldSceneService
 from .launcher import LauncherError, RuntimeSession, build_launch_config
 from .game_data import (
@@ -140,6 +140,12 @@ def _build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--seed", type=int, default=7)
     bridge.add_argument("--advance-minutes", type=int, default=1440)
     bridge.add_argument("--prefetch-days", type=int, choices=(0, 1), default=0)
+    bridge.add_argument(
+        "--experience-mode",
+        choices=[mode.value for mode in ExperienceMode],
+        default=ExperienceMode.AGENT.value,
+        help="dialogue experience: local deterministic mode or Agent/API mode",
+    )
     bridge.add_argument("--provider-base-url")
     bridge.add_argument("--provider-model")
     bridge.add_argument("--provider-protocol", choices=[item.value for item in APIProtocol])
@@ -169,6 +175,12 @@ def _build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--port", type=int, default=0)
     launch.add_argument("--advance-minutes", type=int, default=1440)
     launch.add_argument("--prefetch-days", type=int, choices=(0, 1), default=0)
+    launch.add_argument(
+        "--experience-mode",
+        choices=[mode.value for mode in ExperienceMode],
+        default=ExperienceMode.AGENT.value,
+        help="dialogue experience: local deterministic mode or Agent/API mode",
+    )
     launch.add_argument("--config", type=Path)
     launch.add_argument("--health-timeout", type=float, default=10.0)
     launch.add_argument("--bridge-command", nargs="+")
@@ -460,6 +472,7 @@ def _serve_bridge(args: argparse.Namespace) -> int:
                 advance_minutes=args.advance_minutes,
                 daily_story_mode=True,
                 prefetch_days=args.prefetch_days,
+                experience_mode=args.experience_mode,
                 allow_provider_fallback=not args.provider_required,
             )
             local_app_data = Path(
@@ -572,7 +585,16 @@ def _paired_save_response(
 
 
 def _provider_factory(args: argparse.Namespace):
+    experience_mode = getattr(args, "experience_mode", None)
+    if experience_mode == ExperienceMode.LOCAL.value:
+        # Local mode is deliberately independent of provider configuration.
+        # Returning a factory keeps the bridge construction path uniform while
+        # guaranteeing that no API key lookup or network transport occurs.
+        return lambda: MockProvider()
     if args.provider_base_url is None and args.provider_model is None:
+        # Older development launch commands omitted provider settings. Keep
+        # those headless bridges playable with deterministic dialogue; an
+        # explicitly configured Agent provider still requires its key below.
         return None
     provider_model = args.provider_model
     if args.provider_base_url and provider_model is None and "deepseek.com" in args.provider_base_url:
@@ -603,7 +625,7 @@ def _provider_factory(args: argparse.Namespace):
             )
         )
     except BYOKConfigurationError:
-        if args.provider_required:
+        if args.provider_required or experience_mode == ExperienceMode.AGENT.value:
             raise
         # A missing optional key must not prevent the local bridge from
         # starting. The world remains playable with deterministic dialogue;
@@ -626,6 +648,7 @@ def _launch(args: argparse.Namespace) -> int:
             args.provider_timeout = runtime.provider_timeout_seconds
             args.provider_max_calls = runtime.provider_max_calls
             args.provider_thinking = runtime.provider_thinking.value
+            args.experience_mode = runtime.experience_mode.value
         config = build_launch_config(
             db_path=args.db,
             runtime_file=args.runtime_file,
@@ -651,6 +674,7 @@ def _launch(args: argparse.Namespace) -> int:
                     ("--provider-timeout", str(args.provider_timeout)),
                     ("--provider-max-calls", str(args.provider_max_calls)),
                     ("--provider-thinking", args.provider_thinking),
+                    ("--experience-mode", args.experience_mode),
                     (
                         "--provider-required",
                         "" if args.provider_required else None,

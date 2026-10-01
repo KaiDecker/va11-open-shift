@@ -3,6 +3,8 @@ param(
     [string] $InstallDir = "",
     [string] $GameCopyDir = "",
     [string] $ApiKeyEnv = "OPEN_SHIFT_API_KEY",
+    [ValidateSet("local", "agent")]
+    [string] $ExperienceMode = "local",
     [string] $CompletionMarker,
     [switch] $SkipShortcut,
     [switch] $SkipCredential
@@ -27,6 +29,7 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $InstallDir = if ($reuseInstalledRoot) { $packageRoot } else { Join-Path $env:LOCALAPPDATA ("OpenShift-" + $safeVersion) }
 }
 if ([string]::IsNullOrWhiteSpace($GameCopyDir)) { $GameCopyDir = Join-Path $InstallDir "game" }
+if ($ExperienceMode -notin @("local", "agent")) { throw "ExperienceMode must be local or agent" }
 if ($CompletionMarker) {
     Remove-Item -LiteralPath $CompletionMarker -Force -ErrorAction SilentlyContinue
 }
@@ -256,9 +259,22 @@ max_calls = 100000
 thinking = "disabled"
 
 [world]
+experience_mode = "$ExperienceMode"
 prefetch_days = 0
 "@
     Write-Utf8NoBom $config $configText
+} else {
+    # Preserve an existing player's provider settings while making the new
+    # mode explicit for the runtime and launcher.
+    $configText = Get-Content -LiteralPath $config -Raw
+    if ($configText -notmatch '(?m)^\s*experience_mode\s*=') {
+        if ($configText -match '(?ms)^\[world\]\s*$') {
+            $configText = [regex]::Replace($configText, '(?m)^\[world\]\s*$', "[world]`r`nexperience_mode = `"$ExperienceMode`"", 1)
+        } else {
+            $configText = $configText.TrimEnd() + "`r`n`r`n[world]`r`nexperience_mode = `"$ExperienceMode`"`r`n"
+        }
+        Write-Utf8NoBom $config $configText
+    }
 }
 
 # Keep the legacy switch for compatibility, but new installs never create a
@@ -279,6 +295,7 @@ $state = [ordered]@{
     config = $config
     database = (Join-Path $installRoot "open-shift.sqlite3")
     api_key_env = $ApiKeyEnv
+    experience_mode = $ExperienceMode
     runtime = $runtimePath
     runtime_is_python = $runtimeIsPython
     bridge_command = if ($runtimeIsPython) { @($runtimePath, "-m", "open_shift", "serve-bridge") } else { @($runtimePath, "serve-bridge") }
@@ -287,7 +304,7 @@ $state = [ordered]@{
 }
 Write-Utf8NoBom (Join-Path $installRoot "install.json") ($state | ConvertTo-Json)
 
-if (-not $SkipCredential) {
+if (-not $SkipCredential -and $ExperienceMode -eq "agent") {
     & (Join-Path $installRoot "packaging\configure-api-key.ps1") -InstallDir $installRoot
 }
 
@@ -297,13 +314,17 @@ $launcherText = @"
 Add-Type -AssemblyName System.Security
 `$root = Split-Path -Parent `$MyInvocation.MyCommand.Path
 `$state = Get-Content -LiteralPath (Join-Path `$root "install.json") -Raw | ConvertFrom-Json
+`$configText = if (Test-Path -LiteralPath `$state.config) { Get-Content -LiteralPath `$state.config -Raw } else { "" }
+`$experienceMode = if (`$configText -match '(?m)^\s*experience_mode\s*=\s*"(local|agent)"') { [string] `$Matches[1] } elseif (`$state.experience_mode) { [string] `$state.experience_mode } else { "agent" }
 `$secretFile = Join-Path `$root "api-key.dpapi"
-if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configured. Run packaging\configure-api-key.ps1." }
 `$env:OPEN_SHIFT_TIMING_LOG = Join-Path `$root "timing.log"
 `$env:OPEN_SHIFT_DIALOGUE_LOG = Join-Path `$root "dialogue.log"
-`$protected = [IO.File]::ReadAllBytes(`$secretFile)
-`$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }
+if (`$experienceMode -eq "agent") {
+    if (-not (Test-Path -LiteralPath `$secretFile)) { throw "API key is not configured. Run packaging\configure-api-key.ps1." }
+    `$protected = [IO.File]::ReadAllBytes(`$secretFile)
+    `$bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(`$protected, `$null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+    try { Set-Item -Path "Env:$ApiKeyEnv" -Value ([Text.Encoding]::UTF8.GetString(`$bytes)) } finally { [Array]::Clear(`$bytes, 0, `$bytes.Length) }
+}
 `$database = if (`$state.database) { [IO.Path]::GetFullPath([string] `$state.database) } else { Join-Path `$root "open-shift.sqlite3" }
 `$arguments = @("launch", "--config", `$state.config, "--db", `$database, "--runtime-file", (Join-Path `$env:LOCALAPPDATA "VA_11_Hall_A\open-shift-runtime.ini"), "--paired-save-dir", (Join-Path `$root "paired-saves"), "--game-cwd", `$state.game_copy_dir, "--game-command", "VA-11 Hall A.exe", "--steam-root", `$state.steam_root, "--steam-app-id", "447530", "--prepare-before-game", "--bridge-command") + @(`$state.bridge_command)
 if (`$state.runtime_is_python) { `$env:PYTHONPATH = Join-Path `$root "src"; & `$state.runtime -m open_shift @arguments } else { & `$state.runtime @arguments }

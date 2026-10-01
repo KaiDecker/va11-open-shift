@@ -127,6 +127,7 @@ public:
     std::wstring gameCopy;
     std::wstring selectedGame;
     std::wstring pendingKey;
+    std::wstring pendingExperienceMode = L"local";
     std::wstring activeLog;
     std::wstring marker;
     HANDLE process = nullptr;
@@ -190,7 +191,8 @@ public:
         if (!webview) return;
         std::wstring config = Join(installDir, L"open-shift.toml");
         std::wstring thinking = ReadThinking(config);
-        std::wstring js = L"window.setState({steam:" + JsonString(selectedGame) + L",copy:" + JsonString(gameCopy) + L",status:" + JsonString(status) + L",busy:" + (busy ? L"true" : L"false") + L",startDisabled:" + (FileExists(Join(installDir, L"Start-Open-Shift.ps1")) ? L"false" : L"true") + L",thinking:" + JsonString(thinking) + L",thinkingAvailable:" + (FileExists(config) ? L"true" : L"false") + L",packageVersion:" + JsonString(packageVersion) + L",keyConfigured:" + (FileExists(Join(installDir, L"api-key.dpapi")) ? L"true" : L"false") + L",installReady:" + (FileExists(Join(installDir, L"Start-Open-Shift.ps1")) ? L"true" : L"false") + L"});";
+        std::wstring experience = ReadExperienceMode(config);
+        std::wstring js = L"window.setState({steam:" + JsonString(selectedGame) + L",copy:" + JsonString(gameCopy) + L",status:" + JsonString(status) + L",busy:" + (busy ? L"true" : L"false") + L",startDisabled:" + (FileExists(Join(installDir, L"Start-Open-Shift.ps1")) ? L"false" : L"true") + L",thinking:" + JsonString(thinking) + L",thinkingAvailable:" + (FileExists(config) ? L"true" : L"false") + L",experienceMode:" + JsonString(experience) + L",experienceAvailable:true,packageVersion:" + JsonString(packageVersion) + L",keyConfigured:" + (FileExists(Join(installDir, L"api-key.dpapi")) ? L"true" : L"false") + L",installReady:" + (FileExists(Join(installDir, L"Start-Open-Shift.ps1")) ? L"true" : L"false") + L"});";
         webview->ExecuteScript(js.c_str(), nullptr);
     }
 
@@ -202,6 +204,22 @@ public:
         if (p == std::wstring::npos) return L"disabled";
         size_t end = text.find(L'"', p + 1);
         return end == std::wstring::npos ? L"disabled" : text.substr(p + 1, end - p - 1);
+    }
+
+    std::wstring ReadExperienceMode(const std::wstring& path) {
+        std::wstring text = ReadUtf8(path);
+        if (text.empty()) return L"local";
+        size_t section = text.find(L"[world]");
+        if (section == std::wstring::npos) return L"agent";
+        size_t sectionEnd = text.find(L"\n[", section + 1);
+        if (sectionEnd == std::wstring::npos) sectionEnd = text.size();
+        size_t position = text.find(L"experience_mode", section);
+        if (position == std::wstring::npos || position >= sectionEnd) return L"agent";
+        size_t first = text.find(L'"', position);
+        size_t second = first == std::wstring::npos ? first : text.find(L'"', first + 1);
+        if (first == std::wstring::npos || second == std::wstring::npos || second >= sectionEnd) return L"agent";
+        std::wstring value = text.substr(first + 1, second - first - 1);
+        return value == L"local" || value == L"agent" ? value : L"agent";
     }
 
     void Browse() {
@@ -223,6 +241,31 @@ public:
         if (!CryptProtectData(&plain, L"OPEN SHIFT API Key", nullptr, nullptr, nullptr, 0, &encrypted)) { State(L"API Key 加密保存失败。", false); return; }
         std::ofstream file(Join(installDir, L"api-key.dpapi"), std::ios::binary | std::ios::trunc); file.write(reinterpret_cast<char*>(encrypted.pbData), encrypted.cbData); bool saved = file.good(); file.close(); LocalFree(encrypted.pbData); if (!saved) { State(L"API Key 写入失败，请检查安装目录权限。", false); return; }
         State(L"DeepSeek API Key 已为当前 Windows 用户加密保存。", false);
+    }
+
+    void Experience(const std::wstring& value) {
+        if (value != L"local" && value != L"agent") { State(L"玩法模式无效。", false); return; }
+        std::wstring path = Join(installDir, L"open-shift.toml"), text = ReadUtf8(path);
+        if (text.empty()) { pendingExperienceMode = value; State(value == L"local" ? L"已选择本地无 API 模式。" : L"已选择 Agent / DeepSeek 模式。", false); return; }
+        size_t section = text.find(L"[world]");
+        if (section == std::wstring::npos) {
+            text += L"\n[world]\nexperience_mode = \"" + value + L"\"\n";
+        } else {
+            size_t sectionEnd = text.find(L"\n[", section + 1); if (sectionEnd == std::wstring::npos) sectionEnd = text.size();
+            size_t position = text.find(L"experience_mode", section);
+            if (position == std::wstring::npos || position >= sectionEnd) {
+                text.insert(sectionEnd, L"\nexperience_mode = \"" + value + L"\"");
+            } else {
+                size_t first = text.find(L'\"', position), second = first == std::wstring::npos ? first : text.find(L'\"', first + 1);
+                if (first == std::wstring::npos || second == std::wstring::npos || second >= sectionEnd) { State(L"运行配置中的玩法模式格式不正确。", false); return; }
+                text.replace(first + 1, second - first - 1, value);
+            }
+        }
+        std::wstring temporary = path + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+        WriteUtf8(temporary, text);
+        if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { DeleteFileW(temporary.c_str()); State(L"运行配置保存失败。", false); return; }
+        pendingExperienceMode = value;
+        State(value == L"local" ? L"本地无 API 模式已切换，下次启动生效。" : L"Agent / DeepSeek 模式已切换，下次启动生效。", false);
     }
 
     std::wstring Quote(const std::wstring& value) {
@@ -266,14 +309,16 @@ public:
         DWORD code = 1; GetExitCodeProcess(process, &code); bool markerReady = installing && FileExists(marker); bool ok = installing ? ((code == 0 || markerReady) && FileExists(Join(installDir, L"Start-Open-Shift.ps1"))) : (code == 0 || launchConfirmed);
         CloseHandle(process); process = nullptr; ClosePipe();
         if (markerReady) DeleteFileW(marker.c_str());
-        if (ok && installing) { if (!pendingKey.empty()) SaveKey(pendingKey); pendingKey.clear(); State(L"安装完成。Steam 原版文件未被修改。", false); }
+        if (ok && installing) { if (pendingExperienceMode == L"agent" && !pendingKey.empty()) SaveKey(pendingKey); pendingKey.clear(); State(L"安装完成。Steam 原版文件未被修改。", false); }
         else State(ok ? L"游戏会话已结束。" : (installing ? L"安装失败，请打开日志查看诊断信息。" : L"启动失败，请打开日志查看诊断信息。"), false);
     }
 
-    void Install(const std::wstring& steam, const std::wstring& key) {
+    void Install(const std::wstring& steam, const std::wstring& key, const std::wstring& experienceMode) {
         selectedGame = steam; if (!IsGameDir(selectedGame)) { State(L"请选择包含 data.win 的 VA-11 HALL-A Steam 游戏目录。", false); return; }
-        pendingKey = key; marker = GetTempPathString() + L"open-shift-install-" + std::to_wstring(GetCurrentProcessId()) + L".complete";
-        StartPowerShell(Join(root, L"packaging\\install-open-shift.ps1"), L"-SteamGameDir " + Quote(selectedGame) + L" -InstallDir " + Quote(installDir) + L" -GameCopyDir " + Quote(gameCopy) + L" -CompletionMarker " + Quote(marker) + L" -SkipCredential -SkipShortcut", Join(installDir, L"installer.log"));
+        if (experienceMode != L"local" && experienceMode != L"agent") { State(L"玩法模式无效。", false); return; }
+        if (experienceMode == L"agent" && key.empty() && !FileExists(Join(installDir, L"api-key.dpapi"))) { State(L"Agent / DeepSeek 模式需要 API Key。", false); return; }
+        pendingKey = key; pendingExperienceMode = experienceMode; marker = GetTempPathString() + L"open-shift-install-" + std::to_wstring(GetCurrentProcessId()) + L".complete";
+        StartPowerShell(Join(root, L"packaging\\install-open-shift.ps1"), L"-SteamGameDir " + Quote(selectedGame) + L" -InstallDir " + Quote(installDir) + L" -GameCopyDir " + Quote(gameCopy) + L" -ExperienceMode " + Quote(experienceMode) + L" -CompletionMarker " + Quote(marker) + L" -SkipCredential -SkipShortcut", Join(installDir, L"installer.log"));
     }
 
     std::wstring GetTempPathString() { wchar_t path[MAX_PATH]{}; GetTempPathW(MAX_PATH, path); return std::wstring(path).append(L"open-shift-").append(std::to_wstring(GetCurrentProcessId())); }
@@ -338,7 +383,7 @@ public:
     void Message(const std::wstring& message) {
         std::wstring action = JsonValue(message, L"action");
         if (process && action != L"logs") { State(L"当前操作仍在进行，请稍候。", true); return; }
-        if (action == L"browse") Browse(); else if (action == L"saveKey") SaveKey(JsonValue(message, L"value")); else if (action == L"install") Install(JsonValue(message, L"steam"), JsonValue(message, L"key")); else if (action == L"start") StartGame(); else if (action == L"thinking") Thinking(JsonValue(message, L"value")); else if (action == L"steamChanged") { selectedGame = JsonValue(message, L"value"); State(L"已更新 Steam 游戏目录。", false); } else if (action == L"logs") { std::wstring log = activeLog.empty() ? Join(installDir, L"launcher.log") : activeLog; if (FileExists(log)) ShellExecuteW(window, L"open", L"notepad.exe", Quote(log).c_str(), nullptr, SW_SHOWNORMAL); else State(L"目前还没有可打开的日志。", false); } else if (action == L"updateOpen") CheckUpdates(); else if (action == L"export") ExportDiagnostics(); else if (action == L"uninstall") { if (MessageBoxW(window, L"确定删除 OPEN SHIFT 的隔离实例吗？\n\nSteam 原版文件和玩家存档不会被删除。", L"OPEN SHIFT 卸载", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return; std::wstring script = Join(installDir, L"packaging\\uninstall-open-shift.ps1"); if (!FileExists(script)) { State(L"没有找到卸载脚本。", false); return; } ShellExecuteW(window, L"open", L"powershell.exe", (L"-NoProfile -ExecutionPolicy Bypass -File " + Quote(script) + L" -InstallDir " + Quote(installDir) + L" -WaitForProcessId " + std::to_wstring(GetCurrentProcessId())).c_str(), nullptr, SW_HIDE); PostMessageW(window, WM_CLOSE, 0, 0); }
+        if (action == L"browse") Browse(); else if (action == L"saveKey") SaveKey(JsonValue(message, L"value")); else if (action == L"install") Install(JsonValue(message, L"steam"), JsonValue(message, L"key"), JsonValue(message, L"experienceMode")); else if (action == L"start") StartGame(); else if (action == L"thinking") Thinking(JsonValue(message, L"value")); else if (action == L"experience") Experience(JsonValue(message, L"value")); else if (action == L"steamChanged") { selectedGame = JsonValue(message, L"value"); State(L"已更新 Steam 游戏目录。", false); } else if (action == L"logs") { std::wstring log = activeLog.empty() ? Join(installDir, L"launcher.log") : activeLog; if (FileExists(log)) ShellExecuteW(window, L"open", L"notepad.exe", Quote(log).c_str(), nullptr, SW_SHOWNORMAL); else State(L"目前还没有可打开的日志。", false); } else if (action == L"updateOpen") CheckUpdates(); else if (action == L"export") ExportDiagnostics(); else if (action == L"uninstall") { if (MessageBoxW(window, L"确定删除 OPEN SHIFT 的隔离实例吗？\n\nSteam 原版文件和玩家存档不会被删除。", L"OPEN SHIFT 卸载", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return; std::wstring script = Join(installDir, L"packaging\\uninstall-open-shift.ps1"); if (!FileExists(script)) { State(L"没有找到卸载脚本。", false); return; } ShellExecuteW(window, L"open", L"powershell.exe", (L"-NoProfile -ExecutionPolicy Bypass -File " + Quote(script) + L" -InstallDir " + Quote(installDir) + L" -WaitForProcessId " + std::to_wstring(GetCurrentProcessId())).c_str(), nullptr, SW_HIDE); PostMessageW(window, WM_CLOSE, 0, 0); }
     }
 };
 

@@ -467,12 +467,15 @@ class WorldSceneService:
         advance_minutes: int = DAY_MINUTES,
         daily_story_mode: bool = False,
         prefetch_days: int = 0,
+        experience_mode: str = "agent",
         allow_provider_fallback: bool = True,
     ) -> None:
         if advance_minutes < 0 or advance_minutes > 30 * DAY_MINUTES:
             raise ValueError("advance_minutes must be between 0 and 43200")
         if prefetch_days not in {0, 1}:
             raise ValueError("prefetch_days must be 0 or 1")
+        if experience_mode not in {"local", "agent"}:
+            raise ValueError("experience_mode must be local or agent")
         self.db_path = Path(db_path)
         self.provider_factory = provider_factory or MockProvider
         self.error_reporter = error_reporter
@@ -480,11 +483,26 @@ class WorldSceneService:
         self.advance_minutes = advance_minutes
         self.daily_story_mode = daily_story_mode
         self.prefetch_days = prefetch_days
+        self.experience_mode = experience_mode
         self.allow_provider_fallback = allow_provider_fallback
         self._lock = threading.RLock()
         self._generation_lock = threading.Lock()
         self._generation_threads: dict[int, threading.Thread] = {}
         self._generation_cancel_reports: set[int] = set()
+
+    def _story_graph_version(self) -> str:
+        """Keep local and Agent dialogue graphs isolated in the same save."""
+
+        return (
+            f"{DAILY_STORY_GRAPH_VERSION}_local"
+            if self.experience_mode == "local"
+            else DAILY_STORY_GRAPH_VERSION
+        )
+
+    def _materialized_scene_key(self, scene_id: str) -> str:
+        if self.experience_mode == "local":
+            return f"story_materialized_scene:{self._story_graph_version()}:{scene_id}"
+        return f"story_materialized_scene:{scene_id}"
 
     def _report_error(self, operation: str, error: Exception) -> None:
         if self.error_reporter is None:
@@ -1279,7 +1297,7 @@ class WorldSceneService:
             self._ensure_city_event_chain(store, day_index)
             with store.transaction():
                 migration = store.migrate_incompatible_daily_story(
-                    day_index, DAILY_STORY_GRAPH_VERSION
+                    day_index, self._story_graph_version()
                 )
             if migration is not None:
                 emit_timing("story_graph_migrated", **migration)
@@ -1291,6 +1309,8 @@ class WorldSceneService:
             # prefetch is disabled so existing installations retain their
             # stage-27 behaviour (including DAY13+ provider events).
             if self.prefetch_days:
+                self._ensure_scheduled_public_event(store, day=day_index)
+            elif self.experience_mode == "local":
                 self._ensure_scheduled_public_event(store, day=day_index)
             else:
                 event_provider = None
@@ -1358,17 +1378,26 @@ class WorldSceneService:
             perspective = self._narrative_perspective(
                 event, customer, display_names, source_tick
             )
+            order_id = f"order_day_{day_index}_{index}"
+            if self.experience_mode == "local":
+                order_id += "_local"
             order = replace(
                 order_for_customer(customer, int(event["event_id"])),
-                order_id=f"order_day_{day_index}_{index}",
+                order_id=order_id,
             )
+            if self.experience_mode == "local":
+                order = self._local_order(order)
             arrival_scene = replace(
-                self._fallback_scene(
-                    event,
-                    display_names,
-                    source_tick,
-                    scene_id=f"{prefix}_order",
-                    perspective=perspective,
+                (
+                    self._local_arrival_scene(order, scene_id=f"{prefix}_order")
+                    if self.experience_mode == "local"
+                    else self._fallback_scene(
+                        event,
+                        display_names,
+                        source_tick,
+                        scene_id=f"{prefix}_order",
+                        perspective=perspective,
+                    )
                 ),
                 order=order,
             )
@@ -1388,14 +1417,23 @@ class WorldSceneService:
             )
             for category in ServiceCategory:
                 result = self._candidate_result(order, category)
-                reaction = self._fallback_reaction(
-                    order,
-                    result,
-                    int(event["event_id"]),
-                    scene_id=f"{prefix}_{category.value}",
-                    event_topic=perspective.event_topic,
-                    personal_stake=perspective.personal_stake,
-                    unresolved_question=perspective.unresolved_question,
+                reaction = (
+                    self._local_reaction_scene(
+                        order,
+                        result,
+                        int(event["event_id"]),
+                        scene_id=f"{prefix}_{category.value}",
+                    )
+                    if self.experience_mode == "local"
+                    else self._fallback_reaction(
+                        order,
+                        result,
+                        int(event["event_id"]),
+                        scene_id=f"{prefix}_{category.value}",
+                        event_topic=perspective.event_topic,
+                        personal_stake=perspective.personal_stake,
+                        unresolved_question=perspective.unresolved_question,
+                    )
                 )
                 nodes.append(
                     StoryGraphNode(
@@ -1426,7 +1464,7 @@ class WorldSceneService:
         return DailyStoryGraph(
             f"daily_story_day_{day_index}",
             day_index,
-            DAILY_STORY_GRAPH_VERSION,
+            self._story_graph_version(),
             source_tick,
             tuple(int(event["event_id"]) for event in events),
             f"day_{day_index}_customer_1_arrival",
@@ -1582,6 +1620,83 @@ class WorldSceneService:
         }
         return clauses.get(str(event.get("event_type", "")), event_topic[:48])
 
+    @staticmethod
+    def _local_flavor(order: DrinkOrder) -> str:
+        labels = {
+            "sweet": "甜",
+            "bitter": "苦",
+            "sour": "酸",
+            "spicy": "辣",
+            "bubbly": "带气泡",
+        }
+        return labels.get(order.preference_tags[0], "清爽")
+
+    @classmethod
+    def _local_order(cls, order: DrinkOrder) -> DrinkOrder:
+        """Reduce a local-mode order to the taste request shown to players."""
+
+        return replace(order, display_text=f"Jill，来杯{cls._local_flavor(order)}的。")
+
+    @classmethod
+    def _local_arrival_scene(
+        cls, order: DrinkOrder, *, scene_id: str | None = None
+    ) -> ScenePackage:
+        flavor = cls._local_flavor(order)
+        scene = ScenePackage(
+            scene_id or f"local_order_{order.order_id}",
+            (
+                SceneLine("local_order_1", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", f"来杯{flavor}的。"),
+                SceneLine("local_order_2", "jill", None, "neutral", f"{flavor}味，收到。"),
+                SceneLine("local_order_3", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", "今天就想喝这个味道。"),
+                SceneLine("local_order_4", "jill", None, "neutral", "马上。"),
+                SceneLine("local_order_5", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", order.display_text),
+                SceneLine("local_order_6", "jill", None, "neutral", "稍等，马上好。"),
+            ),
+            order=order,
+        )
+        return cls._validate_dialogue_scene_flow(
+            scene, scene_type="arrival_order", customer_id=order.customer_id
+        )
+
+    @classmethod
+    def _local_reaction_scene(
+        cls, order: DrinkOrder, result: ServiceResult, service_event_id: int, *, scene_id: str | None = None
+    ) -> ScenePackage:
+        flavor = cls._local_flavor(order)
+        opening = {
+            ServiceCategory.EXACT: f"{flavor}味刚好。",
+            ServiceCategory.ACCEPTABLE: "味道还行，下次再试试别的。",
+            ServiceCategory.WRONG: "这个味道不对。",
+            ServiceCategory.SPECIAL: f"这杯{flavor}味很足。",
+        }[result.category]
+        scene = ScenePackage(
+            scene_id or f"local_order_result_{service_event_id}",
+            (
+                SceneLine("local_result_1", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", opening),
+                SceneLine("local_result_2", "jill", None, "neutral", "收到。"),
+                SceneLine("local_result_3", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", "谢谢。"),
+                SceneLine("local_result_4", order.customer_id, SPEAKER_PORTRAITS[order.customer_id], "neutral", "我先走了。"),
+            ),
+        )
+        return cls._validate_dialogue_scene_flow(
+            scene, scene_type="service_reaction", customer_id=order.customer_id
+        )
+
+    @staticmethod
+    def _local_pre_opening_scene(day_index: int) -> ScenePackage:
+        scene = ScenePackage(
+            f"pre_opening_day_{day_index}_local",
+            (
+                SceneLine("preopen_local_1", "dana", SPEAKER_PORTRAITS["dana"], "neutral", "今天也开门吗？"),
+                SceneLine("preopen_local_2", "jill", None, "neutral", "开，先把吧台准备好。"),
+                SceneLine("preopen_local_3", "dana", SPEAKER_PORTRAITS["dana"], "neutral", "希望今天能喝到合口味的。"),
+                SceneLine("preopen_local_4", "jill", None, "neutral", "那就等客人来点单。"),
+            ),
+        )
+        return WorldSceneService._validate_dialogue_scene_flow(
+            scene, scene_type="pre_opening"
+        )
+
     def _generated_pre_opening_scene(
         self,
         day_index: int,
@@ -1592,6 +1707,9 @@ class WorldSceneService:
         provider: ModelProvider,
     ) -> ScenePackage:
         """Generate the pre-opening exchange from the day's concrete event."""
+
+        if self.experience_mode == "local":
+            return self._local_pre_opening_scene(day_index)
 
         event_topic = self._event_premise(event, display_names, current_tick)
         event_clause = self._concise_event_clause(event, display_names, event_topic)
@@ -1698,11 +1816,11 @@ class WorldSceneService:
             self._ensure_city_event_chain(store, day_index)
             with store.transaction():
                 migration = store.migrate_incompatible_daily_story(
-                    day_index, DAILY_STORY_GRAPH_VERSION
+                    day_index, self._story_graph_version()
                 )
             if migration is not None:
                 emit_timing("story_graph_migrated", **migration)
-            record = store.get_daily_story_graph(day_index, DAILY_STORY_GRAPH_VERSION)
+            record = store.get_daily_story_graph(day_index, self._story_graph_version())
             if record is not None and record["status"] == "ready":
                 raw_graph = record["graph"]
                 if not isinstance(raw_graph, Mapping):
@@ -1726,7 +1844,7 @@ class WorldSceneService:
                 )
             store.begin_daily_story_graph(
                 day_index,
-                DAILY_STORY_GRAPH_VERSION,
+                self._story_graph_version(),
                 source_tick,
                 source_event_ids,
             )
@@ -1735,7 +1853,7 @@ class WorldSceneService:
                 day_index, source_tick, source_events, names
             )
             store.complete_daily_story_graph(
-                day_index, DAILY_STORY_GRAPH_VERSION, graph.to_dict()
+                day_index, self._story_graph_version(), graph.to_dict()
             )
             emit_timing(
                 "story_skeleton_ready",
@@ -1756,7 +1874,7 @@ class WorldSceneService:
 
         day_index = int(store.get_meta("current_story_day", "1") or 1)
         progress = store.get_daily_story_progress(
-            day_index, DAILY_STORY_GRAPH_VERSION
+            day_index, self._story_graph_version()
         )
         if progress is None or progress.get("status") != "completed":
             return
@@ -1935,6 +2053,13 @@ class WorldSceneService:
         shift_phase: str = "first_half",
         validation_fallback_reporter: Callable[[str], None] | None = None,
     ) -> ScenePackage:
+        if self.experience_mode == "local":
+            event_id = int(event["event_id"])
+            customer = self._customer(self._participants(event))
+            return self._local_arrival_scene(
+                self._local_order(order_for_customer(customer, event_id)),
+                scene_id=scene_id,
+            )
         generator = getattr(provider, "generate_dialogue_line", None)
         player_generator = getattr(provider, "generate_player_dialogue_line", None)
         if not callable(generator) or not callable(player_generator):
@@ -2247,6 +2372,13 @@ class WorldSceneService:
         personal_stake: str | None = None,
         unresolved_question: str | None = None,
     ) -> ScenePackage:
+        if self.experience_mode == "local":
+            return self._local_reaction_scene(
+                self._local_order(order),
+                result,
+                service_event_id,
+                scene_id=scene_id,
+            )
         generator = getattr(provider, "generate_dialogue_line", None)
         player_generator = getattr(provider, "generate_player_dialogue_line", None)
         if not callable(generator) or not callable(player_generator):
@@ -2542,7 +2674,10 @@ class WorldSceneService:
             order = arrival_scene.order
             if order is None:
                 raise ValueError("generated daily arrival did not contain an order")
-            order = replace(order, order_id=f"order_day_{day_index}_{index}")
+            order_id = f"order_day_{day_index}_{index}"
+            if self.experience_mode == "local":
+                order_id += "_local"
+            order = replace(order, order_id=order_id)
             arrival_scene = replace(arrival_scene, order=order)
             branch_targets = tuple(
                 (category.value, f"{prefix}_{category.value}")
@@ -2603,7 +2738,7 @@ class WorldSceneService:
         return DailyStoryGraph(
             f"daily_story_day_{day_index}",
             day_index,
-            DAILY_STORY_GRAPH_VERSION,
+            self._story_graph_version(),
             source_tick,
             tuple(int(event["event_id"]) for event in events),
             f"day_{day_index}_customer_1_arrival",
@@ -2616,6 +2751,10 @@ class WorldSceneService:
 
         if isinstance(day_index, bool) or not isinstance(day_index, int) or day_index < 1:
             raise ValueError("day_index must be a positive integer")
+        if self.experience_mode == "local":
+            # The local experience is fully deterministic and has no reason to
+            # enter the provider generation path used by Agent mode.
+            return self.prepare_daily_story_skeleton(day_index)
         started = monotonic_seconds()
         emit_timing("story_graph_start", day=day_index)
         with self._generation_lock, WorldStore(self.db_path) as store:
@@ -2623,7 +2762,7 @@ class WorldSceneService:
             provider: Any | None = None
             provider_error: Exception | None = None
             record = store.get_daily_story_graph(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             if record is not None and record["status"] == "ready":
                 raw_graph = record["graph"]
@@ -2632,7 +2771,7 @@ class WorldSceneService:
                 graph = DailyStoryGraph.from_dict(raw_graph)
                 if (
                     graph.day_index != day_index
-                    or graph.generation_version != DAILY_STORY_GRAPH_VERSION
+                    or graph.generation_version != self._story_graph_version()
                     or graph.source_tick != record["source_tick"]
                     or graph.source_event_ids != record["source_event_ids"]
                 ):
@@ -2677,7 +2816,7 @@ class WorldSceneService:
 
             store.begin_daily_story_graph(
                 day_index,
-                DAILY_STORY_GRAPH_VERSION,
+                self._story_graph_version(),
                 source_tick,
                 source_event_ids,
             )
@@ -2737,7 +2876,7 @@ class WorldSceneService:
                     )
                 store.complete_daily_story_graph(
                     day_index,
-                    DAILY_STORY_GRAPH_VERSION,
+                    self._story_graph_version(),
                     graph.to_dict(),
                 )
                 emit_timing(
@@ -2757,7 +2896,7 @@ class WorldSceneService:
                 self._report_error("daily story graph generation", exc)
                 store.fail_daily_story_graph(
                     day_index,
-                    DAILY_STORY_GRAPH_VERSION,
+                    self._story_graph_version(),
                     type(exc).__name__,
                 )
                 raise
@@ -3156,7 +3295,7 @@ class WorldSceneService:
                     payload: dict[str, Any] = {
                         "day": day_index,
                         "status": status,
-                        "generation_version": DAILY_STORY_GRAPH_VERSION,
+                        "generation_version": self._story_graph_version(),
                         **fields,
                     }
                     if previous.get("status") == "timeout" or previous.get("timeout_observed"):
@@ -3265,7 +3404,7 @@ class WorldSceneService:
                     {
                         "day": day_index,
                         "status": "timeout",
-                        "generation_version": DAILY_STORY_GRAPH_VERSION,
+                        "generation_version": self._story_graph_version(),
                         "timeout_seconds": timeout_seconds,
                         "timeout_observed": True,
                     }
@@ -3338,7 +3477,7 @@ class WorldSceneService:
             self._release_legacy_save_gate(store)
             self._ensure_scheduled_public_event(store)
             graph_record = store.get_daily_story_graph(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             if graph_record is None or graph_record["status"] != "ready":
                 raise BridgeError(
@@ -3356,7 +3495,7 @@ class WorldSceneService:
             break_pending_key = f"break_pending_day_{day_index}"
             break_pending = store.get_meta(break_pending_key) == "1"
             progress = store.get_daily_story_progress(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             expected_break_node = f"day_{day_index}_customer_3_arrival"
             if break_pending and (
@@ -3380,7 +3519,7 @@ class WorldSceneService:
             doorbell = self._ambient_scene(day_index, "doorbell")
             if store.get_meta(f"bridge_ack:{doorbell.scene_id}") is None:
                 return self._persist_ambient_request(store, request, doorbell)
-            pre_opening_key = f"story_materialized_scene:pre_opening_day_{day_index}"
+            pre_opening_key = self._materialized_scene_key(f"pre_opening_day_{day_index}")
             pre_opening_payload = store.get_meta(pre_opening_key)
             if isinstance(pre_opening_payload, str):
                 try:
@@ -3400,28 +3539,31 @@ class WorldSceneService:
                 names = {
                     agent.agent_id: agent.display_name for agent in store.list_agents()
                 }
-                try:
-                    provider = self.provider_factory()
-                    pre_opening = self._generated_pre_opening_scene(
-                        day_index,
-                        source_event,
-                        names,
-                        store.current_tick,
-                        self._engine(store, provider),
-                        provider,
-                    )
-                except Exception as exc:
-                    if not self.allow_provider_fallback:
-                        raise
-                    self._report_error("pre-opening dialogue provider fallback", exc)
-                    pre_opening = self._generated_pre_opening_scene(
-                        day_index,
-                        source_events[0],
-                        names,
-                        store.current_tick,
-                        self._engine(store, MockProvider()),
-                        MockProvider(),
-                    )
+                if self.experience_mode == "local":
+                    pre_opening = self._local_pre_opening_scene(day_index)
+                else:
+                    try:
+                        provider = self.provider_factory()
+                        pre_opening = self._generated_pre_opening_scene(
+                            day_index,
+                            source_event,
+                            names,
+                            store.current_tick,
+                            self._engine(store, provider),
+                            provider,
+                        )
+                    except Exception as exc:
+                        if not self.allow_provider_fallback:
+                            raise
+                        self._report_error("pre-opening dialogue provider fallback", exc)
+                        pre_opening = self._generated_pre_opening_scene(
+                            day_index,
+                            source_events[0],
+                            names,
+                            store.current_tick,
+                            self._engine(store, MockProvider()),
+                            MockProvider(),
+                        )
                 store.set_meta(
                     pre_opening_key,
                     json.dumps(pre_opening.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True),
@@ -3453,7 +3595,7 @@ class WorldSceneService:
                     return ScenePackage.from_dict(persisted_scene)
 
             progress = store.get_daily_story_progress(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             if progress is None:
                 raise ValueError("daily story progress was missing")
@@ -3490,7 +3632,7 @@ class WorldSceneService:
             else:
                 source_event_id = 0
             scene = node.scene
-            materialized_key = f"story_materialized_scene:{scene.scene_id}"
+            materialized_key = self._materialized_scene_key(scene.scene_id)
             materialized_payload = store.get_meta(materialized_key)
             if materialized_payload is not None:
                 persisted_materialized = json.loads(materialized_payload)
@@ -3507,46 +3649,56 @@ class WorldSceneService:
                     agent.agent_id: agent.display_name
                     for agent in store.list_agents()
                 }
-                try:
-                    provider = self.provider_factory()
+                if self.experience_mode == "local":
                     generated = self._generated_scene(
                         event,
                         names,
                         store.current_tick,
-                        self._engine(store, provider),
-                        provider,
+                        MockProvider(),
+                        MockProvider(),
                         scene_id=scene.scene_id,
-                        validation_fallback_reporter=lambda reason: self._record_scene_validation_fallback(
-                            store,
+                    )
+                else:
+                    try:
+                        provider = self.provider_factory()
+                        generated = self._generated_scene(
+                            event,
+                            names,
+                            store.current_tick,
+                            self._engine(store, provider),
+                            provider,
                             scene_id=scene.scene_id,
-                            source_event_id=source_event_id,
-                            story_day=day_index,
-                            reason=reason,
-                        ),
-                    )
-                except Exception as exc:
-                    if not self.allow_provider_fallback:
-                        raise
-                    self._report_error("arrival dialogue provider fallback", exc)
-                    store.append_event(
-                        store.current_tick,
-                        "dialogue_provider_fallback",
-                        event.get("actor_id"),
-                        event.get("target_id"),
-                        {
-                            "error_type": type(exc).__name__,
-                            "source_event_id": source_event_id,
-                            "story_day": day_index,
-                            "scene_id": scene.scene_id,
-                        },
-                    )
-                    generated = self._fallback_scene(
-                        event,
-                        names,
-                        store.current_tick,
-                        scene_id=scene.scene_id,
-                        perspective=self._perspective_for_event(event, names, store.current_tick),
-                    )
+                            validation_fallback_reporter=lambda reason: self._record_scene_validation_fallback(
+                                store,
+                                scene_id=scene.scene_id,
+                                source_event_id=source_event_id,
+                                story_day=day_index,
+                                reason=reason,
+                            ),
+                        )
+                    except Exception as exc:
+                        if not self.allow_provider_fallback:
+                            raise
+                        self._report_error("arrival dialogue provider fallback", exc)
+                        store.append_event(
+                            store.current_tick,
+                            "dialogue_provider_fallback",
+                            event.get("actor_id"),
+                            event.get("target_id"),
+                            {
+                                "error_type": type(exc).__name__,
+                                "source_event_id": source_event_id,
+                                "story_day": day_index,
+                                "scene_id": scene.scene_id,
+                            },
+                        )
+                        generated = self._fallback_scene(
+                            event,
+                            names,
+                            store.current_tick,
+                            scene_id=scene.scene_id,
+                            perspective=self._perspective_for_event(event, names, store.current_tick),
+                        )
                 if generated.order is None or node.scene.order is None:
                     raise ValueError("generated arrival did not contain an order")
                 scene = replace(generated, order=replace(generated.order, order_id=node.scene.order.order_id))
@@ -3604,7 +3756,7 @@ class WorldSceneService:
             if store.get_meta(f"bridge_ack:opening_day_{day_index}") is None:
                 return None
             graph_record = store.get_daily_story_graph(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             if graph_record is None or graph_record["status"] != "ready":
                 return None
@@ -3615,7 +3767,7 @@ class WorldSceneService:
                 return None
             graph = DailyStoryGraph.from_dict(raw_graph)
             progress = store.get_daily_story_progress(
-                day_index, DAILY_STORY_GRAPH_VERSION
+                day_index, self._story_graph_version()
             )
             if progress is None or progress["status"] == "completed":
                 return None
@@ -3775,14 +3927,14 @@ class WorldSceneService:
             raise KeyError("story scene did not contain an order")
         day_index = int(story_reference["day_index"])
         arrival_node_id = str(story_reference["node_id"])
-        graph_record = store.get_daily_story_graph(day_index, DAILY_STORY_GRAPH_VERSION)
+        graph_record = store.get_daily_story_graph(day_index, self._story_graph_version())
         if graph_record is None or not isinstance(graph_record["graph"], Mapping):
             raise ValueError("daily story graph was unavailable during order resolution")
         graph = DailyStoryGraph.from_dict(graph_record["graph"])
         arrival = self._story_node(graph, arrival_node_id)
         if arrival.kind is not StoryNodeKind.ARRIVAL_ORDER:
             raise ValueError("story order did not reference an arrival node")
-        progress = store.get_daily_story_progress(day_index, DAILY_STORY_GRAPH_VERSION)
+        progress = store.get_daily_story_progress(day_index, self._story_graph_version())
         existing_commit = store.get_story_branch_commit(order.order_id)
         if progress is None or (progress["current_node_id"] != arrival_node_id and existing_commit is None):
             raise BridgeError(409, "story_branch_already_advanced", "the daily story had already advanced past this order")
@@ -3837,7 +3989,7 @@ class WorldSceneService:
                 )
                 store.record_story_branch_commit(
                     day_index=day_index,
-                    generation_version=DAILY_STORY_GRAPH_VERSION,
+                    generation_version=self._story_graph_version(),
                     order_id=order.order_id,
                     arrival_node_id=arrival_node_id,
                     result_node_id=result_node_id,
@@ -3845,7 +3997,7 @@ class WorldSceneService:
                     service_event_id=service_event_id,
                     income_delta=income_delta,
                 )
-                store.advance_daily_story_cursor(day_index, DAILY_STORY_GRAPH_VERSION, arrival_node_id, result_node_id)
+                store.advance_daily_story_cursor(day_index, self._story_graph_version(), arrival_node_id, result_node_id)
                 total_income = int(store.get_meta("player_shift_income", "0") or 0)
                 store.set_meta("player_shift_income", total_income + income_delta)
                 record = {
@@ -3877,19 +4029,27 @@ class WorldSceneService:
         provider_error: Exception | None = None
         event_topic = arrival.topic
         event_reference = self._short_event_topic(event_topic)
-        try:
-            provider = self.provider_factory()
-            reaction_scene = self._generated_reaction(
-                order, result, service_event_id, store.current_tick,
-                self._engine(store, provider), provider, scene_id=fallback_scene.scene_id,
-                event_topic=event_topic,
-                personal_stake=f"{event_reference}仍影响{order.customer_id}今晚的选择",
-                unresolved_question=f"{event_reference}接下来会怎样",
+        if self.experience_mode == "local":
+            reaction_scene = self._local_reaction_scene(
+                self._local_order(order),
+                result,
+                service_event_id,
+                scene_id=fallback_scene.scene_id,
             )
-        except Exception as exc:
-            provider_error = exc
-            reaction_scene = fallback_scene
-            self._report_error("selected result provider fallback", exc)
+        else:
+            try:
+                provider = self.provider_factory()
+                reaction_scene = self._generated_reaction(
+                    order, result, service_event_id, store.current_tick,
+                    self._engine(store, provider), provider, scene_id=fallback_scene.scene_id,
+                    event_topic=event_topic,
+                    personal_stake=f"{event_reference}仍影响{order.customer_id}今晚的选择",
+                    unresolved_question=f"{event_reference}接下来会怎样",
+                )
+            except Exception as exc:
+                provider_error = exc
+                reaction_scene = fallback_scene
+                self._report_error("selected result provider fallback", exc)
 
         if provider_error is not None:
             with store.transaction():
@@ -4175,7 +4335,7 @@ class WorldSceneService:
                     day_index = int(story_reference["day_index"])
                     node_id = str(story_reference["node_id"])
                     graph_record = store.get_daily_story_graph(
-                        day_index, DAILY_STORY_GRAPH_VERSION
+                        day_index, self._story_graph_version()
                     )
                     if graph_record is None or not isinstance(
                         graph_record["graph"], Mapping
@@ -4187,7 +4347,7 @@ class WorldSceneService:
                         merge = self._story_node(graph, str(node.next_node_id))
                         store.advance_daily_story_cursor(
                             day_index,
-                            DAILY_STORY_GRAPH_VERSION,
+                            self._story_graph_version(),
                             node_id,
                             merge.next_node_id,
                         )
@@ -4200,7 +4360,7 @@ class WorldSceneService:
                     elif node.kind is StoryNodeKind.INTERLUDE:
                         store.advance_daily_story_cursor(
                             day_index,
-                            DAILY_STORY_GRAPH_VERSION,
+                            self._story_graph_version(),
                             node_id,
                             node.next_node_id,
                         )

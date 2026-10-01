@@ -203,6 +203,24 @@ class BYOKProviderTests(unittest.TestCase):
             factory = _provider_factory(args)
         self.assertIsInstance(factory(), MockProvider)
 
+    def test_local_experience_ignores_provider_configuration(self) -> None:
+        args = Namespace(
+            experience_mode="local",
+            provider_base_url="https://api.example.test",
+            provider_model="model",
+            provider_protocol=APIProtocol.CHAT_COMPLETIONS.value,
+            provider_response_format=ResponseFormat.JSON_OBJECT.value,
+            provider_timeout=30.0,
+            provider_api_key_env="OPEN_SHIFT_KEY_THAT_IS_NOT_SET",
+            provider_max_calls=100,
+            provider_thinking=ThinkingMode.DEFAULT.value,
+            provider_required=True,
+        )
+        with patch.object(BYOKProvider, "from_env") as from_env:
+            factory = _provider_factory(args)
+        from_env.assert_not_called()
+        self.assertIsInstance(factory(), MockProvider)
+
     def test_deepseek_v4_flash_defaults_disable_thinking(self) -> None:
         args = Namespace(
             provider_base_url="https://api.deepseek.com",

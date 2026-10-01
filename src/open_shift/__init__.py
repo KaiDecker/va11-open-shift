@@ -41,6 +41,7 @@ from .paired_saves import (
 )
 from .providers import MockProvider, ModelProvider
 from .runtime_config import RuntimeConfig, RuntimeConfigError, load_runtime_config
+from .runtime_config import ExperienceMode
 from .scenario import create_demo_world
 from .store import WorldStore
 from .story_graph import (
@@ -100,6 +101,7 @@ __all__ = [
     "StoryNodeKind",
     "RuntimeConfig",
     "RuntimeConfigError",
+    "ExperienceMode",
     "load_runtime_config",
 ]
 

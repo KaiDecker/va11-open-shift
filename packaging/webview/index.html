@@ -63,6 +63,7 @@
       <div class="panel-title">游戏连接</div>
       <div class="field"><label for="steam">STEAM 游戏目录</label><div class="row"><input id="steam" spellcheck="false"><button class="button" data-action="browse">选择</button></div><div class="hint" id="copy">尚未选择隔离实例。</div></div>
       <div class="field"><label for="key">DEEPSEEK API KEY</label><div class="row"><input id="key" type="password" spellcheck="false"><button class="button" data-action="saveKey">保存</button></div><div class="hint">使用 Windows DPAPI 加密保存，不写入日志。</div></div>
+      <div class="field"><label for="experienceToggle">玩法模式 // EXPERIENCE</label><div class="row"><select id="experienceToggle" title="玩法模式"><option value="local">本地无 API</option><option value="agent">Agent / DeepSeek</option></select></div><div class="hint" id="experienceHint">本地模式只保留口味点单和调酒流程，不需要 API Key。</div></div>
       <div class="field"><label for="thinkingToggle">生成模式 // THINKING</label><div class="row"><div class="hint" id="thinkingHint">安装后可选择生成模式。</div><select id="thinkingToggle" title="生成模式"><option value="disabled">快速</option><option value="balanced">平衡</option><option value="enabled">深度</option></select></div></div>
       <div class="safe"><strong>系统状态</strong><br>原版 DATA.WIN　只读输入<br>MOD DATA.WIN　隔离实例<br>世界状态　独立版本数据库<br><span id="diagnostic">版本读取中　|　密钥未配置　|　尚未安装</span></div>
     </section>
@@ -77,21 +78,23 @@
     <footer class="footer"><span>OPEN SHIFT 社区预览版</span><span>无 UTMT // 无原版 DATA</span></footer>
   </main>
   <script>
-    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status'), mode=document.getElementById('thinkingToggle'), hint=document.getElementById('thinkingHint');
-    let busy=false, startDisabled=true, thinking='disabled', thinkingAvailable=false;
+    const app=document.getElementById('app'), steam=document.getElementById('steam'), key=document.getElementById('key'), copy=document.getElementById('copy'), status=document.getElementById('status'), mode=document.getElementById('thinkingToggle'), hint=document.getElementById('thinkingHint'), experience=document.getElementById('experienceToggle'), experienceHint=document.getElementById('experienceHint');
+    let busy=false, startDisabled=true, thinking='disabled', thinkingAvailable=false, experienceMode='local', experienceAvailable=true;
     function send(action,data={}) { if(window.chrome?.webview) window.chrome.webview.postMessage(JSON.stringify({action,...data})); }
     let releaseUrl='https://github.com/KaiDecker/va11-open-shift/releases/latest';
     async function checkUpdate() { status.textContent='正在检查 GitHub 最新发行版...'; try { const response=await fetch('https://api.github.com/repos/KaiDecker/va11-open-shift/releases/latest',{headers:{Accept:'application/vnd.github+json'}}); if(!response.ok)throw new Error('HTTP '+response.status); const latest=await response.json(); releaseUrl=latest.html_url||releaseUrl; const current=(document.getElementById('version').textContent||'').replace(/^v/i,''); const remote=(latest.tag_name||'').replace(/^v/i,''); document.getElementById('release').hidden=false; status.textContent=remote&&remote!==current?'发现新版本 '+remote+'，点击“打开发行页”查看。':'已是最新版本。'; } catch(error) { status.textContent='无法联网检查更新，当前版本仍可正常使用。'; document.getElementById('release').hidden=true; } }
     function apply() {
       const text=thinking==='enabled'?'深度 // 对话最充分，等待时间最长':thinking==='balanced'?'平衡 // 关键世界决策启用思考':'快速 // 日常对话优先速度';
       hint.textContent=thinkingAvailable?text:'安装 OPEN SHIFT 后可切换生成模式。'; mode.value=thinking; mode.disabled=busy||!thinkingAvailable;
+      experience.value=experienceMode; experience.disabled=busy||!experienceAvailable; key.disabled=busy||experienceMode!=='agent'; document.querySelector('[data-action="saveKey"]').disabled=busy||experienceMode!=='agent';
+      experienceHint.textContent=experienceMode==='agent'?'Agent 模式会使用已加密保存的 API Key 生成更丰富的对白。':'本地模式只保留口味点单和调酒流程，不需要 API Key。';
       document.querySelectorAll('[data-action]').forEach(b=>b.disabled=busy&&b.dataset.action!=='logs');
-      document.querySelector('[data-action="start"]').disabled=busy||startDisabled; steam.disabled=busy; key.disabled=busy; app.classList.toggle('busy',busy);
+      document.querySelector('[data-action="start"]').disabled=busy||startDisabled; steam.disabled=busy; app.classList.toggle('busy',busy);
     }
-    function setState(s) { if(s.steam!==undefined)steam.value=s.steam; if(s.copy!==undefined)copy.textContent='隔离实例 // '+s.copy; if(s.status)status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;status.classList.toggle('error',/失败|错误|missing|failed/i.test(s.status||''));} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; if(s.packageVersion!==undefined)document.getElementById('version').textContent=s.packageVersion; if(s.keyConfigured!==undefined||s.installReady!==undefined)document.getElementById('diagnostic').textContent='版本 '+(s.packageVersion||'development')+'　|　密钥 '+(s.keyConfigured?'已配置':'未配置')+'　|　'+(s.installReady?'安装完成':'尚未安装'); apply(); }
+    function setState(s) { if(s.steam!==undefined)steam.value=s.steam; if(s.copy!==undefined)copy.textContent='隔离实例 // '+s.copy; if(s.status)status.textContent=s.status; if(s.busy!==undefined){busy=!!s.busy;status.classList.toggle('error',/失败|错误|missing|failed/i.test(s.status||''));} if(s.startDisabled!==undefined)startDisabled=!!s.startDisabled; if(s.thinking!==undefined)thinking=s.thinking; if(s.thinkingAvailable!==undefined)thinkingAvailable=!!s.thinkingAvailable; if(s.experienceMode!==undefined)experienceMode=s.experienceMode; if(s.experienceAvailable!==undefined)experienceAvailable=!!s.experienceAvailable; if(s.packageVersion!==undefined)document.getElementById('version').textContent=s.packageVersion; if(s.keyConfigured!==undefined||s.installReady!==undefined)document.getElementById('diagnostic').textContent='版本 '+(s.packageVersion||'development')+'　|　密钥 '+(s.keyConfigured?'已配置':'未配置')+'　|　'+(s.installReady?'安装完成':'尚未安装'); apply(); }
     window.setState=setState;
-    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{const a=b.dataset.action;if(a==='browse')send(a);else if(a==='saveKey')send(a,{value:key.value});else if(a==='install')send(a,{steam:steam.value,key:key.value});else if(a==='update')checkUpdate();else if(a==='updateOpen')send('updateOpen',{url:releaseUrl});else send(a);}));
-    mode.addEventListener('change',()=>send('thinking',{value:mode.value})); steam.addEventListener('change',()=>send('steamChanged',{value:steam.value})); apply();
+    document.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>{const a=b.dataset.action;if(a==='browse')send(a);else if(a==='saveKey')send(a,{value:key.value});else if(a==='install')send(a,{steam:steam.value,key:key.value,experienceMode:experience.value});else if(a==='update')checkUpdate();else if(a==='updateOpen')send('updateOpen',{url:releaseUrl});else send(a);}));
+    mode.addEventListener('change',()=>send('thinking',{value:mode.value})); experience.addEventListener('change',()=>{experienceMode=experience.value;apply();send('experience',{value:experience.value});}); steam.addEventListener('change',()=>send('steamChanged',{value:steam.value})); apply();
   </script>
 </body>
 </html>
